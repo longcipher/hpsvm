@@ -4,6 +4,8 @@
 
 `hpsvm` is a fast and lightweight library for testing Solana programs. It works by creating an in-process Solana VM optimized for program developers. This makes it much faster to run and compile than alternatives like `solana-program-test` and `solana-test-validator`. In a further break from tradition, it has an ergonomic API with sane defaults and extensive configurability for those who want it.
 
+This is a pure Rust library with no Node.js dependencies.
+
 ## 🚀 Getting Started
 
 ### 🔧 Installation
