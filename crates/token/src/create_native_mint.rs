@@ -5,6 +5,7 @@ use solana_program_pack::Pack;
 use solana_rent::Rent;
 use spl_token_interface::{native_mint::DECIMALS, state::Mint};
 
+/// Create a native mint
 pub fn create_native_mint(svm: &mut HPSVM) {
     let mut data = vec![0; Mint::LEN];
     let mint = Mint {
@@ -14,7 +15,7 @@ pub fn create_native_mint(svm: &mut HPSVM) {
         is_initialized: true,
         freeze_authority: COption::None,
     };
-    Mint::pack(mint, &mut data).unwrap();
+    Mint::pack(mint, &mut data).expect("Failed to pack mint data");
     let account = Account {
         lamports: svm.get_sysvar::<Rent>().minimum_balance(data.len()),
         data,
@@ -23,5 +24,6 @@ pub fn create_native_mint(svm: &mut HPSVM) {
         rent_epoch: 0,
     };
 
-    svm.set_account(spl_token_interface::native_mint::ID, account).unwrap();
+    svm.set_account(spl_token_interface::native_mint::ID, account)
+        .expect("Failed to set native mint account");
 }

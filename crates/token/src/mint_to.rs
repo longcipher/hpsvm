@@ -13,6 +13,7 @@ use super::{TOKEN_ID, get_multisig_signers, spl_token::instruction::mint_to};
 /// ### Optional fields
 /// - `owner`: payer by default.
 /// - `token_program_id`: [`TOKEN_ID`] by default.
+#[derive(Debug)]
 pub struct MintTo<'a> {
     svm: &'a mut HPSVM,
     payer: &'a Keypair,
@@ -51,12 +52,14 @@ impl<'a> MintTo<'a> {
         self
     }
 
+    /// Set the owner for the mint operation
     pub fn owner(mut self, owner: &'a Keypair) -> Self {
         self.owner = Some(owner.pubkey());
         self.signers = smallvec![owner];
         self
     }
 
+    /// Set multisig authorization for the mint operation
     pub fn multisig(mut self, multisig: &'a Address, signers: &'a [&'a Keypair]) -> Self {
         self.owner = Some(*multisig);
         self.signers = SmallVec::from(signers);

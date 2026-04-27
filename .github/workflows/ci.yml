@@ -1,25 +1,33 @@
-on:
-  push:
-    branches:
-      - master
-  pull_request:
-    branches:
-      - master
-
 name: CI
 
+on:
+  push:
+    branches: ["main", "master"]
+    tags: ["v*"]
+  pull_request:
+    branches: ["main", "master"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  test:
-    name: Test Suite
+  ci:
+    name: Lint Test Build
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout sources
-        uses: actions/checkout@v6
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@v6
 
-      - name: Rustup install
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just,cargo-machete,typos-cli,rumdl,leptosfmt
+
+      - name: Install cargo-sort
+        run: cargo install cargo-sort
 
       - name: Install Solana CLI
         run: |
@@ -40,23 +48,5 @@ jobs:
         env:
           RUST_BACKTRACE: 1
 
-  lints:
-    name: Lints
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout sources
-        uses: actions/checkout@v6
-
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@v2
-
-      - name: Rustup install nightly
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: clippy, rustfmt
-
-      - name: Run cargo fmt
-        run: cargo +nightly fmt --all -- --check
-
-      - name: Run cargo clippy
-        run: cargo clippy --all-targets -- -D warnings
+      - name: CI
+        run: just ci

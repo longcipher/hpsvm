@@ -17,6 +17,7 @@ use super::{
 /// - `owner`: `payer` by default.
 /// - `decimals`: `mint` decimals by default.
 /// - `token_program_id`: [`TOKEN_ID`] by default.
+#[derive(Debug)]
 pub struct MintToChecked<'a> {
     svm: &'a mut HPSVM,
     payer: &'a Keypair,
@@ -57,12 +58,14 @@ impl<'a> MintToChecked<'a> {
         self
     }
 
+    /// Set the owner for the mint operation
     pub fn owner(mut self, owner: &'a Keypair) -> Self {
         self.owner = Some(owner.pubkey());
         self.signers = smallvec![owner];
         self
     }
 
+    /// Set multisig authorization for the mint operation
     pub fn multisig(mut self, multisig: &'a Address, signers: &'a [&'a Keypair]) -> Self {
         self.owner = Some(*multisig);
         self.signers = SmallVec::from(signers);

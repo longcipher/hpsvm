@@ -22,6 +22,7 @@ use super::{
 /// - `freeze_authority`: None by default.
 /// - `decimals`: 8 by default.
 /// - `token_program_id`: [`TOKEN_ID`] by default.
+#[derive(Debug)]
 pub struct CreateMint<'a> {
     svm: &'a mut HPSVM,
     payer: &'a Keypair,

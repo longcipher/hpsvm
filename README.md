@@ -1,5 +1,12 @@
 # HPSVM
 
+[![DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/longcipher/hpsvm)
+[![Context7](https://img.shields.io/badge/Website-context7.com-blue)](https://context7.com/longcipher/hpsvm)
+[![crates.io](https://img.shields.io/crates/v/hpsvm.svg)](https://crates.io/crates/hpsvm)
+[![docs.rs](https://docs.rs/hpsvm/badge.svg)](https://docs.rs/hpsvm)
+
+![hpsvm](https://socialify.git.ci/longcipher/hpsvm/image?font=Source+Code+Pro&language=1&name=1&owner=1&pattern=Circuit+Board&theme=Auto)
+
 ## 📍 Overview
 
 `hpsvm` is a fast and lightweight library for testing Solana programs. It works by creating an in-process Solana VM optimized for program developers. This makes it much faster to run and compile than alternatives like `solana-program-test` and `solana-test-validator`. In a further break from tradition, it has an ergonomic API with sane defaults and extensive configurability for those who want it.

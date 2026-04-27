@@ -7,7 +7,7 @@ use solana_transaction_error::{TransactionError, TransactionResult};
 
 /// Rent state of a Solana account.
 #[derive(Debug, PartialEq, Eq)]
-pub enum RentState {
+pub(crate) enum RentState {
     /// account.lamports == 0
     Uninitialized,
     /// 0 < account.lamports < rent-exempt-minimum
@@ -24,7 +24,7 @@ pub enum RentState {
 /// This method has a default implementation that checks whether the
 /// transition is allowed and returns an error if it is not. It also
 /// verifies that the account is not the incinerator.
-pub fn check_rent_state_with_account(
+pub(crate) fn check_rent_state_with_account(
     pre_rent_state: &RentState,
     post_rent_state: &RentState,
     address: &Address,
@@ -45,7 +45,7 @@ pub fn check_rent_state_with_account(
 /// This method has a default implementation that treats accounts with zero
 /// lamports as uninitialized and uses the implemented `get_rent` to
 /// determine whether an account is rent-exempt.
-pub fn get_account_rent_state(
+pub(crate) fn get_account_rent_state(
     rent: &Rent,
     account_lamports: u64,
     account_size: usize,
@@ -67,7 +67,7 @@ pub fn get_account_rent_state(
 /// Pre-state `RentState::RentPaying` can only transition to
 /// `RentState::RentPaying` if the data size remains the same and the
 /// account is not credited.
-pub fn transition_allowed(pre_rent_state: &RentState, post_rent_state: &RentState) -> bool {
+pub(crate) fn transition_allowed(pre_rent_state: &RentState, post_rent_state: &RentState) -> bool {
     match post_rent_state {
         RentState::Uninitialized | RentState::RentExempt => true,
         RentState::RentPaying { data_size: post_data_size, lamports: post_lamports } => {

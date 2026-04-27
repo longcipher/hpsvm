@@ -9,6 +9,7 @@ use super::{TOKEN_ID, get_multisig_signers, spl_token::instruction::revoke};
 
 /// ### Description
 /// Builder for the [`revoke`] instruction.
+#[derive(Debug)]
 pub struct Revoke<'a> {
     svm: &'a mut HPSVM,
     payer: &'a Keypair,
@@ -31,12 +32,14 @@ impl<'a> Revoke<'a> {
         }
     }
 
+    /// Set the owner for the revoke operation
     pub fn owner(mut self, owner: &'a Keypair) -> Self {
         self.owner = Some(owner.pubkey());
         self.signers = smallvec![owner];
         self
     }
 
+    /// Set multisig authorization for the revoke operation
     pub fn multisig(mut self, multisig: &'a Address, signers: &'a [&'a Keypair]) -> Self {
         self.owner = Some(*multisig);
         self.signers = SmallVec::from(signers);

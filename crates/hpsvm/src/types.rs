@@ -9,7 +9,8 @@ use solana_transaction_error::{TransactionError, TransactionResult as Result};
 
 use crate::format_logs::format_logs;
 
-#[derive(Debug, Default, Clone, PartialEq)]
+#[expect(missing_docs)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TransactionMetadata {
     #[cfg_attr(feature = "serde", serde(with = "crate::utils::serde_with_str"))]
@@ -22,28 +23,35 @@ pub struct TransactionMetadata {
 }
 
 impl TransactionMetadata {
+    #[expect(missing_docs)]
     pub fn pretty_logs(&self) -> String {
         format_logs(&self.logs)
     }
 }
 
-#[derive(Debug, Default, Clone, PartialEq)]
+#[expect(missing_docs)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SimulatedTransactionInfo {
+    #[expect(missing_docs)]
     pub meta: TransactionMetadata,
+    #[expect(missing_docs)]
     pub post_accounts: Vec<(Address, AccountSharedData)>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[expect(missing_docs)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FailedTransactionMetadata {
+    #[expect(missing_docs)]
     pub err: TransactionError,
+    #[expect(missing_docs)]
     pub meta: TransactionMetadata,
 }
 
 impl From<ProgramError> for FailedTransactionMetadata {
     fn from(value: ProgramError) -> Self {
-        FailedTransactionMetadata {
+        Self {
             err: TransactionError::InstructionError(
                 0,
                 InstructionError::Custom(u64::from(value) as u32),
@@ -53,6 +61,7 @@ impl From<ProgramError> for FailedTransactionMetadata {
     }
 }
 
+#[expect(missing_docs)]
 pub type TransactionResult = std::result::Result<TransactionMetadata, FailedTransactionMetadata>;
 
 pub(crate) struct ExecutionResult {

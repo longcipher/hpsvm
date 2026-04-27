@@ -47,7 +47,7 @@ fn is_cached_program_account(pubkey: &Address, account: &AccountSharedData) -> b
     account.executable() && *pubkey != Address::default() && account.owner() != &native_loader::ID
 }
 
-fn is_managed_sysvar_account(pubkey: &Address) -> bool {
+const fn is_managed_sysvar_account(pubkey: &Address) -> bool {
     matches!(
         *pubkey,
         CLOCK_ID |
@@ -71,7 +71,6 @@ fn validate_sysvar_account(
         Rent, SlotHashes, StakeHistory,
     };
 
-    #[allow(deprecated)]
     match pubkey {
         CLOCK_ID => {
             let _: Clock = account.deserialize_data().map_err(|_| ClockError)?;
@@ -85,6 +84,7 @@ fn validate_sysvar_account(
                 account.deserialize_data().map_err(|_| EpochSchedule)?;
         }
         FEES_ID => {
+            #[expect(deprecated)]
             let _: solana_sysvar::fees::Fees = account.deserialize_data().map_err(|_| Fees)?;
         }
         LAST_RESTART_SLOT_ID => {
@@ -92,6 +92,7 @@ fn validate_sysvar_account(
                 account.deserialize_data().map_err(|_| LastRestartSlot)?;
         }
         RECENT_BLOCKHASHES_ID => {
+            #[expect(deprecated)]
             let _: solana_sysvar::recent_blockhashes::RecentBlockhashes =
                 account.deserialize_data().map_err(|_| RecentBlockhashes)?;
         }
@@ -112,7 +113,7 @@ fn validate_sysvar_account(
     Ok(())
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct AccountsDb {
     pub inner: HashMap<Address, AccountSharedData>,
     pub programs_cache: ProgramCacheForTxBatch,
@@ -163,7 +164,8 @@ impl AccountsDb {
             account.lamports() != 0 && is_cached_program_account(&pubkey, &account);
         if has_cached_program {
             let loaded_program = self.load_program(
-                self.get_account_ref(&pubkey).expect("program account just inserted"),
+                self.get_account_ref(&pubkey)
+                    .expect("program account just inserted - this should never fail"),
             )?;
             self.programs_cache.replenish(pubkey, Arc::new(loaded_program));
         } else if had_cached_program {
@@ -206,7 +208,7 @@ impl AccountsDb {
 
         for pubkey in program_keys {
             let loaded_program = self.load_program(
-                self.get_account_ref(&pubkey).expect("program account should exist during rebuild"),
+                self.get_account_ref(&pubkey).expect("program account should exist during rebuild - this indicates an internal inconsistency"),
             )?;
             cache.replenish(pubkey, Arc::new(loaded_program));
         }
@@ -243,7 +245,8 @@ impl AccountsDb {
 
         let owner = program_account.owner();
         let program_runtime_v1 = self.environments.program_runtime_v1.clone();
-        let slot = self.sysvar_cache.get_clock().unwrap().slot;
+        let slot =
+            self.sysvar_cache.get_clock().expect("clock sysvar should always be available").slot;
 
         if bpf_loader::check_id(owner) || bpf_loader_deprecated::check_id(owner) {
             ProgramCacheEntry::new(
@@ -333,8 +336,15 @@ impl AccountsDb {
             .ok_or(AddressLookupError::LookupTableAccountNotFound)?;
 
         if table_account.owner() == &solana_sdk_ids::address_lookup_table::id() {
-            let slot_hashes = self.sysvar_cache.get_slot_hashes().unwrap();
-            let current_slot = self.sysvar_cache.get_clock().unwrap().slot;
+            let slot_hashes = self
+                .sysvar_cache
+                .get_slot_hashes()
+                .expect("slot hashes sysvar should always be available");
+            let current_slot = self
+                .sysvar_cache
+                .get_clock()
+                .expect("clock sysvar should always be available")
+                .slot;
             let lookup_table = AddressLookupTable::deserialize(table_account.data())
                 .map_err(|_ix_err| AddressLookupError::InvalidAccountData)?;
 
@@ -360,31 +370,28 @@ impl AccountsDb {
         address: &Address,
         lamports: u64,
     ) -> solana_transaction_error::TransactionResult<()> {
-        match self.inner.get_mut(address) {
-            Some(account) => {
-                let min_balance = match get_system_account_kind(account) {
-                    Some(SystemAccountKind::Nonce) => self
-                        .sysvar_cache
-                        .get_rent()
-                        .unwrap()
-                        .minimum_balance(nonce::state::State::size()),
-                    _ => 0,
-                };
+        if let Some(account) = self.inner.get_mut(address) {
+            let min_balance = match get_system_account_kind(account) {
+                Some(SystemAccountKind::Nonce) => self
+                    .sysvar_cache
+                    .get_rent()
+                    .expect("rent sysvar should always be available")
+                    .minimum_balance(nonce::state::State::size()),
+                _ => 0,
+            };
 
-                lamports
-                    .checked_add(min_balance)
-                    .filter(|required_balance| *required_balance <= account.lamports())
-                    .ok_or(TransactionError::InsufficientFundsForFee)?;
-                account
-                    .checked_sub_lamports(lamports)
-                    .map_err(|_| TransactionError::InsufficientFundsForFee)?;
+            lamports
+                .checked_add(min_balance)
+                .filter(|required_balance| *required_balance <= account.lamports())
+                .ok_or(TransactionError::InsufficientFundsForFee)?;
+            account
+                .checked_sub_lamports(lamports)
+                .map_err(|_| TransactionError::InsufficientFundsForFee)?;
 
-                Ok(())
-            }
-            None => {
-                error!("Account {address} not found when trying to withdraw fee.");
-                Err(TransactionError::AccountNotFound)
-            }
+            Ok(())
+        } else {
+            error!("Account {address} not found when trying to withdraw fee.");
+            Err(TransactionError::AccountNotFound)
         }
     }
 
@@ -436,7 +443,7 @@ impl AccountsDb {
     }
 }
 
-fn into_address_loader_error(err: AddressLookupError) -> AddressLoaderError {
+const fn into_address_loader_error(err: AddressLookupError) -> AddressLoaderError {
     match err {
         AddressLookupError::LookupTableAccountNotFound => {
             AddressLoaderError::LookupTableAccountNotFound

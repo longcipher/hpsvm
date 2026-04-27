@@ -13,6 +13,7 @@ use super::{TOKEN_ID, get_multisig_signers, spl_token::instruction::close_accoun
 /// ### Optional fields
 /// - `owner`: `payer` by default.
 /// - `token_program_id`: [`TOKEN_ID`] by default.
+#[derive(Debug)]
 pub struct CloseAccount<'a> {
     svm: &'a mut HPSVM,
     payer: &'a Keypair,

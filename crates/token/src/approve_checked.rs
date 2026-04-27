@@ -17,6 +17,7 @@ use super::{
 /// - `source`: associated token account of the `payer` by default.
 /// - `owner`: `payer` by default.
 /// - `token_program_id`: [`TOKEN_ID`] by default.
+#[derive(Debug)]
 pub struct ApproveChecked<'a> {
     svm: &'a mut HPSVM,
     payer: &'a Keypair,

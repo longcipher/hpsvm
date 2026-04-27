@@ -13,6 +13,7 @@ use super::{TOKEN_ID, get_multisig_signers, spl_token::instruction::burn};
 /// ### Optional fields
 /// - `authority`: `payer` by default.
 /// - `token_program_id`: [`TOKEN_ID`] by default.
+#[derive(Debug)]
 pub struct Burn<'a> {
     svm: &'a mut HPSVM,
     payer: &'a Keypair,

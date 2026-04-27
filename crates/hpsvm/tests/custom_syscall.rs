@@ -19,13 +19,13 @@ declare_builtin_function!(
     /// A custom syscall to burn CUs.
     SyscallBurnCus,
     fn rust(
-        invoke_context: &mut InvokeContext,
+        invoke_context: &mut InvokeContext<'_, '_>,
         to_burn: u64,
         _arg2: u64,
         _arg3: u64,
         _arg4: u64,
         _arg5: u64,
-        _memory_mapping: &mut MemoryMapping,
+        _memory_mapping: &mut MemoryMapping<'_>,
     ) -> Result<u64, Box<dyn std::error::Error>> {
         assert_eq!(to_burn, CUS_TO_BURN);
         invoke_context.consume_checked(to_burn)?;

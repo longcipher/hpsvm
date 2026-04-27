@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
-pub fn serialize<T, S>(t: &T, serializer: S) -> Result<S::Ok, S::Error>
+pub(crate) fn serialize<T, S>(t: &T, serializer: S) -> Result<S::Ok, S::Error>
 where
     T: ToString,
     S: Serializer,
@@ -10,7 +10,7 @@ where
     t.to_string().serialize(serializer)
 }
 
-pub fn deserialize<'de, T, D>(deserializer: D) -> Result<T, D::Error>
+pub(crate) fn deserialize<'de, T, D>(deserializer: D) -> Result<T, D::Error>
 where
     T: FromStr,
     D: Deserializer<'de>,

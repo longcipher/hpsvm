@@ -327,10 +327,10 @@ use solana_svm_log_collector::LogCollector;
 use solana_svm_timings::ExecuteTimings;
 use solana_svm_transaction::svm_message::SVMMessage;
 use solana_system_program::{SystemAccountKind, get_system_account_kind};
-#[allow(deprecated)]
+#[expect(deprecated)]
 use solana_sysvar::recent_blockhashes::IterItem;
 use solana_sysvar::{Sysvar, SysvarSerialize};
-#[allow(deprecated)]
+#[expect(deprecated)]
 use solana_sysvar::{fees::Fees, recent_blockhashes::RecentBlockhashes};
 use solana_sysvar_id::SysvarId;
 use solana_transaction::{
@@ -366,7 +366,9 @@ struct CustomSyscallRegistration {
     function: BuiltinFunction<InvokeContext<'static, 'static>>,
 }
 
+#[expect(missing_docs)]
 pub mod error;
+#[expect(missing_docs)]
 pub mod types;
 
 mod accounts_db;
@@ -381,6 +383,7 @@ mod programs;
 pub mod register_tracing;
 mod utils;
 
+#[expect(missing_docs)]
 #[derive(Clone)]
 pub struct HPSVM {
     accounts: AccountsDb,
@@ -413,16 +416,37 @@ pub struct HPSVM {
     enable_register_tracing: bool,
 }
 
+impl std::fmt::Debug for HPSVM {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut debug = f.debug_struct("HPSVM");
+        debug
+            .field("accounts", &self.accounts)
+            .field("builtins_loaded", &self.builtins_loaded)
+            .field("default_programs_loaded", &self.default_programs_loaded)
+            .field("feature_set", &self.feature_set)
+            .field("feature_accounts_loaded", &self.feature_accounts_loaded)
+            .field("latest_blockhash", &self.latest_blockhash)
+            .field("sigverify", &self.sigverify)
+            .field("blockhash_check", &self.blockhash_check)
+            .field("sysvars_loaded", &self.sysvars_loaded);
+        #[cfg(feature = "precompiles")]
+        debug.field("precompiles_loaded", &self.precompiles_loaded);
+        #[cfg(feature = "invocation-inspect-callback")]
+        debug.field("enable_register_tracing", &self.enable_register_tracing);
+        debug.finish_non_exhaustive()
+    }
+}
+
 impl Default for HPSVM {
     fn default() -> Self {
-        let _enable_register_tracing = false;
-
         // Allow users to virtually get register tracing data without
         // doing any changes to their code provided `SBF_TRACE_DIR` is set.
         #[cfg(feature = "register-tracing")]
-        let _enable_register_tracing = std::env::var("SBF_TRACE_DIR").is_ok();
+        let enable_register_tracing = std::env::var("SBF_TRACE_DIR").is_ok();
+        #[cfg(not(feature = "register-tracing"))]
+        let enable_register_tracing = false;
 
-        Self::new_inner(_enable_register_tracing)
+        Self::new_inner(enable_register_tracing)
     }
 }
 
@@ -430,8 +454,7 @@ impl HPSVM {
     fn new_inner(_enable_register_tracing: bool) -> Self {
         let feature_set = FeatureSet::default();
 
-        #[allow(unused_mut)]
-        let mut svm = Self {
+        Self {
             accounts: Default::default(),
             airdrop_kp: Keypair::new().to_bytes(),
             builtins_loaded: false,
@@ -453,15 +476,17 @@ impl HPSVM {
             #[cfg(feature = "invocation-inspect-callback")]
             enable_register_tracing: _enable_register_tracing,
             #[cfg(feature = "invocation-inspect-callback")]
-            invocation_inspect_callback: Arc::new(EmptyInvocationInspectCallback {}),
-        };
-
-        #[cfg(feature = "register-tracing")]
-        if svm.enable_register_tracing {
-            svm.invocation_inspect_callback = Arc::new(DefaultRegisterTracingCallback::default());
+            invocation_inspect_callback: {
+                #[cfg(feature = "register-tracing")]
+                if _enable_register_tracing {
+                    Arc::new(DefaultRegisterTracingCallback::default())
+                } else {
+                    Arc::new(EmptyInvocationInspectCallback {})
+                }
+                #[cfg(not(feature = "register-tracing"))]
+                Arc::new(EmptyInvocationInspectCallback {})
+            },
         }
-
-        svm
     }
 
     fn into_basic(self) -> Self {
@@ -483,7 +508,7 @@ impl HPSVM {
 
     /// Creates the basic test environment.
     pub fn new() -> Self {
-        HPSVM::default().into_basic()
+        Self::default().into_basic()
     }
 
     #[cfg(feature = "register-tracing")]
@@ -508,13 +533,13 @@ impl HPSVM {
     }
 
     fn clear_builtin_accounts(&mut self) {
-        BUILTINS.iter().for_each(|builtin| {
+        for builtin in BUILTINS {
             self.accounts.inner.remove(&builtin.program_id);
-        });
+        }
     }
 
     fn clear_default_programs(&mut self) {
-        DEFAULT_PROGRAM_IDS.iter().for_each(|program_id| {
+        for program_id in &DEFAULT_PROGRAM_IDS {
             if self
                 .accounts
                 .get_account_ref(program_id)
@@ -523,7 +548,7 @@ impl HPSVM {
                 self.accounts.inner.remove(&get_program_data_address(program_id));
             }
             self.accounts.inner.remove(program_id);
-        });
+        }
     }
 
     #[cfg(feature = "precompiles")]
@@ -534,25 +559,28 @@ impl HPSVM {
     }
 
     fn refresh_runtime_environments(&mut self) {
-        let _enable_register_tracing = false;
         #[cfg(feature = "register-tracing")]
-        let _enable_register_tracing = self.enable_register_tracing;
+        let enable_register_tracing = self.enable_register_tracing;
+        #[cfg(not(feature = "register-tracing"))]
+        let enable_register_tracing = false;
 
-        let compute_budget = self.compute_budget.unwrap_or(ComputeBudget::new_with_defaults(
-            self.feature_set.is_active(&raise_cpi_nesting_limit_to_8::ID),
-            self.feature_set.is_active(&increase_cpi_account_info_limit::ID),
-        ));
+        let compute_budget = self.compute_budget.unwrap_or_else(|| {
+            ComputeBudget::new_with_defaults(
+                self.feature_set.is_active(&raise_cpi_nesting_limit_to_8::ID),
+                self.feature_set.is_active(&increase_cpi_account_info_limit::ID),
+            )
+        });
         let mut program_runtime_v1 = create_program_runtime_environment_v1(
             &self.feature_set.runtime_features(),
             &compute_budget.to_budget(),
             false,
-            _enable_register_tracing,
+            enable_register_tracing,
         )
-        .unwrap();
+        .expect("failed to create program runtime environment v1");
 
         let mut program_runtime_v2 = create_program_runtime_environment_v2(
             &compute_budget.to_budget(),
-            _enable_register_tracing,
+            enable_register_tracing,
         );
 
         for syscall in &self.custom_syscalls {
@@ -595,40 +623,41 @@ impl HPSVM {
             self.set_default_programs();
         }
 
-        if self.accounts.rebuild_program_cache().is_err() {
-            panic!("feature-set reconfiguration produced invalid program cache state");
-        }
+        assert!(
+            self.accounts.rebuild_program_cache().is_ok(),
+            "feature-set reconfiguration produced invalid program cache state"
+        );
     }
 
     #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
-    fn set_compute_budget(&mut self, compute_budget: ComputeBudget) {
+    const fn set_compute_budget(&mut self, compute_budget: ComputeBudget) {
         self.compute_budget = Some(compute_budget);
     }
 
     /// Sets the compute budget.
-    pub fn with_compute_budget(mut self, compute_budget: ComputeBudget) -> Self {
+    pub const fn with_compute_budget(mut self, compute_budget: ComputeBudget) -> Self {
         self.set_compute_budget(compute_budget);
         self
     }
 
     #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
-    fn set_sigverify(&mut self, sigverify: bool) {
+    const fn set_sigverify(&mut self, sigverify: bool) {
         self.sigverify = sigverify;
     }
 
     /// Enables or disables sigverify.
-    pub fn with_sigverify(mut self, sigverify: bool) -> Self {
+    pub const fn with_sigverify(mut self, sigverify: bool) -> Self {
         self.set_sigverify(sigverify);
         self
     }
 
     #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
-    fn set_blockhash_check(&mut self, check: bool) {
+    const fn set_blockhash_check(&mut self, check: bool) {
         self.blockhash_check = check;
     }
 
     /// Enables or disables the blockhash check.
-    pub fn with_blockhash_check(mut self, check: bool) -> Self {
+    pub const fn with_blockhash_check(mut self, check: bool) -> Self {
         self.set_blockhash_check(check);
         self
     }
@@ -639,12 +668,12 @@ impl HPSVM {
         self.set_sysvar(&Clock::default());
         self.set_sysvar(&EpochRewards::default());
         self.set_sysvar(&EpochSchedule::default());
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let fees = Fees::default();
         self.set_sysvar(&fees);
         self.set_sysvar(&LastRestartSlot::default());
         let latest_blockhash = self.latest_blockhash;
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         self.set_sysvar(&RecentBlockhashes::from_iter([IterItem(
             0,
             &latest_blockhash,
@@ -652,7 +681,7 @@ impl HPSVM {
         )]));
 
         // Rent account differs based off feature gating
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         {
             let mut rent_account = Rent::default();
             if self
@@ -660,12 +689,16 @@ impl HPSVM {
                 .is_active(&agave_feature_set::deprecate_rent_exemption_threshold::id())
             {
                 rent_account.exemption_threshold = 1.0;
-                rent_account.lamports_per_byte_year = solana_rent::DEFAULT_LAMPORTS_PER_BYTE
+                rent_account.lamports_per_byte_year = solana_rent::DEFAULT_LAMPORTS_PER_BYTE;
             }
             self.set_sysvar(&rent_account);
         }
         self.set_sysvar(&SlotHashes::new(&[(
-            self.accounts.sysvar_cache.get_clock().unwrap().slot,
+            self.accounts
+                .sysvar_cache
+                .get_clock()
+                .expect("clock sysvar should always be available")
+                .slot,
             latest_blockhash,
         )]));
         self.set_sysvar(&SlotHistory::default());
@@ -703,6 +736,7 @@ impl HPSVM {
         }
     }
 
+    #[expect(missing_docs)]
     pub fn with_feature_accounts(mut self) -> Self {
         self.set_feature_accounts();
         self
@@ -718,7 +752,7 @@ impl HPSVM {
     fn set_builtins(&mut self) {
         self.builtins_loaded = true;
         self.refresh_runtime_environments();
-        BUILTINS.iter().for_each(|builtint| {
+        for builtint in BUILTINS {
             if builtint.enable_feature_id.is_none_or(|x| self.feature_set.is_active(&x)) {
                 let loaded_program =
                     ProgramCacheEntry::new_builtin(0, builtint.name.len(), builtint.entrypoint);
@@ -730,7 +764,7 @@ impl HPSVM {
                     crate::utils::create_loadable_account_for_test(builtint.name),
                 );
             }
-        });
+        }
     }
 
     /// Changes the default builtins.
@@ -743,7 +777,9 @@ impl HPSVM {
     #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
     fn set_lamports(&mut self, lamports: u64) {
         self.accounts.add_account_no_checks(
-            Keypair::try_from(self.airdrop_kp.as_slice()).unwrap().pubkey(),
+            Keypair::try_from(self.airdrop_kp.as_slice())
+                .expect("airdrop keypair should be valid")
+                .pubkey(),
             AccountSharedData::new(lamports, 0, &system_program::id()),
         );
     }
@@ -779,11 +815,12 @@ impl HPSVM {
     }
 
     #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
-    fn set_log_bytes_limit(&mut self, limit: Option<usize>) {
+    const fn set_log_bytes_limit(&mut self, limit: Option<usize>) {
         self.log_bytes_limit = limit;
     }
 
-    pub fn with_log_bytes_limit(mut self, limit: Option<usize>) -> Self {
+    #[expect(missing_docs)]
+    pub const fn with_log_bytes_limit(mut self, limit: Option<usize>) -> Self {
         self.set_log_bytes_limit(limit);
         self
     }
@@ -836,7 +873,7 @@ impl HPSVM {
     /// let accounts_db = svm.accounts_db();
     /// // ... inspect internal state if needed
     /// ```
-    pub fn accounts_db(&self) -> &AccountsDb {
+    pub const fn accounts_db(&self) -> &AccountsDb {
         &self.accounts
     }
 
@@ -846,7 +883,7 @@ impl HPSVM {
     }
 
     /// Gets the latest blockhash.
-    pub fn latest_blockhash(&self) -> Hash {
+    pub const fn latest_blockhash(&self) -> Hash {
         self.latest_blockhash
     }
 
@@ -856,8 +893,8 @@ impl HPSVM {
         T: Sysvar + SysvarId + SysvarSerialize,
     {
         let mut account = AccountSharedData::new(1, T::size_of(), &solana_sdk_ids::sysvar::id());
-        account.serialize_data(sysvar).unwrap();
-        self.accounts.add_account(T::id(), account).unwrap();
+        account.serialize_data(sysvar).expect("sysvar serialization should never fail");
+        self.accounts.add_account(T::id(), account).expect("failed to add sysvar account");
     }
 
     /// Gets a sysvar from the test environment.
@@ -865,7 +902,11 @@ impl HPSVM {
     where
         T: Sysvar + SysvarId + DeserializeOwned,
     {
-        self.accounts.get_account_ref(&T::id()).unwrap().deserialize_data().unwrap()
+        self.accounts
+            .get_account_ref(&T::id())
+            .expect("sysvar account should exist")
+            .deserialize_data()
+            .expect("sysvar deserialization should never fail")
     }
 
     /// Gets a transaction from the transaction history.
@@ -875,12 +916,15 @@ impl HPSVM {
 
     /// Returns the pubkey of the internal airdrop account.
     pub fn airdrop_pubkey(&self) -> Address {
-        Keypair::try_from(self.airdrop_kp.as_slice()).unwrap().pubkey()
+        Keypair::try_from(self.airdrop_kp.as_slice())
+            .expect("airdrop keypair should be valid")
+            .pubkey()
     }
 
     /// Airdrops the account with the lamports specified.
     pub fn airdrop(&mut self, address: &Address, lamports: u64) -> TransactionResult {
-        let payer = Keypair::try_from(self.airdrop_kp.as_slice()).unwrap();
+        let payer =
+            Keypair::try_from(self.airdrop_kp.as_slice()).expect("airdrop keypair should be valid");
         let tx = VersionedTransaction::try_new(
             VersionedMessage::Legacy(Message::new_with_blockhash(
                 &[solana_system_interface::instruction::transfer(
@@ -893,7 +937,7 @@ impl HPSVM {
             )),
             &[payer],
         )
-        .unwrap();
+        .expect("failed to create airdrop transaction");
 
         self.send_transaction(tx)
     }
@@ -1107,7 +1151,8 @@ impl HPSVM {
                 self.feature_set.is_active(&increase_cpi_account_info_limit::ID),
             )
         });
-        let rent = self.accounts.sysvar_cache.get_rent().unwrap();
+        let rent =
+            self.accounts.sysvar_cache.get_rent().expect("rent sysvar should always be available");
         let message = tx.message();
         let blockhash = message.recent_blockhash();
         // reload program cache
@@ -1139,7 +1184,9 @@ impl HPSVM {
                         // Optimization to skip loading of accounts which are only used as
                         // programs in top-level instructions and not passed as instruction
                         // accounts.
-                        self.accounts.get_account(key).unwrap()
+                        self.accounts
+                            .get_account(key)
+                            .expect("account should exist during processing")
                     } else {
                         self.accounts.get_account(key).unwrap_or_else(|| {
                             let mut default_account = AccountSharedData::default();
@@ -1147,6 +1194,7 @@ impl HPSVM {
                             default_account
                         })
                     };
+
                     if !validated_fee_payer && (!message.is_invoked(i) || is_instruction_account) {
                         validate_fee_payer(key, &mut account, i as IndexOfAccount, &rent, fee)?;
                         validated_fee_payer = true;
@@ -1154,7 +1202,6 @@ impl HPSVM {
                     }
                     account
                 };
-
                 Ok((*key, account))
             })
             .collect::<solana_transaction_error::TransactionResult<Vec<_>>>();
@@ -1182,7 +1229,8 @@ impl HPSVM {
             .map(|c| {
                 let program_index = c.program_id_index as usize;
                 // This may never error, because the transaction is sanitized
-                let (program_id, program_account) = accounts.get(program_index).unwrap();
+                let (program_id, program_account) =
+                    accounts.get(program_index).expect("program account should exist");
                 if native_loader::check_id(program_id) {
                     return Ok(program_index as IndexOfAccount);
                 }
@@ -1202,7 +1250,8 @@ impl HPSVM {
                     .iter()
                     .any(|(key, _)| key == owner_id)
                 {
-                    let owner_account = self.accounts.get_account(owner_id).unwrap();
+                    let owner_account =
+                        self.accounts.get_account(owner_id).expect("owner account should exist");
                     if !native_loader::check_id(owner_account.owner()) {
                         error!(
                             "Owner account {owner_id} is not owned by the native loader program."
@@ -1223,6 +1272,12 @@ impl HPSVM {
         match maybe_program_indices {
             Ok(program_indices) => {
                 let mut context = self.create_transaction_context(compute_budget, accounts);
+
+                // Check rent before creating invoke context
+                if let Err(err) = self.check_accounts_rent(tx, &context, &rent) {
+                    return (Err(err), accumulated_consume_units, None, fee, None);
+                }
+
                 let feature_set = self.feature_set.runtime_features();
                 let mut invoke_context = InvokeContext::new(
                     &mut context,
@@ -1249,14 +1304,13 @@ impl HPSVM {
                     &invoke_context,
                 );
 
-                let mut tx_result = process_message(
+                let tx_result = process_message(
                     message,
                     &program_indices,
                     &mut invoke_context,
                     &mut ExecuteTimings::default(),
                     &mut accumulated_consume_units,
-                )
-                .map(|_| ());
+                );
 
                 #[cfg(feature = "invocation-inspect-callback")]
                 self.invocation_inspect_callback.after_invocation(
@@ -1264,10 +1318,6 @@ impl HPSVM {
                     &invoke_context,
                     self.enable_register_tracing,
                 );
-
-                if let Err(err) = self.check_accounts_rent(tx, &context, &rent) {
-                    tx_result = Err(err);
-                };
 
                 (tx_result, accumulated_consume_units, Some(context), fee, payer_key)
             }
@@ -1278,7 +1328,7 @@ impl HPSVM {
     fn check_accounts_rent(
         &self,
         tx: &SanitizedTransaction,
-        context: &TransactionContext,
+        context: &TransactionContext<'_>,
         rent: &Rent,
     ) -> Result<(), TransactionError> {
         let message = tx.message();
@@ -1295,11 +1345,10 @@ impl HPSVM {
 
                 let post_rent_state =
                     get_account_rent_state(rent, account.lamports(), account.data().len());
-                let pre_rent_state = self
-                    .accounts
-                    .get_account_ref(pubkey)
-                    .map(|acc| get_account_rent_state(rent, acc.lamports(), acc.data().len()))
-                    .unwrap_or(RentState::Uninitialized);
+                let pre_rent_state =
+                    self.accounts.get_account_ref(pubkey).map_or(RentState::Uninitialized, |acc| {
+                        get_account_rent_state(rent, acc.lamports(), acc.data().len())
+                    });
 
                 check_rent_state_with_account(
                     &pre_rent_state,
@@ -1468,11 +1517,11 @@ impl HPSVM {
             unreachable!("Log collector should not be used after send_transaction returns")
         };
         let meta = TransactionMetadata {
+            signature,
             logs,
             inner_instructions,
             compute_units_consumed,
             return_data,
-            signature,
             fee,
         };
 
@@ -1536,7 +1585,7 @@ impl HPSVM {
     /// Expires the current blockhash.
     pub fn expire_blockhash(&mut self) {
         self.latest_blockhash = create_blockhash(&self.latest_blockhash.to_bytes());
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         self.set_sysvar(&RecentBlockhashes::from_iter([IterItem(
             0,
             &self.latest_blockhash,
@@ -1552,11 +1601,12 @@ impl HPSVM {
     }
 
     /// Gets the current compute budget.
-    pub fn get_compute_budget(&self) -> Option<ComputeBudget> {
+    pub const fn get_compute_budget(&self) -> Option<ComputeBudget> {
         self.compute_budget
     }
 
-    pub fn get_sigverify(&self) -> bool {
+    #[expect(missing_docs)]
+    pub const fn get_sigverify(&self) -> bool {
         self.sigverify
     }
 
@@ -1645,9 +1695,10 @@ impl HPSVM {
 
         self.refresh_runtime_environments();
 
-        if self.accounts.rebuild_program_cache().is_err() {
-            panic!("with_custom_syscall: failed to rebuild program cache after runtime refresh");
-        }
+        assert!(
+            self.accounts.rebuild_program_cache().is_ok(),
+            "with_custom_syscall: failed to rebuild program cache after runtime refresh"
+        );
 
         self
     }
@@ -1667,7 +1718,7 @@ struct CheckAndProcessTransactionSuccess<'ix_data> {
 
 fn execution_result_if_context(
     sanitized_tx: &SanitizedTransaction,
-    ctx: TransactionContext,
+    ctx: TransactionContext<'_>,
     result: Result<(), TransactionError>,
     compute_units_consumed: u64,
     fee: u64,
@@ -1688,7 +1739,7 @@ fn execution_result_if_context(
 
 fn execute_tx_helper(
     sanitized_tx: &SanitizedTransaction,
-    ctx: TransactionContext,
+    ctx: TransactionContext<'_>,
 ) -> (
     Signature,
     solana_transaction_context::TransactionReturnData,
@@ -1775,7 +1826,7 @@ fn validate_fee_payer(
     let payer_len = payer_account.data().len();
     let payer_pre_rent_state = get_account_rent_state(rent, payer_account.lamports(), payer_len);
     // we already checked above if we have sufficient balance so this should never error.
-    payer_account.checked_sub_lamports(fee).unwrap();
+    payer_account.checked_sub_lamports(fee).expect("fee should not exceed account balance");
 
     let payer_post_rent_state = get_account_rent_state(rent, payer_account.lamports(), payer_len);
     check_rent_state_with_account(
@@ -1806,18 +1857,19 @@ pub trait InvocationInspectCallback: Send + Sync {
         svm: &HPSVM,
         tx: &SanitizedTransaction,
         program_indices: &[IndexOfAccount],
-        invoke_context: &InvokeContext,
+        invoke_context: &InvokeContext<'_, '_>,
     );
 
     fn after_invocation(
         &self,
         svm: &HPSVM,
-        invoke_context: &InvokeContext,
+        invoke_context: &InvokeContext<'_, '_>,
         enable_register_tracing: bool,
     );
 }
 
 #[cfg(feature = "invocation-inspect-callback")]
+#[derive(Debug)]
 pub struct EmptyInvocationInspectCallback;
 
 #[cfg(feature = "invocation-inspect-callback")]
@@ -1827,11 +1879,17 @@ impl InvocationInspectCallback for EmptyInvocationInspectCallback {
         _: &HPSVM,
         _: &SanitizedTransaction,
         _: &[IndexOfAccount],
-        _: &InvokeContext,
+        _: &InvokeContext<'_, '_>,
     ) {
     }
 
-    fn after_invocation(&self, _: &HPSVM, _: &InvokeContext, _enable_register_tracing: bool) {}
+    fn after_invocation(
+        &self,
+        _: &HPSVM,
+        _: &InvokeContext<'_, '_>,
+        _enable_register_tracing: bool,
+    ) {
+    }
 }
 
 #[cfg(test)]

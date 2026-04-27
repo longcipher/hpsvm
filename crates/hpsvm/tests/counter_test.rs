@@ -169,11 +169,11 @@ fn test_register_tracing_handler() {
     }
 
     impl CustomRegisterTracingCallback {
-        pub fn handler(
+        pub(crate) fn handler(
             &self,
-            instruction_context: InstructionContext,
+            instruction_context: InstructionContext<'_, '_>,
             executable: &Executable,
-            register_trace: RegisterTrace,
+            register_trace: RegisterTrace<'_>,
         ) -> Result<(), Box<dyn std::error::Error>> {
             let mut tracing_data = self.tracing_data.lock().unwrap();
 
@@ -213,22 +213,22 @@ fn test_register_tracing_handler() {
             _: &HPSVM,
             _: &SanitizedTransaction,
             _: &[IndexOfAccount],
-            _: &InvokeContext,
+            _: &InvokeContext<'_, '_>,
         ) {
         }
 
         fn after_invocation(
             &self,
             _: &HPSVM,
-            invoke_context: &InvokeContext,
+            invoke_context: &InvokeContext<'_, '_>,
             register_tracing_enabled: bool,
         ) {
             // Only process traces if register tracing was enabled.
             if register_tracing_enabled {
                 invoke_context.iterate_vm_traces(
-                    &|instruction_context: InstructionContext,
+                    &|instruction_context: InstructionContext<'_, '_>,
                       executable: &Executable,
-                      register_trace: RegisterTrace| {
+                      register_trace: RegisterTrace<'_>| {
                         if let Err(e) =
                             self.handler(instruction_context, executable, register_trace)
                         {

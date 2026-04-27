@@ -18,6 +18,7 @@ use super::{
 /// - `owner`: `payer` by default.
 /// - `decimals`: `mint` decimals by default.
 /// - `token_program_id`: [`TOKEN_ID`] by default.
+#[derive(Debug)]
 pub struct TransferChecked<'a> {
     svm: &'a mut HPSVM,
     payer: &'a Keypair,

@@ -24,10 +24,10 @@ impl Default for MyConfig {
     }
 }
 impl MyConfig {
-    pub fn new(item: u64) -> Self {
+    pub(crate) fn new(item: u64) -> Self {
         Self { item }
     }
-    pub fn deserialize(input: &[u8]) -> Option<Self> {
+    pub(crate) fn deserialize(input: &[u8]) -> Option<Self> {
         try_deserialize_account_data(input)
     }
 }

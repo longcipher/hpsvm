@@ -13,6 +13,7 @@ use super::TOKEN_ID;
 /// ### Optional fields
 /// - `owner`: `payer` by default.
 /// - `token_program_id`: [`TOKEN_ID`] by default.
+#[derive(Debug)]
 pub struct CreateAssociatedTokenAccount<'a> {
     svm: &'a mut HPSVM,
     payer: &'a Keypair,

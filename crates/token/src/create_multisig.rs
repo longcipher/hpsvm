@@ -13,6 +13,7 @@ use super::{
 
 /// ### Description
 /// Builder for the [`initialize_multisig2`] instruction.
+#[derive(Debug)]
 pub struct CreateMultisig<'a> {
     svm: &'a mut HPSVM,
     payer: &'a Keypair,

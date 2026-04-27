@@ -1,3 +1,5 @@
+//! Tests for SPL token freeze/thaw functionality.
+
 use hpsvm::HPSVM;
 use hpsvm_token::{
     CreateAssociatedTokenAccountIdempotent, CreateMint, FreezeAccount, ThawAccount,

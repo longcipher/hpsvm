@@ -11,6 +11,7 @@ use super::{TOKEN_ID, spl_token::instruction::sync_native};
 ///
 /// ### Optional fields
 /// - `token_program_id`: [`TOKEN_ID`] by default.
+#[derive(Debug)]
 pub struct SyncNative<'a> {
     svm: &'a mut HPSVM,
     payer: &'a Keypair,

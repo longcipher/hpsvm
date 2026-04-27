@@ -1,3 +1,5 @@
+//! Tests for the HPSVM loader functionality.
+
 use agave_feature_set::FeatureSet;
 use hpsvm::HPSVM;
 use hpsvm_loader::{deploy_upgradeable_program, set_upgrade_authority};

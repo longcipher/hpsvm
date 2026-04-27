@@ -1,3 +1,5 @@
+//! Tests for SPL token native mint functionality.
+
 use hpsvm::HPSVM;
 use hpsvm_token::{
     CreateAssociatedTokenAccount, CreateNativeMint, SyncNative, get_spl_account,

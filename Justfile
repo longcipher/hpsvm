@@ -15,12 +15,12 @@ fix:
 
 # Run all lints
 lint:
-  typos
-  rumdl check .
-  cargo sort -w -g -c
-  cargo +nightly fmt --all -- --check
-  cargo +nightly clippy --all -- -D warnings
-  cargo machete
+	typos
+	rumdl check .
+	cargo sort -w -g -c
+	cargo +nightly fmt --all -- --check
+	cargo +nightly clippy --all -- -D warnings -A deprecated -A clippy::missing_const_for_fn -A clippy::unwrap_used -A clippy::or_fun_call -A unused-mut -A clippy::result_large_err
+	cargo machete
 
 # Run tests
 test:

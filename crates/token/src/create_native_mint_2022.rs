@@ -7,6 +7,7 @@ use spl_token_2022_interface::instruction::create_native_mint;
 
 /// ### Description
 /// Builder for the [`create_native_mint`] instruction.
+#[derive(Debug)]
 pub struct CreateNativeMint<'a> {
     svm: &'a mut HPSVM,
     payer: &'a Keypair,

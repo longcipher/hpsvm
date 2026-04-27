@@ -1,4 +1,5 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
+//! Token operations for the HPSVM
 
 mod approve;
 mod approve_checked;
@@ -55,8 +56,10 @@ pub use thaw_account::*;
 pub use transfer::*;
 pub use transfer_checked::*;
 
+/// SPL Token program ID
 pub const TOKEN_ID: Address = spl_token::ID;
 
+/// Get an SPL account from the SVM
 pub fn get_spl_account<T: Pack + IsInitialized>(
     svm: &HPSVM,
     account: &Address,

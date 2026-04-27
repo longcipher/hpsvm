@@ -20,6 +20,7 @@ use super::{
 /// ### Optional fields
 /// - `owner`: `payer` by default.
 /// - `account_kp`: [`Keypair::new()`] by default.
+#[derive(Debug)]
 pub struct CreateAccount<'a> {
     svm: &'a mut HPSVM,
     payer: &'a Keypair,
@@ -33,7 +34,7 @@ pub struct CreateAccount<'a> {
 
 impl<'a> CreateAccount<'a> {
     /// Creates a new instance of the [`initialize_account3`] instruction.
-    pub fn new(svm: &'a mut HPSVM, payer: &'a Keypair, mint: &'a Address) -> Self {
+    pub const fn new(svm: &'a mut HPSVM, payer: &'a Keypair, mint: &'a Address) -> Self {
         CreateAccount {
             svm,
             payer,
@@ -47,7 +48,7 @@ impl<'a> CreateAccount<'a> {
     }
 
     /// Sets the owner of the spl account.
-    pub fn owner(mut self, owner: &'a Address) -> Self {
+    pub const fn owner(mut self, owner: &'a Address) -> Self {
         self.owner = Some(owner);
         self
     }
@@ -59,7 +60,7 @@ impl<'a> CreateAccount<'a> {
     }
 
     /// Sets the token program id of the spl account.
-    pub fn token_program_id(mut self, program_id: &'a Address) -> Self {
+    pub const fn token_program_id(mut self, program_id: &'a Address) -> Self {
         self.token_program_id = Some(program_id);
         self
     }

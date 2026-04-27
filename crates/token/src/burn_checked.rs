@@ -17,6 +17,7 @@ use super::{
 /// - `authority`: `payer` by default.
 /// - `decimals`: `mint` decimals by default.
 /// - `token_program_id`: [`TOKEN_ID`] by default.
+#[derive(Debug)]
 pub struct BurnChecked<'a> {
     svm: &'a mut HPSVM,
     payer: &'a Keypair,

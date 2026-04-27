@@ -10,6 +10,7 @@ use crate::{HPSVM, InvocationInspectCallback};
 
 const DEFAULT_PATH: &str = "target/sbf/trace";
 
+#[derive(Debug)]
 pub struct DefaultRegisterTracingCallback {
     pub sbf_trace_dir: String,
     pub sbf_trace_disassemble: bool,
@@ -31,7 +32,7 @@ impl DefaultRegisterTracingCallback {
         writer: &mut W,
         program_id: &Address,
         executable: &Executable,
-        register_trace: RegisterTrace,
+        register_trace: RegisterTrace<'_>,
     ) {
         match solana_program_runtime::solana_sbpf::static_analysis::Analysis::from_executable(
             executable,
@@ -50,9 +51,9 @@ impl DefaultRegisterTracingCallback {
     pub fn handler(
         &self,
         svm: &HPSVM,
-        instruction_context: InstructionContext,
+        instruction_context: InstructionContext<'_, '_>,
         executable: &Executable,
-        register_trace: RegisterTrace,
+        register_trace: RegisterTrace<'_>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         if register_trace.is_empty() {
             // Can't do much with an empty trace.
@@ -117,22 +118,22 @@ impl InvocationInspectCallback for DefaultRegisterTracingCallback {
         _: &HPSVM,
         _: &SanitizedTransaction,
         _: &[IndexOfAccount],
-        _: &InvokeContext,
+        _: &InvokeContext<'_, '_>,
     ) {
     }
 
     fn after_invocation(
         &self,
         svm: &HPSVM,
-        invoke_context: &InvokeContext,
+        invoke_context: &InvokeContext<'_, '_>,
         register_tracing_enabled: bool,
     ) {
         if register_tracing_enabled {
             // Only read the register traces if they were actually enabled.
             invoke_context.iterate_vm_traces(
-                &|instruction_context: InstructionContext,
+                &|instruction_context: InstructionContext<'_, '_>,
                   executable: &Executable,
-                  register_trace: RegisterTrace| {
+                  register_trace: RegisterTrace<'_>| {
                     if let Err(e) =
                         self.handler(svm, instruction_context, executable, register_trace)
                     {

@@ -1,3 +1,5 @@
+//! Tests for SPL token functionality with single owner operations.
+
 use hpsvm::HPSVM;
 use hpsvm_token::{
     Approve, ApproveChecked, Burn, BurnChecked, CloseAccount, CreateAccount,

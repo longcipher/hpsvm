@@ -3,29 +3,29 @@ use solana_signature::Signature;
 
 use crate::types::TransactionResult;
 
-#[derive(Clone)]
-pub struct TransactionHistory {
+#[derive(Clone, Debug)]
+pub(crate) struct TransactionHistory {
     entries: IndexMap<Signature, TransactionResult>,
     max_entries: usize,
 }
 
 impl TransactionHistory {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self { entries: IndexMap::with_capacity(32), max_entries: 32 }
     }
 
-    pub fn set_capacity(&mut self, new_cap: usize) {
+    pub(crate) fn set_capacity(&mut self, new_cap: usize) {
         self.max_entries = new_cap;
         while self.entries.len() > self.max_entries {
             self.entries.shift_remove_index(0);
         }
     }
 
-    pub fn get_transaction(&self, signature: &Signature) -> Option<&TransactionResult> {
+    pub(crate) fn get_transaction(&self, signature: &Signature) -> Option<&TransactionResult> {
         self.entries.get(signature)
     }
 
-    pub fn add_new_transaction(&mut self, signature: Signature, result: TransactionResult) {
+    pub(crate) fn add_new_transaction(&mut self, signature: Signature, result: TransactionResult) {
         if self.max_entries != 0 {
             if self.entries.len() == self.max_entries {
                 self.entries.shift_remove_index(0);
@@ -34,7 +34,7 @@ impl TransactionHistory {
         }
     }
 
-    pub fn check_transaction(&self, signature: &Signature) -> bool {
+    pub(crate) fn check_transaction(&self, signature: &Signature) -> bool {
         self.entries.contains_key(signature)
     }
 }

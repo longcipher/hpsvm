@@ -16,6 +16,7 @@ use super::{TOKEN_ID, spl_token::instruction::transfer};
 /// - `source`: associated token account of the `owner` by default.
 /// - `owner`: `payer` by default.
 /// - `token_program_id`: [`TOKEN_ID`] by default.
+#[derive(Debug)]
 pub struct Transfer<'a> {
     svm: &'a mut HPSVM,
     payer: &'a Keypair,

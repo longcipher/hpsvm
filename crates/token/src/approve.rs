@@ -14,6 +14,7 @@ use super::{TOKEN_ID, get_multisig_signers, spl_token::instruction::approve};
 /// - `source`: associated token account of the `payer` by default.
 /// - `owner`: `payer` by default.
 /// - `token_program_id`: [`TOKEN_ID`] by default.
+#[derive(Debug)]
 pub struct Approve<'a> {
     svm: &'a mut HPSVM,
     payer: &'a Keypair,

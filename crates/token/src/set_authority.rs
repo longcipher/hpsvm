@@ -16,6 +16,7 @@ use super::{
 /// ### Optional fields
 /// - `owner`: `payer` by default.
 /// - `token_program_id`: [`TOKEN_ID`] by default.
+#[derive(Debug)]
 pub struct SetAuthority<'a> {
     svm: &'a mut HPSVM,
     payer: &'a Keypair,

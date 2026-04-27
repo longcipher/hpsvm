@@ -75,7 +75,7 @@ pub(crate) fn format_logs(logs: &[String]) -> String {
     for line in logs {
         if !line.is_empty() {
             let formatted = format_line(line);
-            writeln!(&mut out, "{formatted}").unwrap();
+            writeln!(&mut out, "{formatted}").expect("writing to String should never fail");
         }
     }
     out

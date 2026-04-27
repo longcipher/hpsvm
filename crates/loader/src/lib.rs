@@ -1,3 +1,5 @@
+//! Loader operations for the HPSVM
+
 use hpsvm::{HPSVM, types::FailedTransactionMetadata};
 use solana_address::Address;
 use solana_keypair::Keypair;
@@ -9,6 +11,7 @@ use solana_transaction::Transaction;
 
 const CHUNK_SIZE: usize = 512;
 
+/// Set the upgrade authority for an upgradeable program
 pub fn set_upgrade_authority(
     svm: &mut HPSVM,
     from_keypair: &Keypair,
@@ -57,7 +60,7 @@ fn load_upgradeable_buffer(
             lamports,
             program_bytes.len(),
         )
-        .unwrap(),
+        .expect("Failed to create buffer instruction"),
         Some(&payer_pk),
         &[payer_kp, &buffer_kp],
         svm.latest_blockhash(),
@@ -82,6 +85,7 @@ fn load_upgradeable_buffer(
     Ok(buffer_pk)
 }
 
+/// Deploy an upgradeable program
 pub fn deploy_upgradeable_program(
     svm: &mut HPSVM,
     payer_kp: &Keypair,
@@ -93,7 +97,6 @@ pub fn deploy_upgradeable_program(
     let buffer_pk = load_upgradeable_buffer(svm, payer_kp, program_bytes)?;
 
     let lamports = svm.minimum_balance_for_rent_exemption(program_bytes.len());
-    #[allow(deprecated)]
     let tx = Transaction::new_signed_with_payer(
         &bpf_loader_upgradeable::deploy_with_max_program_len(
             &payer_pk,
@@ -103,7 +106,7 @@ pub fn deploy_upgradeable_program(
             lamports,
             program_bytes.len() * 2,
         )
-        .unwrap(),
+        .expect("Failed to create deploy instruction"),
         Some(&payer_pk),
         &[&payer_kp, &program_kp],
         svm.latest_blockhash(),

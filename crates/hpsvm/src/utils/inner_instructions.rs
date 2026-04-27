@@ -6,16 +6,14 @@ use solana_message::{
 use solana_transaction_context::TransactionContext;
 
 /// Pulled verbatim from `solana-svm` crate, `transaction_processor.rs`
-pub fn inner_instructions_list_from_instruction_trace(
-    transaction_context: &TransactionContext,
+pub(crate) fn inner_instructions_list_from_instruction_trace(
+    transaction_context: &TransactionContext<'_>,
 ) -> InnerInstructionsList {
-    debug_assert!(
-        transaction_context
-            .get_instruction_context_at_index_in_trace(0)
-            .map(|instruction_context| instruction_context.get_stack_height() ==
-                TRANSACTION_LEVEL_STACK_HEIGHT)
-            .unwrap_or(true)
-    );
+    debug_assert!(transaction_context.get_instruction_context_at_index_in_trace(0).map_or(
+        true,
+        |instruction_context| instruction_context.get_stack_height() ==
+            TRANSACTION_LEVEL_STACK_HEIGHT
+    ));
     let mut outer_instructions = Vec::new();
     for index_in_trace in 0..transaction_context.get_instruction_trace_length() {
         if let Ok(instruction_context) =

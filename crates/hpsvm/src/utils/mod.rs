@@ -6,19 +6,19 @@ use solana_instructions_sysvar::construct_instructions_data;
 use solana_message::SanitizedMessage;
 use solana_sha256_hasher::Hasher;
 
-pub mod inner_instructions;
-pub mod rent;
+pub(crate) mod inner_instructions;
+pub(crate) mod rent;
 #[cfg(feature = "serde")]
-pub mod serde_with_str;
+pub(crate) mod serde_with_str;
 
 /// Create a blockhash from the given bytes
-pub fn create_blockhash(bytes: &[u8]) -> Hash {
+pub(crate) fn create_blockhash(bytes: &[u8]) -> Hash {
     let mut hasher = Hasher::default();
     hasher.hash(bytes);
     hasher.result()
 }
 
-pub fn construct_instructions_account(message: &SanitizedMessage) -> AccountSharedData {
+pub(crate) fn construct_instructions_account(message: &SanitizedMessage) -> AccountSharedData {
     AccountSharedData::from(Account {
         data: construct_instructions_data(&message.decompile_instructions()),
         owner: solana_sdk_ids::sysvar::id(),
