@@ -11,6 +11,8 @@ repository = "https://github.com/longcipher/hpsvm"
 [workspace.dependencies]
 # local crates
 hpsvm = { path = "crates/hpsvm", version = "0.11.0" }
+hpsvm-loader = { path = "crates/hpsvm-loader", version = "0.11.0" }
+hpsvm-token = { path = "crates/token", version = "0.11.0" }
 
 # external crates
 agave-feature-set = "3.1.14"
@@ -51,7 +53,7 @@ solana-instruction = "3.4.0"
 solana-instructions-sysvar = "3.0.0"
 solana-keypair = "3.1.2"
 solana-last-restart-slot = "3.0.0"
-solana-loader-v3-interface = "6.1.1"
+solana-loader-v3-interface = "7.0.0"
 solana-loader-v4-interface = "3.1.0"
 solana-message = "3.1.0"
 solana-native-token = "3.0.0"
