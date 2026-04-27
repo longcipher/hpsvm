@@ -1,10 +1,21 @@
 use agave_feature_set::replace_spl_token_with_p_token;
-use solana_address::address;
+use solana_address::{Address, address};
 use solana_sdk_ids::{
     address_lookup_table, bpf_loader, bpf_loader_deprecated, bpf_loader_upgradeable, config, stake,
 };
 
 use crate::HPSVM;
+
+pub(crate) const DEFAULT_PROGRAM_IDS: [Address; 8] = [
+    address!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+    address!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"),
+    address!("Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo"),
+    address!("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"),
+    address!("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"),
+    config::ID,
+    address_lookup_table::ID,
+    stake::ID,
+];
 
 pub fn load_default_programs(svm: &mut HPSVM) {
     // if replace spl-token with p-token feature is enabled, the SPL token contract is loaded from

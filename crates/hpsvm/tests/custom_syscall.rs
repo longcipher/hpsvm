@@ -51,9 +51,32 @@ fn hpsvm_ctor() -> HPSVM {
         .with_blockhash_check(true)
 }
 
+fn hpsvm_ctor_from_new_with_custom_syscall() -> HPSVM {
+    HPSVM::new().with_custom_syscall("sol_burn_cus", SyscallBurnCus::vm)
+}
+
 #[test]
 pub fn test_custom_syscall() {
     let mut svm = hpsvm_ctor();
+    let payer_kp = Keypair::new();
+    let payer_pk = payer_kp.pubkey();
+    let program_id = address!("GtdambwDgHWrDJdVPBkEHGhCwokqgAoch162teUjJse2");
+    svm.add_program(program_id, &read_custom_syscall_program()).unwrap();
+    svm.airdrop(&payer_pk, 1000000000).unwrap();
+    let blockhash = svm.latest_blockhash();
+    let msg = Message::new_with_blockhash(
+        &[Instruction { program_id, accounts: vec![], data: CUS_TO_BURN.to_le_bytes().to_vec() }],
+        Some(&payer_pk),
+        &blockhash,
+    );
+    let tx = Transaction::new(&[payer_kp], msg, blockhash);
+    let res = svm.send_transaction(tx);
+    assert!(res.is_ok(), "custom syscall tx failed: {:?}", res.err());
+}
+
+#[test]
+pub fn test_custom_syscall_after_new() {
+    let mut svm = hpsvm_ctor_from_new_with_custom_syscall();
     let payer_kp = Keypair::new();
     let payer_pk = payer_kp.pubkey();
     let program_id = address!("GtdambwDgHWrDJdVPBkEHGhCwokqgAoch162teUjJse2");

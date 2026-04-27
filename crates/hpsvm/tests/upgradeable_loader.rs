@@ -1,4 +1,7 @@
-use std::path::PathBuf;
+use std::{
+    panic::{AssertUnwindSafe, catch_unwind},
+    path::PathBuf,
+};
 
 use hpsvm::HPSVM;
 use solana_account::{Account, state_traits::StateMut};
@@ -131,6 +134,31 @@ fn close_upgradeable_program_keeps_vm_usable() {
         svm.send_transaction(close_tx).unwrap();
 
         assert!(svm.get_account(&programdata_address).is_none());
+    }
+
+    {
+        let mut removed_program_account = original_program_account.clone();
+        removed_program_account.lamports = 0;
+        svm.set_account(program_id, removed_program_account).unwrap();
+
+        let close_error_tx = Transaction::new(
+            &[&authority_kp],
+            Message::new_with_blockhash(
+                &[Instruction {
+                    program_id,
+                    accounts: vec![AccountMeta::new(counter_address, false)],
+                    data: vec![0, 1],
+                }],
+                Some(&authority),
+                &svm.latest_blockhash(),
+            ),
+            svm.latest_blockhash(),
+        );
+        let result = catch_unwind(AssertUnwindSafe(|| svm.send_transaction(close_error_tx)));
+        assert!(result.is_ok(), "missing program accounts should return an error, not panic");
+        assert!(result.unwrap().is_err());
+
+        svm.set_account(program_id, original_program_account.clone()).unwrap();
     }
 
     // verify that if we directly write to the program data address again we can still invoke the

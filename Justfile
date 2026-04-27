@@ -28,12 +28,12 @@ test:
 
 # Run BDD scenarios
 bdd:
-  cargo test -p common --test bdd
+  cargo test -p hpsvm --test bdd
 
 # Run both TDD and BDD suites
 test-all:
   cargo test --all-features
-  cargo test -p common --test bdd
+  cargo test -p hpsvm --test bdd
 
 # Run tests with coverage
 test-coverage:

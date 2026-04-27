@@ -5,10 +5,10 @@ use std::sync::Arc;
 #[cfg(feature = "hashbrown")]
 use hashbrown::HashMap;
 use log::error;
-use serde::de::DeserializeOwned;
 use solana_account::{AccountSharedData, ReadableAccount, WritableAccount, state_traits::StateMut};
 use solana_address::Address;
 use solana_address_lookup_table_interface::{error::AddressLookupError, state::AddressLookupTable};
+use solana_builtins::BUILTINS;
 use solana_clock::Clock;
 use solana_instruction::error::InstructionError;
 use solana_loader_v3_interface::state::UpgradeableLoaderState;
@@ -35,7 +35,6 @@ use solana_sdk_ids::{
     },
 };
 use solana_system_program::{SystemAccountKind, get_system_account_kind};
-use solana_sysvar::Sysvar;
 use solana_transaction_error::{AddressLoaderError, TransactionError};
 
 use crate::error::{HPSVMError, InvalidSysvarDataError};
@@ -44,25 +43,72 @@ const FEES_ID: Address = Address::from_str_const("SysvarFees11111111111111111111
 const RECENT_BLOCKHASHES_ID: Address =
     Address::from_str_const("SysvarRecentB1ockHashes11111111111111111111");
 
-fn handle_sysvar<T>(
-    cache: &mut SysvarCache,
-    err_variant: InvalidSysvarDataError,
+fn is_cached_program_account(pubkey: &Address, account: &AccountSharedData) -> bool {
+    account.executable() && *pubkey != Address::default() && account.owner() != &native_loader::ID
+}
+
+fn is_managed_sysvar_account(pubkey: &Address) -> bool {
+    matches!(
+        *pubkey,
+        CLOCK_ID |
+            EPOCH_REWARDS_ID |
+            EPOCH_SCHEDULE_ID |
+            FEES_ID |
+            LAST_RESTART_SLOT_ID |
+            RECENT_BLOCKHASHES_ID |
+            RENT_ID |
+            SLOT_HASHES_ID |
+            STAKE_HISTORY_ID
+    )
+}
+
+fn validate_sysvar_account(
+    pubkey: Address,
     account: &AccountSharedData,
-    accounts: &HashMap<Address, AccountSharedData>,
-    address: Address,
-) -> Result<(), InvalidSysvarDataError>
-where
-    T: Sysvar + DeserializeOwned,
-{
-    cache.reset();
-    cache.fill_missing_entries(|pubkey, set_sysvar| {
-        if *pubkey == address {
-            set_sysvar(account.data())
-        } else if let Some(acc) = accounts.get(pubkey) {
-            set_sysvar(acc.data())
+) -> Result<(), InvalidSysvarDataError> {
+    use InvalidSysvarDataError::{
+        Clock as ClockError, EpochRewards, EpochSchedule, Fees, LastRestartSlot, RecentBlockhashes,
+        Rent, SlotHashes, StakeHistory,
+    };
+
+    #[allow(deprecated)]
+    match pubkey {
+        CLOCK_ID => {
+            let _: Clock = account.deserialize_data().map_err(|_| ClockError)?;
         }
-    });
-    let _parsed: T = account.deserialize_data().map_err(|_| err_variant)?;
+        EPOCH_REWARDS_ID => {
+            let _: solana_epoch_rewards::EpochRewards =
+                account.deserialize_data().map_err(|_| EpochRewards)?;
+        }
+        EPOCH_SCHEDULE_ID => {
+            let _: solana_epoch_schedule::EpochSchedule =
+                account.deserialize_data().map_err(|_| EpochSchedule)?;
+        }
+        FEES_ID => {
+            let _: solana_sysvar::fees::Fees = account.deserialize_data().map_err(|_| Fees)?;
+        }
+        LAST_RESTART_SLOT_ID => {
+            let _: solana_sysvar::last_restart_slot::LastRestartSlot =
+                account.deserialize_data().map_err(|_| LastRestartSlot)?;
+        }
+        RECENT_BLOCKHASHES_ID => {
+            let _: solana_sysvar::recent_blockhashes::RecentBlockhashes =
+                account.deserialize_data().map_err(|_| RecentBlockhashes)?;
+        }
+        RENT_ID => {
+            let _: solana_rent::Rent = account.deserialize_data().map_err(|_| Rent)?;
+        }
+        SLOT_HASHES_ID => {
+            let _: solana_slot_hashes::SlotHashes =
+                account.deserialize_data().map_err(|_| SlotHashes)?;
+        }
+        STAKE_HISTORY_ID => {
+            let _: solana_stake_interface::stake_history::StakeHistory =
+                account.deserialize_data().map_err(|_| StakeHistory)?;
+        }
+        _ => {}
+    }
+
     Ok(())
 }
 
@@ -94,116 +140,78 @@ impl AccountsDb {
         pubkey: Address,
         account: AccountSharedData,
     ) -> Result<(), HPSVMError> {
-        if account.executable() &&
-            pubkey != Address::default() &&
-            account.owner() != &native_loader::ID
-        {
-            let loaded_program = self.load_program(&account)?;
-            self.programs_cache.replenish(pubkey, Arc::new(loaded_program));
-        } else {
-            self.maybe_handle_sysvar_account(pubkey, &account)?;
+        let had_cached_program = self
+            .inner
+            .get(&pubkey)
+            .is_some_and(|existing| is_cached_program_account(&pubkey, existing));
+
+        if is_managed_sysvar_account(&pubkey) && account.lamports() != 0 {
+            validate_sysvar_account(pubkey, &account)?;
         }
+
         if account.lamports() == 0 {
             self.inner.remove(&pubkey);
         } else {
-            self.add_account_no_checks(pubkey, account);
+            self.add_account_no_checks(pubkey, account.clone());
         }
+
+        if is_managed_sysvar_account(&pubkey) {
+            self.rebuild_sysvar_cache();
+        }
+
+        let has_cached_program =
+            account.lamports() != 0 && is_cached_program_account(&pubkey, &account);
+        if has_cached_program {
+            let loaded_program = self.load_program(
+                self.get_account_ref(&pubkey).expect("program account just inserted"),
+            )?;
+            self.programs_cache.replenish(pubkey, Arc::new(loaded_program));
+        } else if had_cached_program {
+            self.rebuild_program_cache()?;
+        }
+
         Ok(())
     }
 
-    fn maybe_handle_sysvar_account(
-        &mut self,
-        pubkey: Address,
-        account: &AccountSharedData,
-    ) -> Result<(), InvalidSysvarDataError> {
-        use InvalidSysvarDataError::{
-            EpochRewards, EpochSchedule, Fees, LastRestartSlot, RecentBlockhashes, Rent,
-            SlotHashes, StakeHistory,
-        };
-        let cache = &mut self.sysvar_cache;
-        #[allow(deprecated)]
-        match pubkey {
-            CLOCK_ID => {
-                let parsed: Clock =
-                    account.deserialize_data().map_err(|_| InvalidSysvarDataError::Clock)?;
-                self.programs_cache.set_slot_for_tests(parsed.slot);
-                let mut accounts_clone = self.inner.clone();
-                accounts_clone.insert(pubkey, account.clone());
-                cache.reset();
-                cache.fill_missing_entries(|pubkey, set_sysvar| {
-                    if let Some(acc) = accounts_clone.get(pubkey) {
-                        set_sysvar(acc.data())
-                    }
-                });
+    pub(crate) fn rebuild_sysvar_cache(&mut self) {
+        self.sysvar_cache.reset();
+        self.sysvar_cache.fill_missing_entries(|pubkey, set_sysvar| {
+            if let Some(acc) = self.inner.get(pubkey) {
+                set_sysvar(acc.data());
             }
-            EPOCH_REWARDS_ID => {
-                handle_sysvar::<solana_epoch_rewards::EpochRewards>(
-                    cache,
-                    EpochRewards,
-                    account,
-                    &self.inner,
-                    pubkey,
-                )?;
-            }
-            EPOCH_SCHEDULE_ID => {
-                handle_sysvar::<solana_epoch_schedule::EpochSchedule>(
-                    cache,
-                    EpochSchedule,
-                    account,
-                    &self.inner,
-                    pubkey,
-                )?;
-            }
-            FEES_ID => {
-                handle_sysvar::<solana_sysvar::fees::Fees>(
-                    cache,
-                    Fees,
-                    account,
-                    &self.inner,
-                    pubkey,
-                )?;
-            }
-            LAST_RESTART_SLOT_ID => {
-                handle_sysvar::<solana_sysvar::last_restart_slot::LastRestartSlot>(
-                    cache,
-                    LastRestartSlot,
-                    account,
-                    &self.inner,
-                    pubkey,
-                )?;
-            }
-            RECENT_BLOCKHASHES_ID => {
-                handle_sysvar::<solana_sysvar::recent_blockhashes::RecentBlockhashes>(
-                    cache,
-                    RecentBlockhashes,
-                    account,
-                    &self.inner,
-                    pubkey,
-                )?;
-            }
-            RENT_ID => {
-                handle_sysvar::<solana_rent::Rent>(cache, Rent, account, &self.inner, pubkey)?;
-            }
-            SLOT_HASHES_ID => {
-                handle_sysvar::<solana_slot_hashes::SlotHashes>(
-                    cache,
-                    SlotHashes,
-                    account,
-                    &self.inner,
-                    pubkey,
-                )?;
-            }
-            STAKE_HISTORY_ID => {
-                handle_sysvar::<solana_stake_interface::stake_history::StakeHistory>(
-                    cache,
-                    StakeHistory,
-                    account,
-                    &self.inner,
-                    pubkey,
-                )?;
-            }
-            _ => {}
-        };
+        });
+        let slot = self.sysvar_cache.get_clock().unwrap_or_default().slot;
+        self.programs_cache.set_slot_for_tests(slot);
+    }
+
+    pub(crate) fn rebuild_program_cache(&mut self) -> Result<(), InstructionError> {
+        let slot = self.sysvar_cache.get_clock().unwrap_or_default().slot;
+        let mut cache = ProgramCacheForTxBatch::new(slot);
+
+        BUILTINS.iter().filter(|builtin| self.inner.contains_key(&builtin.program_id)).for_each(
+            |builtin| {
+                let loaded_program =
+                    ProgramCacheEntry::new_builtin(0, builtin.name.len(), builtin.entrypoint);
+                cache.replenish(builtin.program_id, Arc::new(loaded_program));
+            },
+        );
+
+        let program_keys = self
+            .inner
+            .iter()
+            .filter_map(|(pubkey, account)| {
+                is_cached_program_account(pubkey, account).then_some(*pubkey)
+            })
+            .collect::<Vec<_>>();
+
+        for pubkey in program_keys {
+            let loaded_program = self.load_program(
+                self.get_account_ref(&pubkey).expect("program account should exist during rebuild"),
+            )?;
+            cache.replenish(pubkey, Arc::new(loaded_program));
+        }
+
+        self.programs_cache = cache;
         Ok(())
     }
 

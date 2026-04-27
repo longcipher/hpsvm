@@ -16,6 +16,11 @@ pub fn set_upgrade_authority(
     current_authority_keypair: &Keypair,
     new_authority_address: Option<&Address>,
 ) -> Result<(), FailedTransactionMetadata> {
+    let mut signers: Vec<&dyn Signer> = vec![from_keypair];
+    if from_keypair.pubkey() != current_authority_keypair.pubkey() {
+        signers.push(current_authority_keypair);
+    }
+
     let tx = Transaction::new_signed_with_payer(
         &[bpf_loader_upgradeable::set_upgrade_authority(
             program_address,
@@ -23,7 +28,7 @@ pub fn set_upgrade_authority(
             new_authority_address,
         )],
         Some(&from_keypair.pubkey()),
-        &[&from_keypair],
+        &signers,
         svm.latest_blockhash(),
     );
 

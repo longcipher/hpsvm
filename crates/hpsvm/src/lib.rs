@@ -303,7 +303,7 @@ use solana_fee_structure::FeeStructure;
 use solana_hash::Hash;
 use solana_keypair::Keypair;
 use solana_last_restart_slot::LastRestartSlot;
-use solana_loader_v3_interface::state::UpgradeableLoaderState;
+use solana_loader_v3_interface::{get_program_data_address, state::UpgradeableLoaderState};
 use solana_message::{
     Message, SanitizedMessage, VersionedMessage, inner_instruction::InnerInstructionsList,
 };
@@ -352,13 +352,19 @@ use crate::{
     error::HPSVMError,
     history::TransactionHistory,
     message_processor::process_message,
-    programs::load_default_programs,
+    programs::{DEFAULT_PROGRAM_IDS, load_default_programs},
     types::{ExecutionResult, FailedTransactionMetadata, TransactionMetadata, TransactionResult},
     utils::{
         create_blockhash,
         rent::{RentState, check_rent_state_with_account, get_account_rent_state},
     },
 };
+
+#[derive(Clone)]
+struct CustomSyscallRegistration {
+    name: String,
+    function: BuiltinFunction<InvokeContext<'static, 'static>>,
+}
 
 pub mod error;
 pub mod types;
@@ -379,7 +385,11 @@ mod utils;
 pub struct HPSVM {
     accounts: AccountsDb,
     airdrop_kp: [u8; 64],
+    builtins_loaded: bool,
+    custom_syscalls: Vec<CustomSyscallRegistration>,
+    default_programs_loaded: bool,
     feature_set: FeatureSet,
+    feature_accounts_loaded: bool,
     reserved_account_keys: ReservedAccountKeys,
     latest_blockhash: Hash,
     history: TransactionHistory,
@@ -388,6 +398,9 @@ pub struct HPSVM {
     blockhash_check: bool,
     fee_structure: FeeStructure,
     log_bytes_limit: Option<usize>,
+    #[cfg(feature = "precompiles")]
+    precompiles_loaded: bool,
+    sysvars_loaded: bool,
     /// The callback which can be used to inspect invoke_context
     /// and extract low-level information such as bpf traces, transaction
     /// context, detailed timings, etc.
@@ -421,8 +434,12 @@ impl HPSVM {
         let mut svm = Self {
             accounts: Default::default(),
             airdrop_kp: Keypair::new().to_bytes(),
+            builtins_loaded: false,
+            custom_syscalls: Vec::new(),
+            default_programs_loaded: false,
             reserved_account_keys: Self::reserved_account_keys_for_feature_set(&feature_set),
             feature_set,
+            feature_accounts_loaded: false,
             latest_blockhash: create_blockhash(b"genesis"),
             history: TransactionHistory::new(),
             compute_budget: None,
@@ -430,6 +447,9 @@ impl HPSVM {
             blockhash_check: false,
             fee_structure: FeeStructure::default(),
             log_bytes_limit: Some(10_000),
+            #[cfg(feature = "precompiles")]
+            precompiles_loaded: false,
+            sysvars_loaded: false,
             #[cfg(feature = "invocation-inspect-callback")]
             enable_register_tracing: _enable_register_tracing,
             #[cfg(feature = "invocation-inspect-callback")]
@@ -481,6 +501,105 @@ impl HPSVM {
         Self::new_inner(enable_register_tracing).into_basic()
     }
 
+    fn clear_feature_accounts(&mut self, previous_feature_set: &FeatureSet) {
+        previous_feature_set.active().iter().for_each(|(feature_id, _)| {
+            self.accounts.inner.remove(feature_id);
+        });
+    }
+
+    fn clear_builtin_accounts(&mut self) {
+        BUILTINS.iter().for_each(|builtin| {
+            self.accounts.inner.remove(&builtin.program_id);
+        });
+    }
+
+    fn clear_default_programs(&mut self) {
+        DEFAULT_PROGRAM_IDS.iter().for_each(|program_id| {
+            if self
+                .accounts
+                .get_account_ref(program_id)
+                .is_some_and(|account| account.owner() == &bpf_loader_upgradeable::id())
+            {
+                self.accounts.inner.remove(&get_program_data_address(program_id));
+            }
+            self.accounts.inner.remove(program_id);
+        });
+    }
+
+    #[cfg(feature = "precompiles")]
+    fn clear_precompile_accounts(&mut self) {
+        agave_precompiles::get_precompiles().iter().for_each(|precompile| {
+            self.accounts.inner.remove(&precompile.program_id);
+        });
+    }
+
+    fn refresh_runtime_environments(&mut self) {
+        let _enable_register_tracing = false;
+        #[cfg(feature = "register-tracing")]
+        let _enable_register_tracing = self.enable_register_tracing;
+
+        let compute_budget = self.compute_budget.unwrap_or(ComputeBudget::new_with_defaults(
+            self.feature_set.is_active(&raise_cpi_nesting_limit_to_8::ID),
+            self.feature_set.is_active(&increase_cpi_account_info_limit::ID),
+        ));
+        let mut program_runtime_v1 = create_program_runtime_environment_v1(
+            &self.feature_set.runtime_features(),
+            &compute_budget.to_budget(),
+            false,
+            _enable_register_tracing,
+        )
+        .unwrap();
+
+        let mut program_runtime_v2 = create_program_runtime_environment_v2(
+            &compute_budget.to_budget(),
+            _enable_register_tracing,
+        );
+
+        for syscall in &self.custom_syscalls {
+            program_runtime_v1.register_function(&syscall.name, syscall.function).unwrap_or_else(
+                |e| panic!("failed to register syscall '{}' in runtime_v1: {e}", syscall.name),
+            );
+            program_runtime_v2.register_function(&syscall.name, syscall.function).unwrap_or_else(
+                |e| panic!("failed to register syscall '{}' in runtime_v2: {e}", syscall.name),
+            );
+        }
+
+        self.accounts.environments.program_runtime_v1 = Arc::new(program_runtime_v1);
+        self.accounts.environments.program_runtime_v2 = Arc::new(program_runtime_v2);
+    }
+
+    fn reconfigure_materialized_feature_state(&mut self, previous_feature_set: &FeatureSet) {
+        if self.feature_accounts_loaded {
+            self.clear_feature_accounts(previous_feature_set);
+            self.set_feature_accounts();
+        }
+
+        if self.default_programs_loaded {
+            self.clear_default_programs();
+        }
+
+        if self.builtins_loaded {
+            self.clear_builtin_accounts();
+            self.set_builtins();
+        } else if !self.custom_syscalls.is_empty() {
+            self.refresh_runtime_environments();
+        }
+
+        #[cfg(feature = "precompiles")]
+        if self.precompiles_loaded {
+            self.clear_precompile_accounts();
+            self.set_precompiles();
+        }
+
+        if self.default_programs_loaded {
+            self.set_default_programs();
+        }
+
+        if self.accounts.rebuild_program_cache().is_err() {
+            panic!("feature-set reconfiguration produced invalid program cache state");
+        }
+    }
+
     #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
     fn set_compute_budget(&mut self, compute_budget: ComputeBudget) {
         self.compute_budget = Some(compute_budget);
@@ -516,6 +635,7 @@ impl HPSVM {
 
     #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
     fn set_sysvars(&mut self) {
+        self.sysvars_loaded = true;
         self.set_sysvar(&Clock::default());
         self.set_sysvar(&EpochRewards::default());
         self.set_sysvar(&EpochSchedule::default());
@@ -566,12 +686,15 @@ impl HPSVM {
 
     #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
     fn set_feature_set(&mut self, feature_set: FeatureSet) {
+        let previous_feature_set = self.feature_set.clone();
         self.feature_set = feature_set;
         self.reserved_account_keys = Self::reserved_account_keys_for_feature_set(&self.feature_set);
+        self.reconfigure_materialized_feature_state(&previous_feature_set);
     }
 
     #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
     fn set_feature_accounts(&mut self) {
+        self.feature_accounts_loaded = true;
         for (feature_id, activation_slot) in self.feature_set.active() {
             let feature_account = Feature { activated_at: Some(*activation_slot) };
             let lamports = self.minimum_balance_for_rent_exemption(Feature::size_of());
@@ -593,6 +716,8 @@ impl HPSVM {
 
     #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
     fn set_builtins(&mut self) {
+        self.builtins_loaded = true;
+        self.refresh_runtime_environments();
         BUILTINS.iter().for_each(|builtint| {
             if builtint.enable_feature_id.is_none_or(|x| self.feature_set.is_active(&x)) {
                 let loaded_program =
@@ -606,30 +731,6 @@ impl HPSVM {
                 );
             }
         });
-
-        let _enable_register_tracing = false;
-        #[cfg(feature = "register-tracing")]
-        let _enable_register_tracing = self.enable_register_tracing;
-
-        let compute_budget = self.compute_budget.unwrap_or(ComputeBudget::new_with_defaults(
-            self.feature_set.is_active(&raise_cpi_nesting_limit_to_8::ID),
-            self.feature_set.is_active(&increase_cpi_account_info_limit::ID),
-        ));
-        let program_runtime_v1 = create_program_runtime_environment_v1(
-            &self.feature_set.runtime_features(),
-            &compute_budget.to_budget(),
-            false,
-            _enable_register_tracing,
-        )
-        .unwrap();
-
-        let program_runtime_v2 = create_program_runtime_environment_v2(
-            &compute_budget.to_budget(),
-            _enable_register_tracing,
-        );
-
-        self.accounts.environments.program_runtime_v1 = Arc::new(program_runtime_v1);
-        self.accounts.environments.program_runtime_v2 = Arc::new(program_runtime_v2);
     }
 
     /// Changes the default builtins.
@@ -655,6 +756,7 @@ impl HPSVM {
 
     #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
     fn set_default_programs(&mut self) {
+        self.default_programs_loaded = true;
         load_default_programs(self);
     }
 
@@ -689,6 +791,7 @@ impl HPSVM {
     #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
     #[cfg(feature = "precompiles")]
     fn set_precompiles(&mut self) {
+        self.precompiles_loaded = true;
         load_precompiles(self);
     }
 
@@ -1537,27 +1640,14 @@ impl HPSVM {
         name: &str,
         syscall: BuiltinFunction<InvokeContext<'static, 'static>>,
     ) -> Self {
-        let (Some(program_runtime_v1), Some(program_runtime_v2)) = (
-            Arc::get_mut(&mut self.accounts.environments.program_runtime_v1),
-            Arc::get_mut(&mut self.accounts.environments.program_runtime_v2),
-        ) else {
-            panic!("with_custom_syscall: can't mutate program runtimes");
-        };
+        self.custom_syscalls
+            .push(CustomSyscallRegistration { name: name.to_owned(), function: syscall });
 
-        // Once unregister_function is available, users could replace existing built-in
-        // syscalls.
+        self.refresh_runtime_environments();
 
-        // TODO: uncomment once https://github.com/anza-xyz/sbpf/pull/153 is available.
-        // let _ = program_runtime_v1.unregister_function(name);
-        program_runtime_v1
-            .register_function(name, syscall)
-            .unwrap_or_else(|e| panic!("failed to register syscall '{name}' in runtime_v1: {e}"));
-
-        // TODO: uncomment once https://github.com/anza-xyz/sbpf/pull/153 is available.
-        // let _ = program_runtime_v2.unregister_function(name);
-        program_runtime_v2
-            .register_function(name, syscall)
-            .unwrap_or_else(|e| panic!("failed to register syscall '{name}' in runtime_v2: {e}"));
+        if self.accounts.rebuild_program_cache().is_err() {
+            panic!("with_custom_syscall: failed to rebuild program cache after runtime refresh");
+        }
 
         self
     }

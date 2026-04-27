@@ -16,6 +16,7 @@ solana-transaction.workspace = true
 
 [dev-dependencies]
 agave-feature-set.workspace = true
+solana-account.workspace = true
 solana-instruction.workspace = true
 solana-message.workspace = true
 test-log.workspace = true
