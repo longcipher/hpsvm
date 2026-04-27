@@ -1,0 +1,20 @@
+[package]
+name = "test-program-custom-syscall"
+version = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+solana-account-info = { workspace = true }
+solana-program-entrypoint = { workspace = true }
+solana-program-error = { workspace = true }
+solana-pubkey = { workspace = true }
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[lints.rust.unexpected_cfgs]
+level = "warn"
+check-cfg = [
+    'cfg(feature, values("custom-heap", "custom-panic"))',
+    'cfg(target_os, values("solana"))',
+]

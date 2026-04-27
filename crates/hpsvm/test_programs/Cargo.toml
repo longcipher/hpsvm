@@ -1,0 +1,27 @@
+[workspace]
+members = ["clock-example", "counter", "failure", "custom-syscall"]
+resolver = "3"
+
+[workspace.dependencies]
+borsh = "1.6.1"
+solana-account-info = "3.1.1"
+solana-clock = "3.0.1"
+solana-msg = "3.1.0"
+solana-program-entrypoint = "3.1.1"
+solana-program-error = "3.0.1"
+solana-pubkey = "4.2.0"
+solana-sysvar = { version = "4.0.0" }
+
+[workspace.package]
+version = "0.11.0"
+edition = "2024"
+
+[profile.release]
+overflow-checks = true
+lto = "fat"
+codegen-units = 1
+
+[profile.release.build-override]
+opt-level = 3
+incremental = false
+codegen-units = 1

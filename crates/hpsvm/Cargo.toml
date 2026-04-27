@@ -1,0 +1,130 @@
+[package]
+name = "hpsvm"
+description = "A fast and lightweight Solana VM simulator for testing solana programs"
+license.workspace = true
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+internal-test = []
+invocation-inspect-callback = []
+nodejs-internal = ["dep:qualifier_attr"]
+hashbrown = ["dep:hashbrown"]
+serde = []
+precompiles = ["dep:agave-precompiles"]
+register-tracing = ["invocation-inspect-callback", "dep:hex", "dep:sha2"]
+
+[dependencies]
+agave-feature-set.workspace = true
+agave-precompiles = { workspace = true, optional = true, features = [
+    "agave-unstable-api",
+] }
+agave-reserved-account-keys = { workspace = true, features = [
+    "agave-unstable-api",
+] }
+agave-syscalls.workspace = true
+ansi_term.workspace = true
+hashbrown = { workspace = true, optional = true }
+hex = { workspace = true, optional = true }
+indexmap.workspace = true
+itertools.workspace = true
+log.workspace = true
+qualifier_attr = { workspace = true, optional = true }
+serde.workspace = true
+sha2 = { workspace = true, optional = true }
+solana-account.workspace = true
+solana-address.workspace = true
+solana-address-lookup-table-interface = { workspace = true, features = [
+    "bytemuck",
+    "wincode",
+] }
+solana-bpf-loader-program.workspace = true
+solana-builtins = { workspace = true, features = ["agave-unstable-api"] }
+solana-clock.workspace = true
+solana-compute-budget.workspace = true
+solana-compute-budget-instruction = { workspace = true, features = [
+    "agave-unstable-api",
+] }
+solana-epoch-rewards.workspace = true
+solana-epoch-schedule.workspace = true
+solana-feature-gate-interface = { workspace = true, features = ["bincode"] }
+solana-fee = { workspace = true, features = ["agave-unstable-api"] }
+solana-fee-structure.workspace = true
+solana-hash.workspace = true
+solana-instruction.workspace = true
+solana-instructions-sysvar.workspace = true
+solana-keypair.workspace = true
+solana-last-restart-slot.workspace = true
+solana-loader-v3-interface = { workspace = true, features = ["bincode"] }
+solana-loader-v4-interface.workspace = true
+solana-message.workspace = true
+solana-native-token.workspace = true
+solana-nonce.workspace = true
+solana-nonce-account.workspace = true
+solana-precompile-error.workspace = true
+solana-program-error.workspace = true
+solana-program-runtime.workspace = true
+solana-rent.workspace = true
+solana-sdk-ids.workspace = true
+solana-sha256-hasher.workspace = true
+solana-signature.workspace = true
+solana-signer.workspace = true
+solana-slot-hashes.workspace = true
+solana-slot-history.workspace = true
+solana-stake-interface.workspace = true
+solana-svm-callback.workspace = true
+solana-svm-log-collector.workspace = true
+solana-svm-timings.workspace = true
+solana-svm-transaction.workspace = true
+solana-system-interface = { workspace = true, features = ["wincode"] }
+solana-system-program.workspace = true
+solana-sysvar.workspace = true
+solana-sysvar-id.workspace = true
+solana-transaction = { workspace = true, features = ["verify"] }
+solana-transaction-context.workspace = true
+solana-transaction-error.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+ed25519-dalek.workspace = true
+libsecp256k1.workspace = true
+serde.workspace = true
+solana-clock.workspace = true
+solana-compute-budget-interface.workspace = true
+solana-config-interface = { workspace = true, features = ["bincode"] }
+solana-ed25519-program.workspace = true
+solana-keypair.workspace = true
+solana-program-option.workspace = true
+solana-program-pack.workspace = true
+solana-secp256k1-program = { workspace = true, features = ["bincode"] }
+solana-signer.workspace = true
+solana-vote-interface = { workspace = true, features = ["bincode"] }
+spl-associated-token-account-interface.workspace = true
+spl-token-interface.workspace = true
+test-log.workspace = true
+
+[lints]
+workspace = true
+
+[[test]]
+name = "precompiles"
+required-features = ["precompiles"]
+
+[[bench]]
+name = "simple_bench"
+harness = false
+
+[[bench]]
+name = "max_perf"
+harness = false
+
+[[bench]]
+name = "hashing"
+harness = false

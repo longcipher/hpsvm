@@ -1,0 +1,20 @@
+[package]
+name = "hpsvm-clock-example"
+version = { workspace = true }
+edition = { workspace = true }
+include = ["/src"]
+
+[features]
+custom-heap = []
+custom-panic = []
+
+[dependencies]
+solana-account-info = { workspace = true }
+solana-clock = { workspace = true }
+solana-program-entrypoint = { workspace = true }
+solana-program-error = { workspace = true }
+solana-pubkey = { workspace = true }
+solana-sysvar = { workspace = true }
+
+[lib]
+crate-type = ["cdylib"]
