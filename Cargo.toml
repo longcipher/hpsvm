@@ -3,16 +3,16 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/longcipher/hpsvm"
 
 [workspace.dependencies]
 # local crates
-hpsvm = { path = "crates/hpsvm", version = "0.1.0" }
-hpsvm-loader = { path = "crates/hpsvm-loader", version = "0.1.0" }
-hpsvm-token = { path = "crates/token", version = "0.1.0" }
+hpsvm = { path = "crates/hpsvm", version = "0.1.1" }
+hpsvm-loader = { path = "crates/hpsvm-loader", version = "0.1.1" }
+hpsvm-token = { path = "crates/token", version = "0.1.1" }
 
 # external crates
 agave-feature-set = "3.1.14"
@@ -88,7 +88,7 @@ solana-sysvar-id = "3.1.0"
 solana-transaction = "3.1.0"
 solana-transaction-context = "3.1.14"
 solana-transaction-error = "3.2.0"
-solana-vote-interface = "4.0.4"
+solana-vote-interface = "5.1.1"
 spl-associated-token-account-interface = "2.0.0"
 spl-token-2022-interface = "2.1.0"
 spl-token-interface = "2.0.0"
