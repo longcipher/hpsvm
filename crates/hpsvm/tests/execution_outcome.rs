@@ -12,28 +12,28 @@ use solana_system_interface::instruction::transfer;
 use solana_transaction::Transaction;
 use solana_transaction_error::TransactionError;
 
-type VmConfigMutator = fn(HPSVM) -> HPSVM;
+type VmConfigMutator = fn(&mut HPSVM);
 
 struct SwapInspector;
 
 impl Inspector for SwapInspector {}
 
-fn with_reduced_compute_budget(svm: HPSVM) -> HPSVM {
+fn with_reduced_compute_budget(svm: &mut HPSVM) {
     let mut compute_budget = ComputeBudget::new_with_defaults(false, false);
     compute_budget.compute_unit_limit = 10;
-    svm.with_compute_budget(compute_budget)
+    svm.set_compute_budget(compute_budget);
 }
 
-fn without_sigverify(svm: HPSVM) -> HPSVM {
-    svm.with_sigverify(false)
+fn without_sigverify(svm: &mut HPSVM) {
+    svm.set_sigverify(false);
 }
 
-fn without_blockhash_check(svm: HPSVM) -> HPSVM {
-    svm.with_blockhash_check(false)
+fn without_blockhash_check(svm: &mut HPSVM) {
+    svm.set_blockhash_check(false);
 }
 
-fn with_shorter_log_limit(svm: HPSVM) -> HPSVM {
-    svm.with_log_bytes_limit(Some(32))
+fn with_shorter_log_limit(svm: &mut HPSVM) {
+    svm.set_log_bytes_limit(Some(32));
 }
 
 #[test]
@@ -173,7 +173,7 @@ fn commit_transaction_rejects_stale_outcomes_after_vm_config_mutation() {
         let signature = tx.signatures[0];
 
         let outcome = svm.transact(tx);
-        svm = mutate(svm);
+        mutate(&mut svm);
 
         let result = svm.commit_transaction(outcome);
 

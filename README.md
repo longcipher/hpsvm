@@ -145,7 +145,7 @@ let source = RpcForkSource::builder()
     .with_slot(1)
     .build();
 
-let svm = HPSVM::default().with_account_source(source);
+let svm = HPSVM::builder().with_account_source(source).build().unwrap();
 ```
 
 ### Top-Level Instruction Inspection

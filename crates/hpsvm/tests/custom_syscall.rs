@@ -41,28 +41,38 @@ fn read_custom_syscall_program() -> Vec<u8> {
 }
 
 fn hpsvm_ctor() -> HPSVM {
-    HPSVM::default()
+    HPSVM::builder()
         .with_feature_set(FeatureSet::all_enabled())
         .with_builtins()
         .with_custom_syscall("sol_burn_cus", SyscallBurnCus::vm)
-        .expect("custom syscall registration should succeed")
         .with_lamports(1_000_000u64.wrapping_mul(LAMPORTS_PER_SOL))
         .with_sysvars()
         .with_default_programs()
         .with_sigverify(true)
         .with_blockhash_check(true)
+        .build()
+        .expect("custom syscall registration should succeed")
 }
 
 fn hpsvm_ctor_from_new_with_custom_syscall() -> HPSVM {
-    HPSVM::new()
+    let mut svm = HPSVM::new();
+    svm.register_custom_syscall("sol_burn_cus", SyscallBurnCus::vm)
+        .expect("custom syscall registration should succeed");
+    svm
+}
+
+fn hpsvm_builder_ctor() -> HPSVM {
+    HPSVM::builder()
+        .with_program_test_defaults()
         .with_custom_syscall("sol_burn_cus", SyscallBurnCus::vm)
-        .expect("custom syscall registration should succeed")
+        .build()
+        .expect("builder should apply custom syscalls during build")
 }
 
 #[test]
 pub fn public_extension_points_are_fallible() {
-    let mut svm = HPSVM::new()
-        .with_custom_syscall("sol_burn_cus", SyscallBurnCus::vm)
+    let mut svm = HPSVM::new();
+    svm.register_custom_syscall("sol_burn_cus", SyscallBurnCus::vm)
         .expect("custom syscall registration should succeed");
 
     let mut clock = svm.get_sysvar::<Clock>();
@@ -93,6 +103,25 @@ pub fn test_custom_syscall() {
 #[test]
 pub fn test_custom_syscall_after_new() {
     let mut svm = hpsvm_ctor_from_new_with_custom_syscall();
+    let payer_kp = Keypair::new();
+    let payer_pk = payer_kp.pubkey();
+    let program_id = address!("GtdambwDgHWrDJdVPBkEHGhCwokqgAoch162teUjJse2");
+    svm.add_program(program_id, &read_custom_syscall_program()).unwrap();
+    svm.airdrop(&payer_pk, 1000000000).unwrap();
+    let blockhash = svm.latest_blockhash();
+    let msg = Message::new_with_blockhash(
+        &[Instruction { program_id, accounts: vec![], data: CUS_TO_BURN.to_le_bytes().to_vec() }],
+        Some(&payer_pk),
+        &blockhash,
+    );
+    let tx = Transaction::new(&[payer_kp], msg, blockhash);
+    let res = svm.send_transaction(tx);
+    assert!(res.is_ok(), "custom syscall tx failed: {:?}", res.err());
+}
+
+#[test]
+pub fn test_custom_syscall_with_builder() {
+    let mut svm = hpsvm_builder_ctor();
     let payer_kp = Keypair::new();
     let payer_pk = payer_kp.pubkey();
     let program_id = address!("GtdambwDgHWrDJdVPBkEHGhCwokqgAoch162teUjJse2");

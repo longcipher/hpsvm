@@ -47,7 +47,7 @@ fn vm_reads_missing_accounts_from_the_configured_source() {
     let account = AccountSharedData::new(77, 0, &Address::new_unique());
     let source = StaticAccountSource { accounts: Arc::new(HashMap::from([(address, account)])) };
 
-    let svm = HPSVM::default().with_account_source(source);
+    let svm = HPSVM::builder().with_account_source(source).build().unwrap();
 
     assert_eq!(svm.get_account(&address).unwrap().lamports, 77);
 }
@@ -86,7 +86,11 @@ fn durable_nonce_transactions_can_use_source_backed_nonce_accounts() {
         accounts: Arc::new(HashMap::from([(nonce_kp.pubkey(), nonce_account)])),
     };
 
-    let mut svm = HPSVM::new().with_account_source(source);
+    let mut svm = HPSVM::builder()
+        .with_program_test_defaults()
+        .with_account_source(source)
+        .build()
+        .unwrap();
     svm.airdrop(&from, 1_000_000_000).unwrap();
     svm.airdrop(&to, 1_000_000_000).unwrap();
 
@@ -113,7 +117,7 @@ fn rent_checks_use_source_backed_pre_state_for_writable_accounts() {
         accounts: Arc::new(HashMap::from([(from.pubkey(), source_account)])),
     };
 
-    svm = svm.with_account_source(source);
+    svm.set_account_source(source);
     svm.airdrop(&payer.pubkey(), 1_000_000_000).unwrap();
     svm.airdrop(&to, 1_000_000_000).unwrap();
 

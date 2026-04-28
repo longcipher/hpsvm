@@ -8,7 +8,11 @@ use solana_transaction::Transaction;
 
 #[test]
 fn pubkey_signer() {
-    let mut svm = HPSVM::new().with_sigverify(false);
+    let mut svm = HPSVM::builder()
+        .with_program_test_defaults()
+        .with_sigverify(false)
+        .build()
+        .unwrap();
 
     let dean = Address::new_unique();
     svm.airdrop(&dean, 10 * LAMPORTS_PER_SOL).unwrap();

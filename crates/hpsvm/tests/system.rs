@@ -95,7 +95,11 @@ fn system_allocate_account() {
 #[test_log::test]
 fn test_airdrop_pubkey() {
     let funding_amount = 10 * LAMPORTS_PER_SOL;
-    let mut svm = HPSVM::new().with_lamports(funding_amount);
+    let mut svm = HPSVM::builder()
+        .with_program_test_defaults()
+        .with_lamports(funding_amount)
+        .build()
+        .unwrap();
 
     let airdrop_pubkey = svm.airdrop_pubkey();
 

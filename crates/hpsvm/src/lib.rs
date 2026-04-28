@@ -240,9 +240,10 @@
 //!
 //! Other things you can do with `hpsvm` include:
 //!
-//! Changing the max compute units and other compute budget behaviour using
-//! [`.with_compute_budget`](HPSVM::with_compute_budget). Disable transaction signature checking
-//! using [`.with_sigverify(false)`](HPSVM::with_sigverify). Find previous transactions using
+//! Changing the max compute units and other compute budget behaviour during construction with
+//! [`HPSVM::builder`](HPSVM::builder) or later via [`HPSVM::set_compute_budget`]. Disable
+//! transaction signature checking during construction with the builder or later via
+//! [`HPSVM::set_sigverify`]. Find previous transactions using
 //! [`.get_transaction`](`HPSVM::get_transaction`).
 //!
 //! ## When should I use `solana-test-validator`?
@@ -302,7 +303,6 @@ use solana_loader_v3_interface::{get_program_data_address, state::UpgradeableLoa
 use solana_message::{
     Message, SanitizedMessage, VersionedMessage, inner_instruction::InnerInstructionsList,
 };
-use solana_native_token::LAMPORTS_PER_SOL;
 use solana_nonce::{NONCED_TX_MARKER_IX_INDEX, state::DurableNonce};
 use solana_program_runtime::{
     invoke_context::{BuiltinFunctionWithContext, EnvironmentConfig, InvokeContext},
@@ -374,6 +374,7 @@ pub mod types;
 
 mod account_source;
 mod accounts_db;
+mod builder;
 mod callback;
 mod env;
 mod format_logs;
@@ -390,6 +391,7 @@ mod utils;
 
 pub use account_source::{AccountSource, AccountSourceError};
 pub use accounts_db::AccountsView;
+pub use builder::{FeatureConfigOpen, FeatureConfigSealed, HpsvmBuilder};
 pub use env::{BlockEnv, RuntimeEnv, SvmCfg};
 pub use inspector::Inspector;
 use runtime_registry::RuntimeExtensionRegistry;
@@ -477,18 +479,24 @@ impl Clone for HPSVM {
 
 impl Default for HPSVM {
     fn default() -> Self {
-        // Allow users to virtually get register tracing data without
-        // doing any changes to their code provided `SBF_TRACE_DIR` is set.
-        #[cfg(feature = "register-tracing")]
-        let enable_register_tracing = std::env::var("SBF_TRACE_DIR").is_ok();
-        #[cfg(not(feature = "register-tracing"))]
-        let enable_register_tracing = false;
-
-        Self::new_inner(enable_register_tracing)
+        Self::new_inner(Self::default_register_tracing_enabled())
     }
 }
 
 impl HPSVM {
+    fn default_register_tracing_enabled() -> bool {
+        // Allow users to virtually get register tracing data without doing any
+        // changes to their code provided `SBF_TRACE_DIR` is set.
+        #[cfg(feature = "register-tracing")]
+        {
+            return std::env::var("SBF_TRACE_DIR").is_ok();
+        }
+        #[cfg(not(feature = "register-tracing"))]
+        {
+            false
+        }
+    }
+
     const fn invalidate_execution_outcomes(&mut self) {
         self.state_version = self.state_version.wrapping_add(1);
     }
@@ -538,26 +546,17 @@ impl HPSVM {
         }
     }
 
-    fn into_basic(self) -> Self {
-        let svm = self
-            .with_feature_set(FeatureSet::all_enabled())
-            .with_builtins()
-            .with_lamports(1_000_000u64.wrapping_mul(LAMPORTS_PER_SOL))
-            .with_sysvars()
-            .with_feature_accounts()
-            .with_default_programs()
-            .with_sigverify(true)
-            .with_blockhash_check(true);
-
-        #[cfg(feature = "precompiles")]
-        let svm = svm.with_precompiles();
-
-        svm
-    }
-
     /// Creates the basic test environment.
     pub fn new() -> Self {
-        Self::default().into_basic()
+        Self::builder()
+            .with_program_test_defaults()
+            .build()
+            .expect("standard HPSVM construction should remain infallible")
+    }
+
+    /// Create a typed builder for explicit, compile-time-checked environment assembly.
+    pub fn builder() -> HpsvmBuilder {
+        HpsvmBuilder::new()
     }
 
     /// Installs an execution inspector that observes top-level transaction activity.
@@ -591,7 +590,11 @@ impl HPSVM {
     /// - A default [`DefaultRegisterTracingCallback`] is installed
     /// - Trace data is written to `SBF_TRACE_DIR` (or `target/sbf/trace` by default)
     pub fn new_debuggable(enable_register_tracing: bool) -> Self {
-        Self::new_inner(enable_register_tracing).into_basic()
+        Self::builder()
+            .with_register_tracing(enable_register_tracing)
+            .with_program_test_defaults()
+            .build()
+            .expect("standard debuggable HPSVM construction should remain infallible")
     }
 
     fn clear_feature_accounts(&mut self, previous_feature_set: &FeatureSet) {
@@ -717,39 +720,27 @@ impl HPSVM {
     }
 
     #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
-    const fn set_compute_budget(&mut self, compute_budget: ComputeBudget) {
+    /// **Advanced reconfiguration.** Replaces the runtime compute budget and invalidates any
+    /// previously transacted but uncommitted outcomes.
+    pub const fn set_compute_budget(&mut self, compute_budget: ComputeBudget) {
         self.runtime_env.compute_budget = Some(compute_budget);
         self.invalidate_execution_outcomes();
     }
 
-    /// Sets the compute budget.
-    pub const fn with_compute_budget(mut self, compute_budget: ComputeBudget) -> Self {
-        self.set_compute_budget(compute_budget);
-        self
-    }
-
     #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
-    const fn set_sigverify(&mut self, sigverify: bool) {
+    /// **Advanced reconfiguration.** Enables or disables signature verification for future
+    /// transactions and invalidates any previously transacted but uncommitted outcomes.
+    pub const fn set_sigverify(&mut self, sigverify: bool) {
         self.cfg.sigverify = sigverify;
         self.invalidate_execution_outcomes();
     }
 
-    /// Enables or disables sigverify.
-    pub const fn with_sigverify(mut self, sigverify: bool) -> Self {
-        self.set_sigverify(sigverify);
-        self
-    }
-
     #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
-    const fn set_blockhash_check(&mut self, check: bool) {
+    /// **Advanced reconfiguration.** Enables or disables blockhash checking for future
+    /// transactions and invalidates any previously transacted but uncommitted outcomes.
+    pub const fn set_blockhash_check(&mut self, check: bool) {
         self.cfg.blockhash_check = check;
         self.invalidate_execution_outcomes();
-    }
-
-    /// Enables or disables the blockhash check.
-    pub const fn with_blockhash_check(mut self, check: bool) -> Self {
-        self.set_blockhash_check(check);
-        self
     }
 
     #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
@@ -793,20 +784,10 @@ impl HPSVM {
         self.invalidate_execution_outcomes();
     }
 
-    /// Includes the default sysvars.
-    pub fn with_sysvars(mut self) -> Self {
-        self.set_sysvars();
-        self
-    }
-
-    /// Set the FeatureSet used by the VM instance.
-    pub fn with_feature_set(mut self, feature_set: FeatureSet) -> Self {
-        self.set_feature_set(feature_set);
-        self
-    }
-
     #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
-    fn set_feature_set(&mut self, feature_set: FeatureSet) {
+    /// **Advanced reconfiguration.** Replaces the active feature set, rebuilds any materialized
+    /// feature-dependent state, and invalidates previously transacted but uncommitted outcomes.
+    pub fn set_feature_set(&mut self, feature_set: FeatureSet) {
         let previous_feature_set = self.cfg.feature_set.clone();
         self.cfg.feature_set = feature_set;
         self.reserved_account_keys =
@@ -829,12 +810,6 @@ impl HPSVM {
     fn set_feature_accounts(&mut self) {
         self.materialize_feature_accounts();
         self.invalidate_execution_outcomes();
-    }
-
-    #[expect(missing_docs)]
-    pub fn with_feature_accounts(mut self) -> Self {
-        self.set_feature_accounts();
-        self
     }
 
     fn reserved_account_keys_for_feature_set(feature_set: &FeatureSet) -> ReservedAccountKeys {
@@ -866,13 +841,6 @@ impl HPSVM {
         self.invalidate_execution_outcomes();
     }
 
-    /// Changes the default builtins.
-    // Use `with_feature_set` beforehand to change change what builtins are added.
-    pub fn with_builtins(mut self) -> Self {
-        self.set_builtins();
-        self
-    }
-
     #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
     fn set_lamports(&mut self, lamports: u64) {
         self.accounts.add_account_no_checks(
@@ -882,12 +850,6 @@ impl HPSVM {
             AccountSharedData::new(lamports, 0, &system_program::id()),
         );
         self.invalidate_execution_outcomes();
-    }
-
-    /// Changes the initial lamports in HPSVM's airdrop account.
-    pub fn with_lamports(mut self, lamports: u64) -> Self {
-        self.set_lamports(lamports);
-        self
     }
 
     fn load_default_programs(&mut self) {
@@ -901,46 +863,27 @@ impl HPSVM {
         self.invalidate_execution_outcomes();
     }
 
-    /// Includes the standard SPL programs.
-    pub fn with_default_programs(mut self) -> Self {
-        self.set_default_programs();
-        self
-    }
-
     #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
-    fn set_transaction_history(&mut self, capacity: usize) {
+    /// **Advanced reconfiguration.** Changes the transaction history capacity. Set this to 0 to
+    /// disable history and allow duplicate transactions.
+    pub fn set_transaction_history(&mut self, capacity: usize) {
         self.history.set_capacity(capacity);
         self.invalidate_execution_outcomes();
     }
 
-    /// Changes the capacity of the transaction history.
-    /// Set this to 0 to disable transaction history and allow duplicate transactions.
-    pub fn with_transaction_history(mut self, capacity: usize) -> Self {
-        self.set_transaction_history(capacity);
-        self
-    }
-
-    fn set_account_source(&mut self, source: impl AccountSource + 'static) {
+    /// **Advanced reconfiguration.** Installs a read-through account source for future lookups and
+    /// invalidates previously transacted but uncommitted outcomes.
+    pub fn set_account_source(&mut self, source: impl AccountSource + 'static) {
         self.accounts.set_account_source(Arc::new(source));
         self.invalidate_execution_outcomes();
     }
 
-    /// Configures a read-through account source used when an account is missing from local state.
-    pub fn with_account_source(mut self, source: impl AccountSource + 'static) -> Self {
-        self.set_account_source(source);
-        self
-    }
-
     #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
-    const fn set_log_bytes_limit(&mut self, limit: Option<usize>) {
+    /// **Advanced reconfiguration.** Adjusts the log truncation limit for future execution and
+    /// invalidates previously transacted but uncommitted outcomes.
+    pub const fn set_log_bytes_limit(&mut self, limit: Option<usize>) {
         self.runtime_env.log_bytes_limit = limit;
         self.invalidate_execution_outcomes();
-    }
-
-    #[expect(missing_docs)]
-    pub const fn with_log_bytes_limit(mut self, limit: Option<usize>) -> Self {
-        self.set_log_bytes_limit(limit);
-        self
     }
 
     #[cfg(feature = "precompiles")]
@@ -954,14 +897,6 @@ impl HPSVM {
         self.runtime_registry.enable_standard_precompiles();
         self.load_precompiles();
         self.invalidate_execution_outcomes();
-    }
-
-    /// Adds the standard precompiles to the VM.
-    // Use `with_feature_set` beforehand to change change what precompiles are added.
-    #[cfg(feature = "precompiles")]
-    pub fn with_precompiles(mut self) -> Self {
-        self.set_precompiles();
-        self
     }
 
     /// Returns minimum balance required to make an account with specified data length rent exempt.
@@ -1875,20 +1810,20 @@ impl HPSVM {
         self.invalidate_execution_outcomes();
     }
 
-    /// Registers a custom syscall in both program runtime environments (v1 and v2).
+    /// **Advanced reconfiguration.** Registers a custom syscall in both program runtime
+    /// environments (v1 and v2).
     ///
-    /// This can be called on a freshly constructed [`HPSVM::new()`] instance or on
-    /// an existing environment after programs have already been loaded. The runtime
-    /// environments are refreshed and cached programs are rebuilt so subsequent
-    /// executions see the new syscall.
+    /// This can be called on a freshly constructed [`HPSVM::new()`] instance or on an existing
+    /// environment after programs have already been loaded. The runtime environments are refreshed
+    /// and cached programs are rebuilt so subsequent executions see the new syscall.
     ///
     /// Returns an error if runtime refresh, syscall registration, or program cache
     /// rebuilding fails.
-    pub fn with_custom_syscall(
-        mut self,
+    pub fn register_custom_syscall(
+        &mut self,
         name: &str,
         syscall: BuiltinFunction<InvokeContext<'static, 'static>>,
-    ) -> Result<Self, HPSVMError> {
+    ) -> Result<(), HPSVMError> {
         self.runtime_registry.register_custom_syscall(CustomSyscallRegistration {
             name: name.to_owned(),
             function: syscall,
@@ -1898,7 +1833,7 @@ impl HPSVM {
         self.accounts.rebuild_program_cache().map_err(HPSVMError::from)?;
         self.invalidate_execution_outcomes();
 
-        Ok(self)
+        Ok(())
     }
 }
 

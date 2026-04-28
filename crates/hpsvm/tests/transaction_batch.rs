@@ -460,8 +460,7 @@ fn send_transaction_batch_returns_transaction_error_when_later_stage_lookup_user
     );
     svm.send_transaction(setup_lookup_tx).unwrap();
     svm.warp_to_slot(1);
-    svm = svm
-        .with_custom_syscall("sol_burn_cus", InvalidateLookupTableSyscall::vm)
+    svm.register_custom_syscall("sol_burn_cus", InvalidateLookupTableSyscall::vm)
         .expect("lookup-table invalidation syscall should register");
     svm.add_program(solana_sdk_ids::address_lookup_table::id(), &read_custom_syscall_program())
         .expect("lookup-table program override should load");
@@ -545,7 +544,7 @@ fn send_transaction_batch_runs_independent_stage_transactions_in_parallel() {
 
     let active = Arc::new(AtomicUsize::new(0));
     let max_seen = Arc::new(AtomicUsize::new(0));
-    let mut svm = HPSVM::new().with_sigverify(true);
+    let mut svm = HPSVM::new();
     svm.set_invocation_inspect_callback(ConcurrentInvocationCallback {
         active: Arc::clone(&active),
         max_seen: Arc::clone(&max_seen),

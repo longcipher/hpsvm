@@ -13,8 +13,13 @@ fn test_tx_history_base_case() {
     let to = Address::new_unique();
 
     // Create the VM and airdrop funds
-    let mut svm =
-        HPSVM::new().with_sigverify(false).with_blockhash_check(false).with_transaction_history(0);
+    let mut svm = HPSVM::builder()
+        .with_program_test_defaults()
+        .with_sigverify(false)
+        .with_blockhash_check(false)
+        .with_transaction_history(0)
+        .build()
+        .unwrap();
     svm.airdrop(&from, 10_000_000).unwrap();
     svm.airdrop(&to, 10_000_000).unwrap();
 
@@ -43,7 +48,12 @@ fn test_tx_history_disable_later() {
     let to = Address::new_unique();
 
     // Create the VM and airdrop funds
-    let mut svm = HPSVM::new().with_sigverify(false).with_blockhash_check(false);
+    let mut svm = HPSVM::builder()
+        .with_program_test_defaults()
+        .with_sigverify(false)
+        .with_blockhash_check(false)
+        .build()
+        .unwrap();
     svm.airdrop(&from, 10_000_000).unwrap();
     svm.airdrop(&to, 10_000_000).unwrap();
 
@@ -55,7 +65,7 @@ fn test_tx_history_disable_later() {
     let result1 = svm.send_transaction(tx1);
     assert!(result1.is_ok(), "First transaction should succeed");
 
-    let mut svm = svm.with_transaction_history(0);
+    svm.set_transaction_history(0);
 
     // Second duplicate transaction - should succeed
     let tx2 = Transaction::new_with_payer(&[instruction], Some(&from));

@@ -27,7 +27,7 @@ fn test_set_compute_budget() {
     // need to set the low compute budget after the airdrop tx
     let mut compute_budget = ComputeBudget::new_with_defaults(false, false);
     compute_budget.compute_unit_limit = 10;
-    svm = svm.with_compute_budget(compute_budget);
+    svm.set_compute_budget(compute_budget);
     let instruction = transfer(&from, &to, 64);
     let tx = Transaction::new(
         &[&from_keypair],

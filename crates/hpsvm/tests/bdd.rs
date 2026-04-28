@@ -33,13 +33,9 @@ fn default_hpsvm(world: &mut FeatureSetWorld) {
 
 #[when("the VM feature set is replaced with the default disabled feature set")]
 fn replace_feature_set(world: &mut FeatureSetWorld) {
-    world.svm = Some(
-        world
-            .svm
-            .take()
-            .expect("world should contain an HPSVM instance")
-            .with_feature_set(FeatureSet::default()),
-    );
+    let mut svm = world.svm.take().expect("world should contain an HPSVM instance");
+    svm.set_feature_set(FeatureSet::default());
+    world.svm = Some(svm);
 }
 
 #[then("the old active feature account should be removed")]

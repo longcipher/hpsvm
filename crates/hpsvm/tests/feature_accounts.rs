@@ -25,14 +25,14 @@ fn with_feature_set_rebuilds_materialized_defaults() {
     let feature_id = raise_cpi_nesting_limit_to_8::id();
     let token_program_id = address!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 
-    let svm = HPSVM::new();
+    let mut svm = HPSVM::new();
     assert_eq!(
         svm.get_account(&token_program_id).expect("token program should exist").owner,
         bpf_loader_upgradeable::id()
     );
     assert!(svm.get_account(&feature_id).is_some());
 
-    let svm = svm.with_feature_set(FeatureSet::default());
+    svm.set_feature_set(FeatureSet::default());
 
     assert!(svm.get_account(&feature_id).is_none());
     assert_eq!(
