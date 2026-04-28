@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use agave_feature_set::FeatureSet;
 use hpsvm::HPSVM;
 use solana_address::address;
+use solana_clock::Clock;
 use solana_keypair::Keypair;
 use solana_message::{Instruction, Message};
 use solana_native_token::LAMPORTS_PER_SOL;
@@ -44,6 +45,7 @@ fn hpsvm_ctor() -> HPSVM {
         .with_feature_set(FeatureSet::all_enabled())
         .with_builtins()
         .with_custom_syscall("sol_burn_cus", SyscallBurnCus::vm)
+        .expect("custom syscall registration should succeed")
         .with_lamports(1_000_000u64.wrapping_mul(LAMPORTS_PER_SOL))
         .with_sysvars()
         .with_default_programs()
@@ -52,7 +54,21 @@ fn hpsvm_ctor() -> HPSVM {
 }
 
 fn hpsvm_ctor_from_new_with_custom_syscall() -> HPSVM {
-    HPSVM::new().with_custom_syscall("sol_burn_cus", SyscallBurnCus::vm)
+    HPSVM::new()
+        .with_custom_syscall("sol_burn_cus", SyscallBurnCus::vm)
+        .expect("custom syscall registration should succeed")
+}
+
+#[test]
+pub fn public_extension_points_are_fallible() {
+    let mut svm = HPSVM::new()
+        .with_custom_syscall("sol_burn_cus", SyscallBurnCus::vm)
+        .expect("custom syscall registration should succeed");
+
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.slot += 1;
+
+    svm.set_sysvar::<Clock>(&clock).expect("sysvar override should succeed");
 }
 
 #[test]

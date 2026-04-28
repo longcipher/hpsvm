@@ -11,11 +11,13 @@
 
 `hpsvm` is a fast and lightweight library for testing Solana programs. It works by creating an in-process Solana VM optimized for program developers. This makes it much faster to run and compile than alternatives like `solana-program-test` and `solana-test-validator`. In a further break from tradition, it has an ergonomic API with sane defaults and extensive configurability for those who want it.
 
+`hpsvm` is optimized for low-overhead, in-process test execution. It does not try to emulate Sealevel-style concurrent scheduling inside a single VM instance. State-committing APIs such as `send_transaction` intentionally mutate one in-memory test environment in place.
+
 This is a pure Rust library, making it ideal for Rust-native Solana development workflows.
 
 ## ✨ Features
 
-- 🚀 **High Performance**: In-process VM runs tests significantly faster than external validators
+- 🚀 **High Performance**: In-process VM avoids validator process and RPC overhead, so tests run significantly faster than external validators
 - 🛠️ **Easy to Use**: Simple API with sensible defaults and comprehensive configuration options
 - 🔧 **Pure Rust**: No external dependencies or runtime requirements beyond Rust
 - 📊 **Comprehensive Testing**: Supports transactions, account management, and program execution

@@ -174,7 +174,7 @@ fn advance_epoch(svm: &mut HPSVM) {
     svm.warp_to_slot(root_slot + slots_per_epoch);
     let mut new_clock = old_clock;
     new_clock.epoch += 1;
-    svm.set_sysvar::<Clock>(&new_clock)
+    svm.set_sysvar::<Clock>(&new_clock).expect("clock sysvar update should succeed")
 }
 
 fn refresh_blockhash(svm: &mut HPSVM) {

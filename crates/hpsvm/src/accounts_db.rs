@@ -114,11 +114,41 @@ fn validate_sysvar_account(
 }
 
 #[derive(Clone, Default, Debug)]
-pub struct AccountsDb {
-    pub inner: HashMap<Address, AccountSharedData>,
-    pub programs_cache: ProgramCacheForTxBatch,
-    pub sysvar_cache: SysvarCache,
-    pub environments: ProgramRuntimeEnvironments,
+pub(crate) struct AccountsDb {
+    inner: HashMap<Address, AccountSharedData>,
+    programs_cache: ProgramCacheForTxBatch,
+    sysvar_cache: SysvarCache,
+    environments: ProgramRuntimeEnvironments,
+}
+
+/// Read-only facade over the VM accounts database.
+#[derive(Clone, Copy, Debug)]
+pub struct AccountsView<'a> {
+    accounts_db: &'a AccountsDb,
+}
+
+impl<'a> AccountsView<'a> {
+    pub(crate) const fn new(accounts_db: &'a AccountsDb) -> Self {
+        Self { accounts_db }
+    }
+
+    /// Returns a borrowed account for the provided address.
+    pub fn get_account_ref(&self, pubkey: &Address) -> Option<&'a AccountSharedData> {
+        self.accounts_db.get_account_ref(pubkey)
+    }
+
+    /// Returns a cloned account for the provided address.
+    pub fn get_account(&self, pubkey: &Address) -> Option<AccountSharedData> {
+        self.accounts_db.get_account(pubkey)
+    }
+
+    /// Returns a borrowed slice of ELF bytes for the provided program account.
+    pub fn try_program_elf_bytes(
+        &self,
+        program_key: &Address,
+    ) -> std::result::Result<&'a [u8], InstructionError> {
+        self.accounts_db.try_program_elf_bytes(program_key)
+    }
 }
 
 impl AccountsDb {
@@ -128,6 +158,46 @@ impl AccountsDb {
 
     pub fn get_account(&self, pubkey: &Address) -> Option<AccountSharedData> {
         self.get_account_ref(pubkey).cloned()
+    }
+
+    pub(crate) fn remove_account(&mut self, pubkey: &Address) {
+        self.inner.remove(pubkey);
+    }
+
+    pub(crate) fn minimum_balance_for_rent_exemption(&self, data_len: usize) -> u64 {
+        1.max(self.sysvar_cache.get_rent().unwrap_or_default().minimum_balance(data_len))
+    }
+
+    pub(crate) fn current_slot(&self) -> u64 {
+        self.sysvar_cache.get_clock().unwrap_or_default().slot
+    }
+
+    pub(crate) fn replenish_program_cache(
+        &mut self,
+        program_id: Address,
+        program: Arc<ProgramCacheEntry>,
+    ) {
+        self.programs_cache.replenish(program_id, program);
+    }
+
+    pub(crate) fn cloned_programs_cache(&self) -> ProgramCacheForTxBatch {
+        self.programs_cache.clone()
+    }
+
+    pub(crate) fn has_program_cache_entry(&self, program_id: &Address) -> bool {
+        self.programs_cache.find(program_id).is_some()
+    }
+
+    pub(crate) const fn runtime_environments(&self) -> &ProgramRuntimeEnvironments {
+        &self.environments
+    }
+
+    pub(crate) fn runtime_environments_mut(&mut self) -> &mut ProgramRuntimeEnvironments {
+        &mut self.environments
+    }
+
+    pub(crate) const fn sysvar_cache(&self) -> &SysvarCache {
+        &self.sysvar_cache
     }
 
     /// We should only use this when we know we're not touching any executable or sysvar accounts,

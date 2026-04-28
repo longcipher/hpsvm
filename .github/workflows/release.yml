@@ -26,24 +26,24 @@ jobs:
         with:
           components: rustfmt, clippy
 
-       - uses: taiki-e/install-action@v2
-         with:
-           tool: just,cargo-machete,taplo-cli,typos-cli,rumdl,leptosfmt
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just,cargo-machete,taplo-cli,typos-cli,rumdl,leptosfmt
 
-       - name: Install cargo-sort
-         run: cargo install cargo-sort
+      - name: Install cargo-sort
+        run: cargo install cargo-sort
 
-       - name: Install Solana CLI
-         run: |
-           sh -c "$(curl -sSfL https://release.anza.xyz/v4.0.0-rc.0/install)"
-           echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
-           export PATH="$GITHUB_PATH:$PATH"
+      - name: Install Solana CLI
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v4.0.0-rc.0/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+          export PATH="$GITHUB_PATH:$PATH"
 
-       - name: Build test programs
-         run: cd crates/hpsvm/test_programs && cargo build-sbf
+      - name: Build test programs
+        run: cd crates/hpsvm/test_programs && cargo build-sbf
 
-       - name: Run CI checks
-         run: just ci
+      - name: Run CI checks
+        run: just ci
 
       - name: Get version from tag
         id: tag_version

@@ -87,7 +87,7 @@ impl DefaultRegisterTracingCallback {
         // Persist the program id.
         let _ = program_id_file.write(program_id.to_string().as_bytes());
 
-        if let Ok(elf_data) = svm.accounts_db().try_program_elf_bytes(program_id) {
+        if let Ok(elf_data) = svm.accounts().try_program_elf_bytes(program_id) {
             // Persist the preload hash of the executable.
             let mut so_hash_file = File::create(base_fname.with_extension("exec.sha256"))?;
             let _ = so_hash_file.write(compute_hash(elf_data).as_bytes());

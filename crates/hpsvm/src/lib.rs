@@ -136,13 +136,13 @@
 //!     // Set the time to January 1st 2000
 //!     let mut initial_clock = svm.get_sysvar::<Clock>();
 //!     initial_clock.unix_timestamp = 1735689600;
-//!     svm.set_sysvar::<Clock>(&initial_clock);
+//!     svm.set_sysvar::<Clock>(&initial_clock).expect("clock sysvar override should succeed");
 //!     // This will fail because the program expects early 1970 timestamp
 //!     let _err = svm.send_transaction(tx.clone()).unwrap_err();
 //!     // So let's turn back time
 //!     let mut clock = svm.get_sysvar::<Clock>();
 //!     clock.unix_timestamp = 50;
-//!     svm.set_sysvar::<Clock>(&clock);
+//!     svm.set_sysvar::<Clock>(&clock).expect("clock sysvar override should succeed");
 //!     let ixs2 = [Instruction {
 //!         program_id,
 //!         data: vec![1], // unused, this is just to dedup the transaction
@@ -349,6 +349,7 @@ use utils::{
 use crate::register_tracing::DefaultRegisterTracingCallback;
 use crate::{
     accounts_db::AccountsDb,
+    batch::{TransactionBatchError, TransactionBatchExecutionResult, TransactionBatchPlan},
     error::HPSVMError,
     history::TransactionHistory,
     message_processor::process_message,
@@ -367,6 +368,8 @@ struct CustomSyscallRegistration {
 }
 
 #[expect(missing_docs)]
+pub mod batch;
+#[expect(missing_docs)]
 pub mod error;
 #[expect(missing_docs)]
 pub mod types;
@@ -382,6 +385,8 @@ mod programs;
 #[cfg(feature = "register-tracing")]
 pub mod register_tracing;
 mod utils;
+
+pub use accounts_db::AccountsView;
 
 #[expect(missing_docs)]
 #[derive(Clone)]
@@ -528,13 +533,13 @@ impl HPSVM {
 
     fn clear_feature_accounts(&mut self, previous_feature_set: &FeatureSet) {
         previous_feature_set.active().iter().for_each(|(feature_id, _)| {
-            self.accounts.inner.remove(feature_id);
+            self.accounts.remove_account(feature_id);
         });
     }
 
     fn clear_builtin_accounts(&mut self) {
         for builtin in BUILTINS {
-            self.accounts.inner.remove(&builtin.program_id);
+            self.accounts.remove_account(&builtin.program_id);
         }
     }
 
@@ -545,20 +550,20 @@ impl HPSVM {
                 .get_account_ref(program_id)
                 .is_some_and(|account| account.owner() == &bpf_loader_upgradeable::id())
             {
-                self.accounts.inner.remove(&get_program_data_address(program_id));
+                self.accounts.remove_account(&get_program_data_address(program_id));
             }
-            self.accounts.inner.remove(program_id);
+            self.accounts.remove_account(program_id);
         }
     }
 
     #[cfg(feature = "precompiles")]
     fn clear_precompile_accounts(&mut self) {
         agave_precompiles::get_precompiles().iter().for_each(|precompile| {
-            self.accounts.inner.remove(&precompile.program_id);
+            self.accounts.remove_account(&precompile.program_id);
         });
     }
 
-    fn refresh_runtime_environments(&mut self) {
+    fn try_refresh_runtime_environments(&mut self) -> Result<(), HPSVMError> {
         #[cfg(feature = "register-tracing")]
         let enable_register_tracing = self.enable_register_tracing;
         #[cfg(not(feature = "register-tracing"))]
@@ -576,7 +581,10 @@ impl HPSVM {
             false,
             enable_register_tracing,
         )
-        .expect("failed to create program runtime environment v1");
+        .map_err(|error| HPSVMError::RuntimeEnvironment {
+            version: "v1",
+            reason: error.to_string(),
+        })?;
 
         let mut program_runtime_v2 = create_program_runtime_environment_v2(
             &compute_budget.to_budget(),
@@ -584,16 +592,32 @@ impl HPSVM {
         );
 
         for syscall in &self.custom_syscalls {
-            program_runtime_v1.register_function(&syscall.name, syscall.function).unwrap_or_else(
-                |e| panic!("failed to register syscall '{}' in runtime_v1: {e}", syscall.name),
-            );
-            program_runtime_v2.register_function(&syscall.name, syscall.function).unwrap_or_else(
-                |e| panic!("failed to register syscall '{}' in runtime_v2: {e}", syscall.name),
-            );
+            program_runtime_v1.register_function(&syscall.name, syscall.function).map_err(
+                |error| HPSVMError::CustomSyscallRegistration {
+                    name: syscall.name.clone(),
+                    runtime: "runtime_v1",
+                    reason: error.to_string(),
+                },
+            )?;
+            program_runtime_v2.register_function(&syscall.name, syscall.function).map_err(
+                |error| HPSVMError::CustomSyscallRegistration {
+                    name: syscall.name.clone(),
+                    runtime: "runtime_v2",
+                    reason: error.to_string(),
+                },
+            )?;
         }
 
-        self.accounts.environments.program_runtime_v1 = Arc::new(program_runtime_v1);
-        self.accounts.environments.program_runtime_v2 = Arc::new(program_runtime_v2);
+        let environments = self.accounts.runtime_environments_mut();
+        environments.program_runtime_v1 = Arc::new(program_runtime_v1);
+        environments.program_runtime_v2 = Arc::new(program_runtime_v2);
+
+        Ok(())
+    }
+
+    fn refresh_runtime_environments(&mut self) {
+        self.try_refresh_runtime_environments()
+            .expect("runtime environment refresh should never fail for internal configuration");
     }
 
     fn reconfigure_materialized_feature_state(&mut self, previous_feature_set: &FeatureSet) {
@@ -665,16 +689,16 @@ impl HPSVM {
     #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
     fn set_sysvars(&mut self) {
         self.sysvars_loaded = true;
-        self.set_sysvar(&Clock::default());
-        self.set_sysvar(&EpochRewards::default());
-        self.set_sysvar(&EpochSchedule::default());
+        self.set_sysvar_internal(&Clock::default());
+        self.set_sysvar_internal(&EpochRewards::default());
+        self.set_sysvar_internal(&EpochSchedule::default());
         #[expect(deprecated)]
         let fees = Fees::default();
-        self.set_sysvar(&fees);
-        self.set_sysvar(&LastRestartSlot::default());
+        self.set_sysvar_internal(&fees);
+        self.set_sysvar_internal(&LastRestartSlot::default());
         let latest_blockhash = self.latest_blockhash;
         #[expect(deprecated)]
-        self.set_sysvar(&RecentBlockhashes::from_iter([IterItem(
+        self.set_sysvar_internal(&RecentBlockhashes::from_iter([IterItem(
             0,
             &latest_blockhash,
             fees.fee_calculator.lamports_per_signature,
@@ -691,18 +715,14 @@ impl HPSVM {
                 rent_account.exemption_threshold = 1.0;
                 rent_account.lamports_per_byte_year = solana_rent::DEFAULT_LAMPORTS_PER_BYTE;
             }
-            self.set_sysvar(&rent_account);
+            self.set_sysvar_internal(&rent_account);
         }
-        self.set_sysvar(&SlotHashes::new(&[(
-            self.accounts
-                .sysvar_cache
-                .get_clock()
-                .expect("clock sysvar should always be available")
-                .slot,
+        self.set_sysvar_internal(&SlotHashes::new(&[(
+            self.accounts.current_slot(),
             latest_blockhash,
         )]));
-        self.set_sysvar(&SlotHistory::default());
-        self.set_sysvar(&StakeHistory::default());
+        self.set_sysvar_internal(&SlotHistory::default());
+        self.set_sysvar_internal(&StakeHistory::default());
     }
 
     /// Includes the default sysvars.
@@ -757,8 +777,7 @@ impl HPSVM {
                 let loaded_program =
                     ProgramCacheEntry::new_builtin(0, builtint.name.len(), builtint.entrypoint);
                 self.accounts
-                    .programs_cache
-                    .replenish(builtint.program_id, Arc::new(loaded_program));
+                    .replenish_program_cache(builtint.program_id, Arc::new(loaded_program));
                 self.accounts.add_builtin_account(
                     builtint.program_id,
                     crate::utils::create_loadable_account_for_test(builtint.name),
@@ -842,7 +861,7 @@ impl HPSVM {
 
     /// Returns minimum balance required to make an account with specified data length rent exempt.
     pub fn minimum_balance_for_rent_exemption(&self, data_len: usize) -> u64 {
-        1.max(self.accounts.sysvar_cache.get_rent().unwrap_or_default().minimum_balance(data_len))
+        self.accounts.minimum_balance_for_rent_exemption(data_len)
     }
 
     /// Returns all information associated with the account of the provided pubkey.
@@ -850,14 +869,23 @@ impl HPSVM {
         self.accounts.get_account(address).map(Into::into)
     }
 
+    /// **⚠️ ADVANCED USE ONLY ⚠️**
+    ///
     /// Sets all information associated with the account of the provided pubkey.
+    ///
+    /// This writes directly into the in-memory test state. It does not execute
+    /// the owning program or replay the full transaction pipeline, so it is best
+    /// used for fixtures, snapshots, and explicit state surgery between
+    /// transactions. Prefer [`airdrop`](HPSVM::airdrop) or
+    /// [`send_transaction`](HPSVM::send_transaction) when you want a
+    /// protocol-consistent state transition.
     pub fn set_account(&mut self, address: Address, data: Account) -> Result<(), HPSVMError> {
         self.accounts.add_account(address, data.into())
     }
 
     /// **⚠️ ADVANCED USE ONLY ⚠️**
     ///
-    /// Returns a reference to the internal accounts database.
+    /// Returns a read-only view of the internal accounts database.
     ///
     /// This provides read-only access to the accounts database for advanced inspection.
     /// Use [`get_account`](HPSVM::get_account) for normal account retrieval.
@@ -869,12 +897,12 @@ impl HPSVM {
     ///
     /// let svm = HPSVM::new();
     ///
-    /// // Read-only access to accounts database
-    /// let accounts_db = svm.accounts_db();
+    /// // Read-only access to accounts data
+    /// let accounts = svm.accounts();
     /// // ... inspect internal state if needed
     /// ```
-    pub const fn accounts_db(&self) -> &AccountsDb {
-        &self.accounts
+    pub const fn accounts(&self) -> AccountsView<'_> {
+        AccountsView::new(&self.accounts)
     }
 
     /// Gets the balance of the provided account pubkey.
@@ -887,14 +915,40 @@ impl HPSVM {
         self.latest_blockhash
     }
 
-    /// Sets the sysvar to the test environment.
-    pub fn set_sysvar<T>(&mut self, sysvar: &T)
+    /// **⚠️ ADVANCED USE ONLY ⚠️**
+    ///
+    /// Sets the sysvar in the test environment.
+    ///
+    /// This is a direct override intended for tests that need to manipulate
+    /// runtime context. It bypasses transaction execution.
+    ///
+    /// Returns an error if serialization fails or if the sysvar account update
+    /// is rejected by the internal accounts database.
+    pub fn set_sysvar<T>(&mut self, sysvar: &T) -> Result<(), HPSVMError>
+    where
+        T: Sysvar + SysvarId + SysvarSerialize,
+    {
+        self.try_set_sysvar(sysvar)
+    }
+
+    fn try_set_sysvar<T>(&mut self, sysvar: &T) -> Result<(), HPSVMError>
     where
         T: Sysvar + SysvarId + SysvarSerialize,
     {
         let mut account = AccountSharedData::new(1, T::size_of(), &solana_sdk_ids::sysvar::id());
-        account.serialize_data(sysvar).expect("sysvar serialization should never fail");
-        self.accounts.add_account(T::id(), account).expect("failed to add sysvar account");
+        account.serialize_data(sysvar).map_err(|error| HPSVMError::SysvarSerialization {
+            sysvar: std::any::type_name::<T>(),
+            reason: error.to_string(),
+        })?;
+        self.accounts.add_account(T::id(), account)
+    }
+
+    fn set_sysvar_internal<T>(&mut self, sysvar: &T)
+    where
+        T: Sysvar + SysvarId + SysvarSerialize,
+    {
+        self.try_set_sysvar(sysvar)
+            .expect("internal sysvar setup should never fail for supported sysvars");
     }
 
     /// Gets a sysvar from the test environment.
@@ -921,7 +975,10 @@ impl HPSVM {
             .pubkey()
     }
 
-    /// Airdrops the account with the lamports specified.
+    /// Airdrops lamports by submitting an internal system transfer transaction.
+    ///
+    /// Unlike [`set_account`](HPSVM::set_account), this goes through the normal
+    /// execution pipeline instead of mutating balances directly.
     pub fn airdrop(&mut self, address: &Address, lamports: u64) -> TransactionResult {
         let payer =
             Keypair::try_from(self.airdrop_kp.as_slice()).expect("airdrop keypair should be valid");
@@ -944,13 +1001,9 @@ impl HPSVM {
 
     /// Adds a builtin program to the test environment.
     pub fn add_builtin(&mut self, program_id: Address, entrypoint: BuiltinFunctionWithContext) {
-        let builtin = ProgramCacheEntry::new_builtin(
-            self.accounts.sysvar_cache.get_clock().unwrap_or_default().slot,
-            1,
-            entrypoint,
-        );
+        let builtin = ProgramCacheEntry::new_builtin(self.accounts.current_slot(), 1, entrypoint);
 
-        self.accounts.programs_cache.replenish(program_id, Arc::new(builtin));
+        self.accounts.replenish_program_cache(program_id, Arc::new(builtin));
 
         let mut account = AccountSharedData::new(1, 1, &bpf_loader::id());
         account.set_executable(true);
@@ -975,7 +1028,7 @@ impl HPSVM {
         loader_id: &Address,
     ) -> Result<(), HPSVMError> {
         let program_id = program_id.into();
-        let current_slot = self.accounts.sysvar_cache.get_clock().unwrap_or_default().slot;
+        let current_slot = self.accounts.current_slot();
 
         let program_size = if bpf_loader_upgradeable::check_id(loader_id) {
             let (programdata_address, _bump) =
@@ -1019,7 +1072,7 @@ impl HPSVM {
 
             program_len
         } else {
-            return Err(HPSVMError::InvalidLoader(format!("Unsupported loader: {loader_id}")));
+            return Err(HPSVMError::InvalidLoader { program_id, loader_id: *loader_id });
         };
 
         let mut loaded_program = solana_bpf_loader_program::load_program_from_bytes(
@@ -1029,13 +1082,13 @@ impl HPSVM {
             loader_id,
             program_size,
             current_slot,
-            self.accounts.environments.program_runtime_v1.clone(),
+            self.accounts.runtime_environments().program_runtime_v1.clone(),
             PREVERIFIED,
         )
         .map_err(HPSVMError::from)?;
         loaded_program.effective_slot = current_slot;
 
-        self.accounts.programs_cache.replenish(program_id, Arc::new(loaded_program));
+        self.accounts.replenish_program_cache(program_id, Arc::new(loaded_program));
 
         Ok(())
     }
@@ -1151,12 +1204,15 @@ impl HPSVM {
                 self.feature_set.is_active(&increase_cpi_account_info_limit::ID),
             )
         });
-        let rent =
-            self.accounts.sysvar_cache.get_rent().expect("rent sysvar should always be available");
+        let rent = self
+            .accounts
+            .sysvar_cache()
+            .get_rent()
+            .expect("rent sysvar should always be available");
         let message = tx.message();
         let blockhash = message.recent_blockhash();
         // reload program cache
-        let mut program_cache_for_tx_batch = self.accounts.programs_cache.clone();
+        let mut program_cache_for_tx_batch = self.accounts.cloned_programs_cache();
         let mut accumulated_consume_units = 0;
         let account_keys = message.account_keys();
         let prioritization_fee = compute_budget_limits.get_prioritization_fee();
@@ -1179,7 +1235,7 @@ impl HPSVM {
                     let is_instruction_account = message.is_instruction_account(i);
                     let mut account = if !is_instruction_account &&
                         !message.is_writable(i) &&
-                        self.accounts.programs_cache.find(key).is_some()
+                        self.accounts.has_program_cache_entry(key)
                     {
                         // Optimization to skip loading of accounts which are only used as
                         // programs in top-level instructions and not passed as instruction
@@ -1287,9 +1343,9 @@ impl HPSVM {
                         self.fee_structure.lamports_per_signature,
                         self,
                         &feature_set,
-                        &self.accounts.environments,
-                        &self.accounts.environments,
-                        &self.accounts.sysvar_cache,
+                        self.accounts.runtime_environments(),
+                        self.accounts.runtime_environments(),
+                        self.accounts.sysvar_cache(),
                     ),
                     Some(log_collector),
                     compute_budget.to_budget(),
@@ -1493,7 +1549,12 @@ impl HPSVM {
         })
     }
 
-    /// Submits a signed transaction.
+    /// Submits a signed transaction and commits its post-state to this VM instance.
+    ///
+    /// This updates accounts, transaction history, and other in-memory runtime
+    /// state, so it intentionally requires `&mut self`. `hpsvm` is optimized for
+    /// fast, in-process testing of a single mutable environment rather than
+    /// Sealevel-style concurrent scheduling within one instance.
     pub fn send_transaction(&mut self, tx: impl Into<VersionedTransaction>) -> TransactionResult {
         let log_collector =
             LogCollector { bytes_limit: self.log_bytes_limit, ..Default::default() };
@@ -1541,7 +1602,40 @@ impl HPSVM {
         }
     }
 
-    /// Simulates a transaction.
+    /// Plans a conflict-aware transaction batch without committing any state.
+    ///
+    /// The returned stages contain indexes into the original input order. Stages
+    /// are built greedily from account read/write conflicts and form the basis
+    /// for higher-level batch schedulers.
+    pub fn plan_transaction_batch<T>(
+        &self,
+        txs: impl IntoIterator<Item = T>,
+    ) -> Result<TransactionBatchPlan, TransactionBatchError>
+    where
+        T: Into<VersionedTransaction>,
+    {
+        let transactions = txs.into_iter().map(Into::into).collect::<Vec<_>>();
+        batch::plan_transaction_batch(self, &transactions)
+    }
+
+    /// Submits a batch of transactions and returns a conflict-aware schedule.
+    ///
+    /// Execution results are returned in the original input order. Transactions
+    /// in the same conflict-free stage are executed against cloned snapshots in
+    /// parallel, then their disjoint account deltas are merged back into this VM
+    /// before the next stage begins.
+    pub fn send_transaction_batch<T>(
+        &mut self,
+        txs: impl IntoIterator<Item = T>,
+    ) -> Result<TransactionBatchExecutionResult, TransactionBatchError>
+    where
+        T: Into<VersionedTransaction>,
+    {
+        let transactions = txs.into_iter().map(Into::into).collect::<Vec<_>>();
+        batch::send_transaction_batch(self, transactions)
+    }
+
+    /// Simulates a transaction without committing post-state.
     pub fn simulate_transaction(
         &self,
         tx: impl Into<VersionedTransaction>,
@@ -1586,7 +1680,7 @@ impl HPSVM {
     pub fn expire_blockhash(&mut self) {
         self.latest_blockhash = create_blockhash(&self.latest_blockhash.to_bytes());
         #[expect(deprecated)]
-        self.set_sysvar(&RecentBlockhashes::from_iter([IterItem(
+        self.set_sysvar_internal(&RecentBlockhashes::from_iter([IterItem(
             0,
             &self.latest_blockhash,
             self.fee_structure.lamports_per_signature,
@@ -1597,7 +1691,7 @@ impl HPSVM {
     pub fn warp_to_slot(&mut self, slot: u64) {
         let mut clock = self.get_sysvar::<Clock>();
         clock.slot = slot;
-        self.set_sysvar(&clock);
+        self.set_sysvar_internal(&clock);
     }
 
     /// Gets the current compute budget.
@@ -1678,29 +1772,25 @@ impl HPSVM {
 
     /// Registers a custom syscall in both program runtime environments (v1 and v2).
     ///
-    /// **Must be called after `with_builtins()`** (which recreates the environments
-    /// from scratch) and **before `with_default_programs()`** (which clones the
-    /// environment Arcs into program cache entries, preventing further mutation).
+    /// This can be called on a freshly constructed [`HPSVM::new()`] instance or on
+    /// an existing environment after programs have already been loaded. The runtime
+    /// environments are refreshed and cached programs are rebuilt so subsequent
+    /// executions see the new syscall.
     ///
-    /// Panics if the runtime environments cannot be mutated or if registration
-    /// fails. This is intentional — a misconfigured syscall should fail loudly
-    /// rather than silently.
+    /// Returns an error if runtime refresh, syscall registration, or program cache
+    /// rebuilding fails.
     pub fn with_custom_syscall(
         mut self,
         name: &str,
         syscall: BuiltinFunction<InvokeContext<'static, 'static>>,
-    ) -> Self {
+    ) -> Result<Self, HPSVMError> {
         self.custom_syscalls
             .push(CustomSyscallRegistration { name: name.to_owned(), function: syscall });
 
-        self.refresh_runtime_environments();
+        self.try_refresh_runtime_environments()?;
+        self.accounts.rebuild_program_cache().map_err(HPSVMError::from)?;
 
-        assert!(
-            self.accounts.rebuild_program_cache().is_ok(),
-            "with_custom_syscall: failed to rebuild program cache after runtime refresh"
-        );
-
-        self
+        Ok(self)
     }
 }
 

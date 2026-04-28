@@ -1,3 +1,4 @@
+use solana_address::Address;
 use solana_instruction::error::InstructionError;
 use thiserror::Error;
 
@@ -39,13 +40,22 @@ pub enum HPSVMError {
     /// Invalid sysvar data error
     #[error("{0}")]
     InvalidSysvarData(#[from] InvalidSysvarDataError),
+    /// Sysvar serialization failure
+    #[error("failed to serialize sysvar {sysvar}: {reason}")]
+    SysvarSerialization { sysvar: &'static str, reason: String },
     /// Instruction error
     #[error("{0}")]
     Instruction(#[from] InstructionError),
     /// Invalid path error
     #[error("{0}")]
     InvalidPath(#[from] std::io::Error),
+    /// Runtime environment refresh failure
+    #[error("failed to refresh runtime environment {version}: {reason}")]
+    RuntimeEnvironment { version: &'static str, reason: String },
+    /// Custom syscall registration failure
+    #[error("failed to register custom syscall {name} in {runtime}: {reason}")]
+    CustomSyscallRegistration { name: String, runtime: &'static str, reason: String },
     /// Invalid loader error
-    #[error("{0}")]
-    InvalidLoader(String),
+    #[error("unsupported loader {loader_id} for program {program_id}")]
+    InvalidLoader { program_id: Address, loader_id: Address },
 }
