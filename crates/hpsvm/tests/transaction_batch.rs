@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use hpsvm::HPSVM;
 #[cfg(feature = "invocation-inspect-callback")]
 use hpsvm::InvocationInspectCallback;
-use solana_account::Account;
+use solana_account::{Account, state_traits::StateMut};
 use solana_address::{Address, address};
 use solana_address_lookup_table_interface::instruction::{
     create_lookup_table, deactivate_lookup_table, extend_lookup_table,
@@ -20,11 +20,18 @@ use solana_address_lookup_table_interface::instruction::{
 use solana_hash::Hash;
 use solana_instruction::{Instruction, account_meta::AccountMeta, error::InstructionError};
 use solana_keypair::Keypair;
+use solana_loader_v3_interface::{
+    get_program_data_address, instruction::UpgradeableLoaderInstruction,
+    state::UpgradeableLoaderState,
+};
 use solana_message::{
     AddressLookupTableAccount, Message, VersionedMessage, v0::Message as MessageV0,
 };
-#[cfg(feature = "invocation-inspect-callback")]
-use solana_program_runtime::invoke_context::InvokeContext;
+use solana_program_runtime::{
+    invoke_context::InvokeContext,
+    solana_sbpf::{declare_builtin_function, memory_region::MemoryMapping},
+};
+use solana_sdk_ids::bpf_loader_upgradeable;
 use solana_signer::Signer;
 use solana_system_interface::instruction::transfer;
 #[cfg(feature = "invocation-inspect-callback")]
@@ -58,6 +65,84 @@ fn read_failure_program() -> Vec<u8> {
     so_path.push("test_programs/target/deploy/failure.so");
     std::fs::read(so_path).unwrap()
 }
+
+fn read_custom_syscall_program() -> Vec<u8> {
+    let mut so_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    so_path.push("test_programs/target/deploy/test_program_custom_syscall.so");
+    std::fs::read(so_path).unwrap()
+}
+
+fn set_program_upgrade_authority(
+    svm: &mut HPSVM,
+    program_id: Address,
+    authority: Address,
+) -> Address {
+    let programdata_address = get_program_data_address(&program_id);
+    let mut programdata_account = svm.get_account(&programdata_address).unwrap();
+    let metadata_len = UpgradeableLoaderState::size_of_programdata_metadata();
+    let metadata: UpgradeableLoaderState =
+        Account { data: programdata_account.data[..metadata_len].to_vec(), ..Default::default() }
+            .state()
+            .unwrap();
+    let slot = match metadata {
+        UpgradeableLoaderState::ProgramData { slot, .. } => slot,
+        other => panic!("expected ProgramData account, got {other:?}"),
+    };
+
+    let mut metadata_account = Account::new(0, metadata_len, &bpf_loader_upgradeable::id());
+    metadata_account
+        .set_state(&UpgradeableLoaderState::ProgramData {
+            slot,
+            upgrade_authority_address: Some(authority),
+        })
+        .unwrap();
+    programdata_account.data[..metadata_len].copy_from_slice(&metadata_account.data);
+
+    svm.set_account(programdata_address, programdata_account).unwrap();
+    programdata_address
+}
+
+fn invoke_counter_result(
+    svm: &mut HPSVM,
+    program_id: Address,
+    counter_address: Address,
+    payer: &Keypair,
+    deduper: u8,
+) -> hpsvm::types::TransactionResult {
+    let payer_address = payer.pubkey();
+    let tx = Transaction::new(
+        &[payer],
+        Message::new_with_blockhash(
+            &[Instruction {
+                program_id,
+                accounts: vec![AccountMeta::new(counter_address, false)],
+                data: vec![0, deduper],
+            }],
+            Some(&payer_address),
+            &svm.latest_blockhash(),
+        ),
+        svm.latest_blockhash(),
+    );
+    svm.send_transaction(tx)
+}
+
+declare_builtin_function!(
+    InvalidateLookupTableSyscall,
+    fn rust(
+        invoke_context: &mut InvokeContext<'_, '_>,
+        _arg0: u64,
+        _arg1: u64,
+        _arg2: u64,
+        _arg3: u64,
+        _arg4: u64,
+        _memory_mapping: &mut MemoryMapping<'_>,
+    ) -> Result<u64, Box<dyn std::error::Error>> {
+        let transaction_context = &invoke_context.transaction_context;
+        let instruction_context = transaction_context.get_current_instruction_context()?;
+        instruction_context.try_borrow_instruction_account(0)?.set_data_from_slice(&[])?;
+        Ok(0)
+    }
+);
 
 #[test]
 fn transaction_batch_plan_groups_non_conflicting_transactions() {
@@ -107,6 +192,88 @@ fn send_transaction_batch_executes_transactions_and_returns_results_in_input_ord
 }
 
 #[test]
+fn sequential_commit_matches_batch_commit() {
+    let mut serial_vm = HPSVM::new();
+    let mut batch_vm = HPSVM::new();
+    let authority = Keypair::new();
+    let batch_peer = Keypair::new();
+    let authority_address = authority.pubkey();
+    let batch_peer_address = batch_peer.pubkey();
+    let recipient = Address::new_unique();
+    let program_id = address!("GtdambwDgHWrDJdVPBkEHGhCwokqgAoch162teUjJse2");
+    let counter_address = Address::new_unique();
+
+    for svm in [&mut serial_vm, &mut batch_vm] {
+        svm.airdrop(&authority_address, 1_000_000_000).unwrap();
+        svm.airdrop(&batch_peer_address, 1_000_000_000).unwrap();
+        svm.add_program(program_id, &read_counter_program()).unwrap();
+        set_program_upgrade_authority(svm, program_id, authority_address);
+        svm.set_account(
+            counter_address,
+            Account {
+                lamports: 5,
+                data: vec![0_u8; std::mem::size_of::<u32>()],
+                owner: program_id,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+    let programdata_address = get_program_data_address(&program_id);
+
+    invoke_counter_result(&mut serial_vm, program_id, counter_address, &authority, 0).unwrap();
+    invoke_counter_result(&mut batch_vm, program_id, counter_address, &authority, 0).unwrap();
+    assert_eq!(serial_vm.get_account(&counter_address).unwrap().data, 1u32.to_le_bytes().to_vec());
+    assert_eq!(batch_vm.get_account(&counter_address).unwrap().data, 1u32.to_le_bytes().to_vec());
+
+    serial_vm.warp_to_slot(1);
+    batch_vm.warp_to_slot(1);
+
+    let blockhash = serial_vm.latest_blockhash();
+    let close_ix = Instruction::new_with_bincode(
+        bpf_loader_upgradeable::id(),
+        &UpgradeableLoaderInstruction::Close,
+        vec![
+            AccountMeta::new(programdata_address, false),
+            AccountMeta::new(authority_address, false),
+            AccountMeta::new_readonly(authority_address, true),
+            AccountMeta::new(program_id, false),
+        ],
+    );
+    let close_tx = Transaction::new(
+        &[&authority],
+        Message::new_with_blockhash(&[close_ix], Some(&authority_address), &blockhash),
+        blockhash,
+    );
+    let peer_tx = transfer_tx(&batch_peer, &recipient, 1, blockhash);
+
+    let close_outcome = serial_vm.transact(close_tx.clone());
+    serial_vm.commit_transaction(close_outcome).unwrap();
+    let peer_outcome = serial_vm.transact(peer_tx.clone());
+    serial_vm.commit_transaction(peer_outcome).unwrap();
+
+    let batch = batch_vm
+        .send_transaction_batch([close_tx, peer_tx])
+        .expect("batch execution should succeed");
+
+    assert!(batch.results.iter().all(Result::is_ok));
+    assert_eq!(batch.plan.stages.len(), 1);
+    assert!(serial_vm.get_account(&programdata_address).is_none());
+    assert!(batch_vm.get_account(&programdata_address).is_none());
+
+    let serial_follow_up =
+        invoke_counter_result(&mut serial_vm, program_id, counter_address, &authority, 1);
+    let batch_follow_up =
+        invoke_counter_result(&mut batch_vm, program_id, counter_address, &authority, 1);
+
+    assert_eq!(serial_follow_up.as_ref().map(|_| ()), batch_follow_up.as_ref().map(|_| ()));
+    assert_eq!(
+        serial_vm.get_account(&counter_address).unwrap().data,
+        batch_vm.get_account(&counter_address).unwrap().data
+    );
+}
+
+#[test]
 fn send_transaction_batch_merges_stage_deltas_before_following_stages() {
     let mut svm = HPSVM::new();
     let payer_a = Keypair::new();
@@ -129,8 +296,12 @@ fn send_transaction_batch_merges_stage_deltas_before_following_stages() {
     assert_eq!(batch.plan.stages.len(), 2);
     assert_eq!(batch.plan.stages[0].transaction_indexes, vec![0, 1]);
     assert_eq!(batch.plan.stages[1].transaction_indexes, vec![2]);
-    assert!(batch.results[0].is_ok());
-    assert!(batch.results[1].is_ok());
+    if let Err(error) = &batch.results[0] {
+        panic!("unexpected close result: {:?}", error);
+    }
+    if let Err(error) = &batch.results[1] {
+        panic!("unexpected transfer result: {:?}", error);
+    }
     assert!(batch.results[2].is_err());
     assert_eq!(svm.get_balance(&recipient_a), Some(10_000));
     assert_eq!(svm.get_balance(&recipient_b), Some(1_000));
@@ -257,6 +428,89 @@ fn send_transaction_batch_plans_lookup_table_updates_before_lookup_users() {
     assert!(batch.results[0].is_ok());
     assert!(batch.results[1].is_ok());
     assert_eq!(svm.get_account(&counter_address).unwrap().data, 1u32.to_le_bytes().to_vec());
+}
+
+#[test]
+fn send_transaction_batch_returns_transaction_error_when_later_stage_lookup_user_becomes_unsanitizable()
+ {
+    let mut svm = HPSVM::new();
+    let authority = Keypair::new();
+    let lookup_user = Keypair::new();
+    let authority_pk = authority.pubkey();
+    let lookup_user_pk = lookup_user.pubkey();
+    let stage_one_recipient = Address::new_unique();
+    let lookup_recipient = Address::new_unique();
+
+    svm.airdrop(&authority_pk, 1_000_000_000).unwrap();
+    svm.airdrop(&lookup_user_pk, 1_000_000_000).unwrap();
+
+    let setup_blockhash = svm.latest_blockhash();
+    let (create_lookup_ix, lookup_table_address) =
+        create_lookup_table(authority_pk, authority_pk, 0);
+    let extend_lookup_ix = extend_lookup_table(
+        lookup_table_address,
+        authority_pk,
+        Some(authority_pk),
+        vec![lookup_recipient],
+    );
+    let setup_lookup_tx = Transaction::new(
+        &[&authority],
+        Message::new(&[create_lookup_ix, extend_lookup_ix], Some(&authority_pk)),
+        setup_blockhash,
+    );
+    svm.send_transaction(setup_lookup_tx).unwrap();
+    svm.warp_to_slot(1);
+    svm = svm
+        .with_custom_syscall("sol_burn_cus", InvalidateLookupTableSyscall::vm)
+        .expect("lookup-table invalidation syscall should register");
+    svm.add_program(solana_sdk_ids::address_lookup_table::id(), &read_custom_syscall_program())
+        .expect("lookup-table program override should load");
+
+    let batch_blockhash = svm.latest_blockhash();
+    let invalidate_tx = Transaction::new(
+        &[&authority],
+        Message::new(
+            &[Instruction {
+                program_id: solana_sdk_ids::address_lookup_table::id(),
+                accounts: vec![AccountMeta::new(lookup_table_address, false)],
+                data: 0_u64.to_le_bytes().to_vec(),
+            }],
+            Some(&authority_pk),
+        ),
+        batch_blockhash,
+    );
+    let authority_transfer_tx = transfer_tx(&authority, &stage_one_recipient, 1, batch_blockhash);
+    let lookup_table =
+        AddressLookupTableAccount { key: lookup_table_address, addresses: vec![lookup_recipient] };
+    let lookup_message = MessageV0::try_compile(
+        &lookup_user_pk,
+        &[transfer(&lookup_user_pk, &lookup_recipient, 1)],
+        &[lookup_table],
+        batch_blockhash,
+    )
+    .unwrap();
+    let lookup_tx =
+        VersionedTransaction::try_new(VersionedMessage::V0(lookup_message), &[&lookup_user])
+            .unwrap();
+
+    let batch = svm
+        .send_transaction_batch(vec![invalidate_tx.into(), authority_transfer_tx.into(), lookup_tx])
+        .expect("batch execution should return per-transaction results even after a late sanitize failure");
+
+    assert_eq!(batch.plan.stages.len(), 2);
+    assert_eq!(batch.plan.stages[0].transaction_indexes, vec![0]);
+    assert_eq!(batch.plan.stages[1].transaction_indexes, vec![1, 2]);
+    if let Err(error) = &batch.results[0] {
+        panic!("unexpected invalidate result: {:?}", error);
+    }
+    if let Err(error) = &batch.results[1] {
+        panic!("unexpected transfer result: {:?}", error);
+    }
+    assert_eq!(
+        batch.results[2].as_ref().unwrap_err().err,
+        TransactionError::InvalidAddressLookupTableData
+    );
+    assert_eq!(svm.get_balance(&stage_one_recipient), Some(1));
 }
 
 #[cfg(feature = "invocation-inspect-callback")]

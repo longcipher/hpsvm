@@ -1,11 +1,11 @@
 #[cfg(not(feature = "hashbrown"))]
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 #[cfg(feature = "hashbrown")]
-use hashbrown::HashMap;
+use hashbrown::{HashMap, HashSet};
 use log::error;
-use solana_account::{AccountSharedData, ReadableAccount, WritableAccount, state_traits::StateMut};
+use solana_account::{AccountSharedData, ReadableAccount, state_traits::StateMut};
 use solana_address::Address;
 use solana_address_lookup_table_interface::{error::AddressLookupError, state::AddressLookupTable};
 use solana_builtins::BUILTINS;
@@ -17,7 +17,6 @@ use solana_message::{
     AddressLoader,
     v0::{LoadedAddresses, MessageAddressTableLookup},
 };
-use solana_nonce as nonce;
 use solana_program_runtime::{
     loaded_programs::{
         LoadProgramMetrics, ProgramCacheEntry, ProgramCacheEntryOwner, ProgramCacheEntryType,
@@ -34,10 +33,12 @@ use solana_sdk_ids::{
         stake_history::ID as STAKE_HISTORY_ID,
     },
 };
-use solana_system_program::{SystemAccountKind, get_system_account_kind};
-use solana_transaction_error::{AddressLoaderError, TransactionError};
+use solana_transaction_error::AddressLoaderError;
 
-use crate::error::{HPSVMError, InvalidSysvarDataError};
+use crate::{
+    account_source::{AccountSource, EmptyAccountSource},
+    error::{HPSVMError, InvalidSysvarDataError},
+};
 
 const FEES_ID: Address = Address::from_str_const("SysvarFees111111111111111111111111111111111");
 const RECENT_BLOCKHASHES_ID: Address =
@@ -113,12 +114,52 @@ fn validate_sysvar_account(
     Ok(())
 }
 
-#[derive(Clone, Default, Debug)]
 pub(crate) struct AccountsDb {
+    source: Arc<dyn AccountSource>,
     inner: HashMap<Address, AccountSharedData>,
+    removed: HashSet<Address>,
     programs_cache: ProgramCacheForTxBatch,
     sysvar_cache: SysvarCache,
     environments: ProgramRuntimeEnvironments,
+}
+
+impl Clone for AccountsDb {
+    fn clone(&self) -> Self {
+        Self {
+            source: self.source.clone(),
+            inner: self.inner.clone(),
+            removed: self.removed.clone(),
+            programs_cache: self.programs_cache.clone(),
+            sysvar_cache: self.sysvar_cache.clone(),
+            environments: self.environments.clone(),
+        }
+    }
+}
+
+impl Default for AccountsDb {
+    fn default() -> Self {
+        Self {
+            source: Arc::new(EmptyAccountSource),
+            inner: HashMap::default(),
+            removed: HashSet::default(),
+            programs_cache: ProgramCacheForTxBatch::default(),
+            sysvar_cache: SysvarCache::default(),
+            environments: ProgramRuntimeEnvironments::default(),
+        }
+    }
+}
+
+impl std::fmt::Debug for AccountsDb {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AccountsDb")
+            .field("source", &"dyn AccountSource")
+            .field("inner", &self.inner)
+            .field("removed", &self.removed)
+            .field("programs_cache", &self.programs_cache)
+            .field("sysvar_cache", &self.sysvar_cache)
+            .field("environments", &self.environments)
+            .finish()
+    }
 }
 
 /// Read-only facade over the VM accounts database.
@@ -152,16 +193,33 @@ impl<'a> AccountsView<'a> {
 }
 
 impl AccountsDb {
+    pub(crate) fn set_account_source(&mut self, source: Arc<dyn AccountSource>) {
+        self.source = source;
+    }
+
+    fn get_account_from_source(&self, pubkey: &Address) -> Option<AccountSharedData> {
+        match self.source.get_account(pubkey) {
+            Ok(account) => account,
+            Err(error) => {
+                error!("Failed to load account {pubkey:?} from source: {error}");
+                None
+            }
+        }
+    }
+
     pub fn get_account_ref(&self, pubkey: &Address) -> Option<&AccountSharedData> {
         self.inner.get(pubkey)
     }
 
     pub fn get_account(&self, pubkey: &Address) -> Option<AccountSharedData> {
-        self.get_account_ref(pubkey).cloned()
+        self.get_account_ref(pubkey).cloned().or_else(|| {
+            if self.removed.contains(pubkey) { None } else { self.get_account_from_source(pubkey) }
+        })
     }
 
     pub(crate) fn remove_account(&mut self, pubkey: &Address) {
         self.inner.remove(pubkey);
+        self.removed.insert(*pubkey);
     }
 
     pub(crate) fn minimum_balance_for_rent_exemption(&self, data_len: usize) -> u64 {
@@ -203,6 +261,7 @@ impl AccountsDb {
     /// We should only use this when we know we're not touching any executable or sysvar accounts,
     /// or have already handled such cases.
     pub(crate) fn add_account_no_checks(&mut self, pubkey: Address, account: AccountSharedData) {
+        self.removed.remove(&pubkey);
         self.inner.insert(pubkey, account);
     }
 
@@ -222,6 +281,7 @@ impl AccountsDb {
 
         if account.lamports() == 0 {
             self.inner.remove(&pubkey);
+            self.removed.insert(pubkey);
         } else {
             self.add_account_no_checks(pubkey, account.clone());
         }
@@ -289,6 +349,7 @@ impl AccountsDb {
 
     /// Skip the executable() checks for builtin accounts
     pub(crate) fn add_builtin_account(&mut self, address: Address, data: AccountSharedData) {
+        self.removed.remove(&address);
         self.inner.insert(address, data);
     }
 
@@ -341,7 +402,7 @@ impl AccountsDb {
                 );
                 return Err(InstructionError::InvalidAccountData);
             };
-            let Some(programdata_account) = self.get_account_ref(&programdata_address) else {
+            let Some(programdata_account) = self.get_account(&programdata_address) else {
                 return Ok(ProgramCacheEntry::new_tombstone(
                     slot,
                     ProgramCacheEntryOwner::LoaderV3,
@@ -402,7 +463,7 @@ impl AccountsDb {
         address_table_lookup: &MessageAddressTableLookup,
     ) -> std::result::Result<LoadedAddresses, AddressLookupError> {
         let table_account = self
-            .get_account_ref(&address_table_lookup.account_key)
+            .get_account(&address_table_lookup.account_key)
             .ok_or(AddressLookupError::LookupTableAccountNotFound)?;
 
         if table_account.owner() == &solana_sdk_ids::address_lookup_table::id() {
@@ -432,36 +493,6 @@ impl AccountsDb {
             })
         } else {
             Err(AddressLookupError::InvalidAccountOwner)
-        }
-    }
-
-    pub(crate) fn withdraw(
-        &mut self,
-        address: &Address,
-        lamports: u64,
-    ) -> solana_transaction_error::TransactionResult<()> {
-        if let Some(account) = self.inner.get_mut(address) {
-            let min_balance = match get_system_account_kind(account) {
-                Some(SystemAccountKind::Nonce) => self
-                    .sysvar_cache
-                    .get_rent()
-                    .expect("rent sysvar should always be available")
-                    .minimum_balance(nonce::state::State::size()),
-                _ => 0,
-            };
-
-            lamports
-                .checked_add(min_balance)
-                .filter(|required_balance| *required_balance <= account.lamports())
-                .ok_or(TransactionError::InsufficientFundsForFee)?;
-            account
-                .checked_sub_lamports(lamports)
-                .map_err(|_| TransactionError::InsufficientFundsForFee)?;
-
-            Ok(())
-        } else {
-            error!("Account {address} not found when trying to withdraw fee.");
-            Err(TransactionError::AccountNotFound)
         }
     }
 

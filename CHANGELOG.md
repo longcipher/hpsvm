@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Added
+
+- Add explicit `ExecutionOutcome` flow through `HPSVM::transact` and `HPSVM::commit_transaction`.
+- Add `AccountSource` integration plus the `hpsvm-fork-rpc::RpcForkSource` companion crate for cached RPC-backed reads.
+- Add extracted execution environment surfaces, including `HPSVM::block_env` and the public `Inspector` hook via `HPSVM::with_inspector`.
+
+### Changed
+
+- Share one commit-delta path across single-transaction and batch execution.
+- Move internal block/config/runtime state behind `BlockEnv`, `SvmCfg`, and `RuntimeEnv`.
+- Centralize custom syscalls and standard precompile materialization behind an internal `RuntimeExtensionRegistry`.
+
 ## [0.11.0] - 2026-03-30
 
 ### Added

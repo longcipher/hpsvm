@@ -14,7 +14,7 @@ impl InvokeContextCallback for HPSVM {}
 #[cfg(feature = "precompiles")]
 impl InvokeContextCallback for HPSVM {
     fn is_precompile(&self, program_id: &Address) -> bool {
-        is_precompile(program_id, |feature_id: &Address| self.feature_set.is_active(feature_id))
+        is_precompile(program_id, |feature_id: &Address| self.cfg.feature_set.is_active(feature_id))
     }
 
     fn process_precompile(
@@ -24,9 +24,9 @@ impl InvokeContextCallback for HPSVM {
         instruction_data_slices: Vec<&[u8]>,
     ) -> Result<(), solana_precompile_error::PrecompileError> {
         if let Some(precompile) = get_precompile(program_id, |feature_id: &Address| {
-            self.feature_set.is_active(feature_id)
+            self.cfg.feature_set.is_active(feature_id)
         }) {
-            precompile.verify(data, &instruction_data_slices, &self.feature_set)
+            precompile.verify(data, &instruction_data_slices, &self.cfg.feature_set)
         } else {
             Err(PrecompileError::InvalidPublicKey)
         }

@@ -11,7 +11,7 @@ pub(crate) fn load_precompiles(svm: &mut HPSVM) {
     account.set_executable(true);
 
     for precompile in get_precompiles() {
-        if precompile.feature.is_none_or(|feature_id| svm.feature_set.is_active(&feature_id)) {
+        if precompile.feature.is_none_or(|feature_id| svm.cfg.feature_set.is_active(&feature_id)) {
             svm.set_account(precompile.program_id, account.clone().into()).unwrap();
         }
     }

@@ -270,7 +270,15 @@
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-use std::{cell::RefCell, path::Path, rc::Rc, sync::Arc};
+use std::{
+    cell::RefCell,
+    path::Path,
+    rc::Rc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use agave_feature_set::{
     FeatureSet, increase_cpi_account_info_limit, raise_cpi_nesting_limit_to_8,
@@ -354,7 +362,10 @@ use crate::{
     history::TransactionHistory,
     message_processor::process_message,
     programs::{DEFAULT_PROGRAM_IDS, load_default_programs},
-    types::{ExecutionResult, FailedTransactionMetadata, TransactionMetadata, TransactionResult},
+    types::{
+        ExecutionOutcome, ExecutionResult, FailedTransactionMetadata, TransactionMetadata,
+        TransactionResult,
+    },
     utils::{
         create_blockhash,
         rent::{RentState, check_rent_state_with_account, get_account_rent_state},
@@ -362,7 +373,7 @@ use crate::{
 };
 
 #[derive(Clone)]
-struct CustomSyscallRegistration {
+pub(crate) struct CustomSyscallRegistration {
     name: String,
     function: BuiltinFunction<InvokeContext<'static, 'static>>,
 }
@@ -374,40 +385,50 @@ pub mod error;
 #[expect(missing_docs)]
 pub mod types;
 
+mod account_source;
 mod accounts_db;
 mod callback;
+mod env;
 mod format_logs;
 mod history;
+mod inspector;
 mod message_processor;
 #[cfg(feature = "precompiles")]
 mod precompiles;
 mod programs;
 #[cfg(feature = "register-tracing")]
 pub mod register_tracing;
+mod runtime_registry;
 mod utils;
 
+pub use account_source::{AccountSource, AccountSourceError};
 pub use accounts_db::AccountsView;
+pub use env::{BlockEnv, RuntimeEnv, SvmCfg};
+pub use inspector::Inspector;
+use runtime_registry::RuntimeExtensionRegistry;
+
+static NEXT_VM_INSTANCE_ID: AtomicU64 = AtomicU64::new(1);
+
+pub(crate) fn next_vm_instance_id() -> u64 {
+    NEXT_VM_INSTANCE_ID.fetch_add(1, Ordering::Relaxed)
+}
 
 #[expect(missing_docs)]
-#[derive(Clone)]
 pub struct HPSVM {
     accounts: AccountsDb,
     airdrop_kp: [u8; 64],
     builtins_loaded: bool,
-    custom_syscalls: Vec<CustomSyscallRegistration>,
     default_programs_loaded: bool,
-    feature_set: FeatureSet,
+    cfg: SvmCfg,
     feature_accounts_loaded: bool,
+    inspector: Arc<dyn Inspector>,
     reserved_account_keys: ReservedAccountKeys,
-    latest_blockhash: Hash,
+    runtime_registry: RuntimeExtensionRegistry,
+    instance_id: u64,
+    state_version: u64,
+    block_env: BlockEnv,
     history: TransactionHistory,
-    compute_budget: Option<ComputeBudget>,
-    sigverify: bool,
-    blockhash_check: bool,
-    fee_structure: FeeStructure,
-    log_bytes_limit: Option<usize>,
-    #[cfg(feature = "precompiles")]
-    precompiles_loaded: bool,
+    runtime_env: RuntimeEnv,
     sysvars_loaded: bool,
     /// The callback which can be used to inspect invoke_context
     /// and extract low-level information such as bpf traces, transaction
@@ -428,17 +449,42 @@ impl std::fmt::Debug for HPSVM {
             .field("accounts", &self.accounts)
             .field("builtins_loaded", &self.builtins_loaded)
             .field("default_programs_loaded", &self.default_programs_loaded)
-            .field("feature_set", &self.feature_set)
+            .field("cfg", &self.cfg)
             .field("feature_accounts_loaded", &self.feature_accounts_loaded)
-            .field("latest_blockhash", &self.latest_blockhash)
-            .field("sigverify", &self.sigverify)
-            .field("blockhash_check", &self.blockhash_check)
+            .field("runtime_registry", &self.runtime_registry)
+            .field("state_version", &self.state_version)
+            .field("block_env", &self.block_env)
+            .field("runtime_env", &self.runtime_env)
             .field("sysvars_loaded", &self.sysvars_loaded);
-        #[cfg(feature = "precompiles")]
-        debug.field("precompiles_loaded", &self.precompiles_loaded);
         #[cfg(feature = "invocation-inspect-callback")]
         debug.field("enable_register_tracing", &self.enable_register_tracing);
         debug.finish_non_exhaustive()
+    }
+}
+
+impl Clone for HPSVM {
+    fn clone(&self) -> Self {
+        Self {
+            accounts: self.accounts.clone(),
+            airdrop_kp: self.airdrop_kp,
+            builtins_loaded: self.builtins_loaded,
+            default_programs_loaded: self.default_programs_loaded,
+            cfg: self.cfg.clone(),
+            feature_accounts_loaded: self.feature_accounts_loaded,
+            inspector: self.inspector.clone(),
+            reserved_account_keys: self.reserved_account_keys.clone(),
+            runtime_registry: self.runtime_registry.clone(),
+            instance_id: next_vm_instance_id(),
+            state_version: self.state_version,
+            block_env: self.block_env,
+            history: self.history.clone(),
+            runtime_env: self.runtime_env,
+            sysvars_loaded: self.sysvars_loaded,
+            #[cfg(feature = "invocation-inspect-callback")]
+            invocation_inspect_callback: self.invocation_inspect_callback.clone(),
+            #[cfg(feature = "invocation-inspect-callback")]
+            enable_register_tracing: self.enable_register_tracing,
+        }
     }
 }
 
@@ -456,27 +502,38 @@ impl Default for HPSVM {
 }
 
 impl HPSVM {
+    const fn invalidate_execution_outcomes(&mut self) {
+        self.state_version = self.state_version.wrapping_add(1);
+    }
+
+    fn sync_block_env_slot(&mut self) {
+        self.block_env.slot = self.accounts.current_slot();
+    }
+
     fn new_inner(_enable_register_tracing: bool) -> Self {
         let feature_set = FeatureSet::default();
+        let latest_blockhash = create_blockhash(b"genesis");
 
         Self {
             accounts: Default::default(),
             airdrop_kp: Keypair::new().to_bytes(),
             builtins_loaded: false,
-            custom_syscalls: Vec::new(),
             default_programs_loaded: false,
             reserved_account_keys: Self::reserved_account_keys_for_feature_set(&feature_set),
-            feature_set,
+            cfg: SvmCfg {
+                feature_set,
+                sigverify: false,
+                blockhash_check: false,
+                fee_structure: FeeStructure::default(),
+            },
             feature_accounts_loaded: false,
-            latest_blockhash: create_blockhash(b"genesis"),
+            inspector: Arc::new(inspector::NoopInspector),
+            runtime_registry: RuntimeExtensionRegistry::default(),
+            instance_id: next_vm_instance_id(),
+            state_version: 0,
+            block_env: BlockEnv { latest_blockhash, slot: 0 },
             history: TransactionHistory::new(),
-            compute_budget: None,
-            sigverify: false,
-            blockhash_check: false,
-            fee_structure: FeeStructure::default(),
-            log_bytes_limit: Some(10_000),
-            #[cfg(feature = "precompiles")]
-            precompiles_loaded: false,
+            runtime_env: RuntimeEnv { compute_budget: None, log_bytes_limit: Some(10_000) },
             sysvars_loaded: false,
             #[cfg(feature = "invocation-inspect-callback")]
             enable_register_tracing: _enable_register_tracing,
@@ -514,6 +571,25 @@ impl HPSVM {
     /// Creates the basic test environment.
     pub fn new() -> Self {
         Self::default().into_basic()
+    }
+
+    /// Installs an execution inspector that observes top-level transaction activity.
+    pub fn with_inspector<I: Inspector + 'static>(mut self, inspector: I) -> Self {
+        self.inspector = Arc::new(inspector);
+        self.invalidate_execution_outcomes();
+        self
+    }
+
+    fn on_transaction_start(&self, tx: &SanitizedTransaction) {
+        self.inspector.on_transaction_start(self, tx);
+    }
+
+    pub(crate) fn on_instruction(&self, index: usize, program_id: &Address) {
+        self.inspector.on_instruction(self, index, program_id);
+    }
+
+    fn on_transaction_end(&self, result: &solana_transaction_error::TransactionResult<()>) {
+        self.inspector.on_transaction_end(self, result);
     }
 
     #[cfg(feature = "register-tracing")]
@@ -569,14 +645,14 @@ impl HPSVM {
         #[cfg(not(feature = "register-tracing"))]
         let enable_register_tracing = false;
 
-        let compute_budget = self.compute_budget.unwrap_or_else(|| {
+        let compute_budget = self.runtime_env.compute_budget.unwrap_or_else(|| {
             ComputeBudget::new_with_defaults(
-                self.feature_set.is_active(&raise_cpi_nesting_limit_to_8::ID),
-                self.feature_set.is_active(&increase_cpi_account_info_limit::ID),
+                self.cfg.feature_set.is_active(&raise_cpi_nesting_limit_to_8::ID),
+                self.cfg.feature_set.is_active(&increase_cpi_account_info_limit::ID),
             )
         });
         let mut program_runtime_v1 = create_program_runtime_environment_v1(
-            &self.feature_set.runtime_features(),
+            &self.cfg.feature_set.runtime_features(),
             &compute_budget.to_budget(),
             false,
             enable_register_tracing,
@@ -591,7 +667,7 @@ impl HPSVM {
             enable_register_tracing,
         );
 
-        for syscall in &self.custom_syscalls {
+        for syscall in self.runtime_registry.custom_syscalls() {
             program_runtime_v1.register_function(&syscall.name, syscall.function).map_err(
                 |error| HPSVMError::CustomSyscallRegistration {
                     name: syscall.name.clone(),
@@ -623,7 +699,7 @@ impl HPSVM {
     fn reconfigure_materialized_feature_state(&mut self, previous_feature_set: &FeatureSet) {
         if self.feature_accounts_loaded {
             self.clear_feature_accounts(previous_feature_set);
-            self.set_feature_accounts();
+            self.materialize_feature_accounts();
         }
 
         if self.default_programs_loaded {
@@ -632,19 +708,19 @@ impl HPSVM {
 
         if self.builtins_loaded {
             self.clear_builtin_accounts();
-            self.set_builtins();
-        } else if !self.custom_syscalls.is_empty() {
+            self.load_builtins();
+        } else if !self.runtime_registry.custom_syscalls().is_empty() {
             self.refresh_runtime_environments();
         }
 
         #[cfg(feature = "precompiles")]
-        if self.precompiles_loaded {
+        if self.runtime_registry.loads_standard_precompiles() {
             self.clear_precompile_accounts();
-            self.set_precompiles();
+            self.load_precompiles();
         }
 
         if self.default_programs_loaded {
-            self.set_default_programs();
+            self.load_default_programs();
         }
 
         assert!(
@@ -655,7 +731,8 @@ impl HPSVM {
 
     #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
     const fn set_compute_budget(&mut self, compute_budget: ComputeBudget) {
-        self.compute_budget = Some(compute_budget);
+        self.runtime_env.compute_budget = Some(compute_budget);
+        self.invalidate_execution_outcomes();
     }
 
     /// Sets the compute budget.
@@ -666,7 +743,8 @@ impl HPSVM {
 
     #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
     const fn set_sigverify(&mut self, sigverify: bool) {
-        self.sigverify = sigverify;
+        self.cfg.sigverify = sigverify;
+        self.invalidate_execution_outcomes();
     }
 
     /// Enables or disables sigverify.
@@ -677,7 +755,8 @@ impl HPSVM {
 
     #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
     const fn set_blockhash_check(&mut self, check: bool) {
-        self.blockhash_check = check;
+        self.cfg.blockhash_check = check;
+        self.invalidate_execution_outcomes();
     }
 
     /// Enables or disables the blockhash check.
@@ -696,7 +775,7 @@ impl HPSVM {
         let fees = Fees::default();
         self.set_sysvar_internal(&fees);
         self.set_sysvar_internal(&LastRestartSlot::default());
-        let latest_blockhash = self.latest_blockhash;
+        let latest_blockhash = self.block_env.latest_blockhash;
         #[expect(deprecated)]
         self.set_sysvar_internal(&RecentBlockhashes::from_iter([IterItem(
             0,
@@ -709,6 +788,7 @@ impl HPSVM {
         {
             let mut rent_account = Rent::default();
             if self
+                .cfg
                 .feature_set
                 .is_active(&agave_feature_set::deprecate_rent_exemption_threshold::id())
             {
@@ -723,6 +803,7 @@ impl HPSVM {
         )]));
         self.set_sysvar_internal(&SlotHistory::default());
         self.set_sysvar_internal(&StakeHistory::default());
+        self.invalidate_execution_outcomes();
     }
 
     /// Includes the default sysvars.
@@ -739,21 +820,28 @@ impl HPSVM {
 
     #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
     fn set_feature_set(&mut self, feature_set: FeatureSet) {
-        let previous_feature_set = self.feature_set.clone();
-        self.feature_set = feature_set;
-        self.reserved_account_keys = Self::reserved_account_keys_for_feature_set(&self.feature_set);
+        let previous_feature_set = self.cfg.feature_set.clone();
+        self.cfg.feature_set = feature_set;
+        self.reserved_account_keys =
+            Self::reserved_account_keys_for_feature_set(&self.cfg.feature_set);
         self.reconfigure_materialized_feature_state(&previous_feature_set);
+        self.invalidate_execution_outcomes();
     }
 
-    #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
-    fn set_feature_accounts(&mut self) {
+    fn materialize_feature_accounts(&mut self) {
         self.feature_accounts_loaded = true;
-        for (feature_id, activation_slot) in self.feature_set.active() {
+        for (feature_id, activation_slot) in self.cfg.feature_set.active() {
             let feature_account = Feature { activated_at: Some(*activation_slot) };
             let lamports = self.minimum_balance_for_rent_exemption(Feature::size_of());
             let account = feature_gate::create_account(&feature_account, lamports);
             self.accounts.add_account_no_checks(*feature_id, account);
         }
+    }
+
+    #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
+    fn set_feature_accounts(&mut self) {
+        self.materialize_feature_accounts();
+        self.invalidate_execution_outcomes();
     }
 
     #[expect(missing_docs)]
@@ -768,12 +856,11 @@ impl HPSVM {
         reserved_account_keys
     }
 
-    #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
-    fn set_builtins(&mut self) {
+    fn load_builtins(&mut self) {
         self.builtins_loaded = true;
         self.refresh_runtime_environments();
         for builtint in BUILTINS {
-            if builtint.enable_feature_id.is_none_or(|x| self.feature_set.is_active(&x)) {
+            if builtint.enable_feature_id.is_none_or(|x| self.cfg.feature_set.is_active(&x)) {
                 let loaded_program =
                     ProgramCacheEntry::new_builtin(0, builtint.name.len(), builtint.entrypoint);
                 self.accounts
@@ -784,6 +871,12 @@ impl HPSVM {
                 );
             }
         }
+    }
+
+    #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
+    fn set_builtins(&mut self) {
+        self.load_builtins();
+        self.invalidate_execution_outcomes();
     }
 
     /// Changes the default builtins.
@@ -801,6 +894,7 @@ impl HPSVM {
                 .pubkey(),
             AccountSharedData::new(lamports, 0, &system_program::id()),
         );
+        self.invalidate_execution_outcomes();
     }
 
     /// Changes the initial lamports in HPSVM's airdrop account.
@@ -809,10 +903,15 @@ impl HPSVM {
         self
     }
 
-    #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
-    fn set_default_programs(&mut self) {
+    fn load_default_programs(&mut self) {
         self.default_programs_loaded = true;
         load_default_programs(self);
+    }
+
+    #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
+    fn set_default_programs(&mut self) {
+        self.load_default_programs();
+        self.invalidate_execution_outcomes();
     }
 
     /// Includes the standard SPL programs.
@@ -824,6 +923,7 @@ impl HPSVM {
     #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
     fn set_transaction_history(&mut self, capacity: usize) {
         self.history.set_capacity(capacity);
+        self.invalidate_execution_outcomes();
     }
 
     /// Changes the capacity of the transaction history.
@@ -833,9 +933,21 @@ impl HPSVM {
         self
     }
 
+    fn set_account_source(&mut self, source: impl AccountSource + 'static) {
+        self.accounts.set_account_source(Arc::new(source));
+        self.invalidate_execution_outcomes();
+    }
+
+    /// Configures a read-through account source used when an account is missing from local state.
+    pub fn with_account_source(mut self, source: impl AccountSource + 'static) -> Self {
+        self.set_account_source(source);
+        self
+    }
+
     #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
     const fn set_log_bytes_limit(&mut self, limit: Option<usize>) {
-        self.log_bytes_limit = limit;
+        self.runtime_env.log_bytes_limit = limit;
+        self.invalidate_execution_outcomes();
     }
 
     #[expect(missing_docs)]
@@ -844,11 +956,17 @@ impl HPSVM {
         self
     }
 
+    #[cfg(feature = "precompiles")]
+    fn load_precompiles(&mut self) {
+        load_precompiles(self);
+    }
+
     #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
     #[cfg(feature = "precompiles")]
     fn set_precompiles(&mut self) {
-        self.precompiles_loaded = true;
-        load_precompiles(self);
+        self.runtime_registry.enable_standard_precompiles();
+        self.load_precompiles();
+        self.invalidate_execution_outcomes();
     }
 
     /// Adds the standard precompiles to the VM.
@@ -880,7 +998,10 @@ impl HPSVM {
     /// [`send_transaction`](HPSVM::send_transaction) when you want a
     /// protocol-consistent state transition.
     pub fn set_account(&mut self, address: Address, data: Account) -> Result<(), HPSVMError> {
-        self.accounts.add_account(address, data.into())
+        self.accounts.add_account(address, data.into())?;
+        self.sync_block_env_slot();
+        self.invalidate_execution_outcomes();
+        Ok(())
     }
 
     /// **⚠️ ADVANCED USE ONLY ⚠️**
@@ -907,12 +1028,17 @@ impl HPSVM {
 
     /// Gets the balance of the provided account pubkey.
     pub fn get_balance(&self, address: &Address) -> Option<u64> {
-        self.accounts.get_account_ref(address).map(|x| x.lamports())
+        self.accounts.get_account(address).map(|account| account.lamports())
     }
 
     /// Gets the latest blockhash.
     pub const fn latest_blockhash(&self) -> Hash {
-        self.latest_blockhash
+        self.block_env.latest_blockhash
+    }
+
+    /// Gets the current block environment.
+    pub const fn block_env(&self) -> BlockEnv {
+        self.block_env
     }
 
     /// **⚠️ ADVANCED USE ONLY ⚠️**
@@ -928,7 +1054,10 @@ impl HPSVM {
     where
         T: Sysvar + SysvarId + SysvarSerialize,
     {
-        self.try_set_sysvar(sysvar)
+        self.try_set_sysvar(sysvar)?;
+        self.sync_block_env_slot();
+        self.invalidate_execution_outcomes();
+        Ok(())
     }
 
     fn try_set_sysvar<T>(&mut self, sysvar: &T) -> Result<(), HPSVMError>
@@ -949,6 +1078,7 @@ impl HPSVM {
     {
         self.try_set_sysvar(sysvar)
             .expect("internal sysvar setup should never fail for supported sysvars");
+        self.sync_block_env_slot();
     }
 
     /// Gets a sysvar from the test environment.
@@ -990,13 +1120,16 @@ impl HPSVM {
                     lamports,
                 )],
                 Some(&payer.pubkey()),
-                &self.latest_blockhash,
+                &self.block_env.latest_blockhash,
             )),
             &[payer],
         )
         .expect("failed to create airdrop transaction");
 
-        self.send_transaction(tx)
+        let inspector = std::mem::replace(&mut self.inspector, Arc::new(inspector::NoopInspector));
+        let result = self.send_transaction(tx);
+        self.inspector = inspector;
+        result
     }
 
     /// Adds a builtin program to the test environment.
@@ -1008,6 +1141,7 @@ impl HPSVM {
         let mut account = AccountSharedData::new(1, 1, &bpf_loader::id());
         account.set_executable(true);
         self.accounts.add_account_no_checks(program_id, account);
+        self.invalidate_execution_outcomes();
     }
 
     /// Adds an SBF program to the test environment from the file specified.
@@ -1101,7 +1235,13 @@ impl HPSVM {
         program_id: impl Into<Address>,
         program_bytes: &[u8],
     ) -> Result<(), HPSVMError> {
-        self.add_program_internal::<false>(program_id, program_bytes, &bpf_loader_upgradeable::id())
+        self.add_program_internal::<false>(
+            program_id,
+            program_bytes,
+            &bpf_loader_upgradeable::id(),
+        )?;
+        self.invalidate_execution_outcomes();
+        Ok(())
     }
 
     /// Adds an SBF program with a specific loader to match mainnet CU behavior.
@@ -1114,7 +1254,9 @@ impl HPSVM {
         program_bytes: &[u8],
         loader_id: Address,
     ) -> Result<(), HPSVMError> {
-        self.add_program_internal::<false>(program_id, program_bytes, &loader_id)
+        self.add_program_internal::<false>(program_id, program_bytes, &loader_id)?;
+        self.invalidate_execution_outcomes();
+        Ok(())
     }
 
     /// Adds an SBF program that is known-good and already verified.
@@ -1196,12 +1338,12 @@ impl HPSVM {
     where
         'a: 'b,
     {
-        let compute_budget = self.compute_budget.unwrap_or_else(|| ComputeBudget {
+        let compute_budget = self.runtime_env.compute_budget.unwrap_or_else(|| ComputeBudget {
             compute_unit_limit: u64::from(compute_budget_limits.compute_unit_limit),
             heap_size: compute_budget_limits.updated_heap_bytes,
             ..ComputeBudget::new_with_defaults(
-                self.feature_set.is_active(&raise_cpi_nesting_limit_to_8::ID),
-                self.feature_set.is_active(&increase_cpi_account_info_limit::ID),
+                self.cfg.feature_set.is_active(&raise_cpi_nesting_limit_to_8::ID),
+                self.cfg.feature_set.is_active(&increase_cpi_account_info_limit::ID),
             )
         });
         let rent = self
@@ -1219,9 +1361,9 @@ impl HPSVM {
         let fee = solana_fee::calculate_fee(
             message,
             false,
-            self.fee_structure.lamports_per_signature,
+            self.cfg.fee_structure.lamports_per_signature,
             prioritization_fee,
-            FeeFeatures::from(&self.feature_set),
+            FeeFeatures::from(&self.cfg.feature_set),
         );
         let mut validated_fee_payer = false;
         let mut payer_key = None;
@@ -1334,13 +1476,13 @@ impl HPSVM {
                     return (Err(err), accumulated_consume_units, None, fee, None);
                 }
 
-                let feature_set = self.feature_set.runtime_features();
+                let feature_set = self.cfg.feature_set.runtime_features();
                 let mut invoke_context = InvokeContext::new(
                     &mut context,
                     &mut program_cache_for_tx_batch,
                     EnvironmentConfig::new(
                         *blockhash,
-                        self.fee_structure.lamports_per_signature,
+                        self.cfg.fee_structure.lamports_per_signature,
                         self,
                         &feature_set,
                         self.accounts.runtime_environments(),
@@ -1360,13 +1502,18 @@ impl HPSVM {
                     &invoke_context,
                 );
 
+                self.on_transaction_start(tx);
+
                 let tx_result = process_message(
+                    self,
                     message,
                     &program_indices,
                     &mut invoke_context,
                     &mut ExecuteTimings::default(),
                     &mut accumulated_consume_units,
                 );
+
+                self.on_transaction_end(&tx_result);
 
                 #[cfg(feature = "invocation-inspect-callback")]
                 self.invocation_inspect_callback.after_invocation(
@@ -1402,7 +1549,7 @@ impl HPSVM {
                 let post_rent_state =
                     get_account_rent_state(rent, account.lamports(), account.data().len());
                 let pre_rent_state =
-                    self.accounts.get_account_ref(pubkey).map_or(RentState::Uninitialized, |acc| {
+                    self.accounts.get_account(pubkey).map_or(RentState::Uninitialized, |acc| {
                         get_account_rent_state(rent, acc.lamports(), acc.data().len())
                     });
 
@@ -1451,14 +1598,14 @@ impl HPSVM {
             Err(value) => return value,
         };
         if let Some(ctx) = context {
-            let mut exec_result =
-                execution_result_if_context(sanitized_tx, ctx, result, compute_units_consumed, fee);
-
-            if let Some(payer) = payer_key.filter(|_| exec_result.tx_result.is_err()) {
-                exec_result.tx_result =
-                    self.accounts.withdraw(&payer, fee).and(exec_result.tx_result);
-            }
-            exec_result
+            execution_result_if_context(
+                sanitized_tx,
+                ctx,
+                result,
+                compute_units_consumed,
+                fee,
+                payer_key,
+            )
         } else {
             ExecutionResult { tx_result: result, compute_units_consumed, fee, ..Default::default() }
         }
@@ -1472,13 +1619,20 @@ impl HPSVM {
         let CheckAndProcessTransactionSuccess {
             core: CheckAndProcessTransactionSuccessCore { result, compute_units_consumed, context },
             fee,
-            ..
+            payer_key,
         } = match self.check_and_process_transaction(sanitized_tx, log_collector) {
             Ok(value) => value,
             Err(value) => return value,
         };
         if let Some(ctx) = context {
-            execution_result_if_context(sanitized_tx, ctx, result, compute_units_consumed, fee)
+            execution_result_if_context(
+                sanitized_tx,
+                ctx,
+                result,
+                compute_units_consumed,
+                fee,
+                payer_key,
+            )
         } else {
             ExecutionResult { tx_result: result, compute_units_consumed, fee, ..Default::default() }
         }
@@ -1493,7 +1647,7 @@ impl HPSVM {
         'a: 'b,
     {
         self.maybe_blockhash_check(sanitized_tx)?;
-        let compute_budget_limits = get_compute_budget_limits(sanitized_tx, &self.feature_set)?;
+        let compute_budget_limits = get_compute_budget_limits(sanitized_tx, &self.cfg.feature_set)?;
         self.maybe_history_check(sanitized_tx)?;
         let (result, compute_units_consumed, context, fee, payer_key) =
             self.process_transaction(sanitized_tx, compute_budget_limits, log_collector);
@@ -1510,7 +1664,7 @@ impl HPSVM {
         &self,
         sanitized_tx: &SanitizedTransaction,
     ) -> Result<(), ExecutionResult> {
-        if self.sigverify && self.history.check_transaction(sanitized_tx.signature()) {
+        if self.cfg.sigverify && self.history.check_transaction(sanitized_tx.signature()) {
             return Err(ExecutionResult {
                 tx_result: Err(TransactionError::AlreadyProcessed),
                 ..Default::default()
@@ -1523,7 +1677,7 @@ impl HPSVM {
         &self,
         sanitized_tx: &SanitizedTransaction,
     ) -> Result<(), ExecutionResult> {
-        if self.blockhash_check {
+        if self.cfg.blockhash_check {
             self.check_transaction_age(sanitized_tx)?;
         }
         Ok(())
@@ -1556,50 +1710,38 @@ impl HPSVM {
     /// fast, in-process testing of a single mutable environment rather than
     /// Sealevel-style concurrent scheduling within one instance.
     pub fn send_transaction(&mut self, tx: impl Into<VersionedTransaction>) -> TransactionResult {
-        let log_collector =
-            LogCollector { bytes_limit: self.log_bytes_limit, ..Default::default() };
-        let log_collector = Rc::new(RefCell::new(log_collector));
-        let vtx: VersionedTransaction = tx.into();
-        let ExecutionResult {
-            post_accounts,
-            tx_result,
-            signature,
-            compute_units_consumed,
-            inner_instructions,
-            return_data,
-            included,
-            fee,
-        } = if self.sigverify {
-            self.execute_transaction(vtx, log_collector.clone())
+        let log_collector = Rc::new(RefCell::new(LogCollector {
+            bytes_limit: self.runtime_env.log_bytes_limit,
+            ..Default::default()
+        }));
+        let execution = if self.cfg.sigverify {
+            self.execute_transaction(tx.into(), log_collector.clone())
         } else {
-            self.execute_transaction_no_verify(vtx, log_collector.clone())
+            self.execute_transaction_no_verify(tx.into(), log_collector.clone())
         };
-        let Ok(logs) = Rc::try_unwrap(log_collector).map(|lc| lc.into_inner().messages) else {
-            unreachable!("Log collector should not be used after send_transaction returns")
-        };
-        let meta = TransactionMetadata {
-            signature,
-            logs,
-            inner_instructions,
-            compute_units_consumed,
-            return_data,
-            fee,
-        };
+        let outcome = execution_into_outcome(self, execution, log_collector, "send_transaction");
+        self.commit_transaction(outcome)
+    }
 
-        if let Err(tx_err) = tx_result {
-            let err = TransactionResult::Err(FailedTransactionMetadata { err: tx_err, meta });
-            if included {
-                self.history.add_new_transaction(signature, err.clone());
-            }
-            err
-        } else {
-            self.history.add_new_transaction(signature, Ok(meta.clone()));
-            self.accounts
-                .sync_accounts(post_accounts)
-                .expect("It shouldn't be possible to write invalid sysvars in send_transaction.");
+    /// Executes a signed transaction without committing its post-state.
+    ///
+    /// The returned [`ExecutionOutcome`] is bound to this VM instance and its
+    /// current state version. Commit it back to the same [`HPSVM`] before any
+    /// intervening state or config mutation. Otherwise
+    /// [`HPSVM::commit_transaction`] returns `ResanitizationNeeded`.
+    #[must_use = "call HPSVM::commit_transaction to apply the returned execution outcome"]
+    pub fn transact(&self, tx: impl Into<VersionedTransaction>) -> ExecutionOutcome {
+        self.transact_inner(tx.into())
+    }
 
-            TransactionResult::Ok(meta)
-        }
+    /// Commits a previously transacted execution outcome to this VM instance.
+    ///
+    /// Outcomes are valid only for the VM instance and state version that
+    /// produced them. If this VM mutated after [`HPSVM::transact`] created the
+    /// outcome, or if the outcome came from a different VM instance, this
+    /// returns `ResanitizationNeeded`.
+    pub fn commit_transaction(&mut self, outcome: ExecutionOutcome) -> TransactionResult {
+        commit_execution_outcome(self, outcome)
     }
 
     /// Plans a conflict-aware transaction batch without committing any state.
@@ -1640,36 +1782,8 @@ impl HPSVM {
         &self,
         tx: impl Into<VersionedTransaction>,
     ) -> Result<SimulatedTransactionInfo, FailedTransactionMetadata> {
-        let log_collector =
-            LogCollector { bytes_limit: self.log_bytes_limit, ..Default::default() };
-        let log_collector = Rc::new(RefCell::new(log_collector));
-        let ExecutionResult {
-            post_accounts,
-            tx_result,
-            signature,
-            compute_units_consumed,
-            inner_instructions,
-            return_data,
-            fee,
-            ..
-        } = if self.sigverify {
-            self.execute_transaction_readonly(tx.into(), log_collector.clone())
-        } else {
-            self.execute_transaction_no_verify_readonly(tx.into(), log_collector.clone())
-        };
-        let Ok(logs) = Rc::try_unwrap(log_collector).map(|lc| lc.into_inner().messages) else {
-            unreachable!("Log collector should not be used after simulate_transaction returns")
-        };
-        let meta = TransactionMetadata {
-            signature,
-            logs,
-            inner_instructions,
-            compute_units_consumed,
-            return_data,
-            fee,
-        };
-
-        if let Err(tx_err) = tx_result {
+        let ExecutionOutcome { meta, post_accounts, status, .. } = self.transact(tx);
+        if let Err(tx_err) = status {
             Err(FailedTransactionMetadata { err: tx_err, meta })
         } else {
             Ok(SimulatedTransactionInfo { meta, post_accounts })
@@ -1678,13 +1792,15 @@ impl HPSVM {
 
     /// Expires the current blockhash.
     pub fn expire_blockhash(&mut self) {
-        self.latest_blockhash = create_blockhash(&self.latest_blockhash.to_bytes());
+        self.block_env.latest_blockhash =
+            create_blockhash(&self.block_env.latest_blockhash.to_bytes());
         #[expect(deprecated)]
         self.set_sysvar_internal(&RecentBlockhashes::from_iter([IterItem(
             0,
-            &self.latest_blockhash,
-            self.fee_structure.lamports_per_signature,
+            &self.block_env.latest_blockhash,
+            self.cfg.fee_structure.lamports_per_signature,
         )]));
+        self.invalidate_execution_outcomes();
     }
 
     /// Warps the clock to the specified slot.
@@ -1692,21 +1808,22 @@ impl HPSVM {
         let mut clock = self.get_sysvar::<Clock>();
         clock.slot = slot;
         self.set_sysvar_internal(&clock);
+        self.invalidate_execution_outcomes();
     }
 
     /// Gets the current compute budget.
     pub const fn get_compute_budget(&self) -> Option<ComputeBudget> {
-        self.compute_budget
+        self.runtime_env.compute_budget
     }
 
     #[expect(missing_docs)]
     pub const fn get_sigverify(&self) -> bool {
-        self.sigverify
+        self.cfg.sigverify
     }
 
     #[cfg(feature = "internal-test")]
     pub fn get_feature_set(&self) -> Arc<FeatureSet> {
-        self.feature_set.clone().into()
+        self.cfg.feature_set.clone().into()
     }
 
     fn check_transaction_age(&self, tx: &SanitizedTransaction) -> Result<(), ExecutionResult> {
@@ -1719,10 +1836,10 @@ impl HPSVM {
         tx: &SanitizedTransaction,
     ) -> solana_transaction_error::TransactionResult<()> {
         let recent_blockhash = tx.message().recent_blockhash();
-        if recent_blockhash == &self.latest_blockhash ||
+        if recent_blockhash == &self.block_env.latest_blockhash ||
             self.check_transaction_for_nonce(
                 tx,
-                &DurableNonce::from_blockhash(&self.latest_blockhash),
+                &DurableNonce::from_blockhash(&self.block_env.latest_blockhash),
             )
         {
             Ok(())
@@ -1730,7 +1847,7 @@ impl HPSVM {
             log::error!(
                 "Blockhash {} not found. Expected blockhash {}",
                 recent_blockhash,
-                self.latest_blockhash
+                self.block_env.latest_blockhash
             );
             Err(TransactionError::BlockhashNotFound)
         }
@@ -1739,10 +1856,10 @@ impl HPSVM {
     fn check_message_for_nonce(&self, message: &SanitizedMessage) -> bool {
         message
             .get_durable_nonce()
-            .and_then(|nonce_address| self.accounts.get_account_ref(nonce_address))
+            .and_then(|nonce_address| self.accounts.get_account(nonce_address))
             .and_then(|nonce_account| {
                 solana_nonce_account::verify_nonce_account(
-                    nonce_account,
+                    &nonce_account,
                     message.recent_blockhash(),
                 )
             })
@@ -1768,6 +1885,7 @@ impl HPSVM {
         callback: C,
     ) {
         self.invocation_inspect_callback = Arc::new(callback);
+        self.invalidate_execution_outcomes();
     }
 
     /// Registers a custom syscall in both program runtime environments (v1 and v2).
@@ -1784,11 +1902,14 @@ impl HPSVM {
         name: &str,
         syscall: BuiltinFunction<InvokeContext<'static, 'static>>,
     ) -> Result<Self, HPSVMError> {
-        self.custom_syscalls
-            .push(CustomSyscallRegistration { name: name.to_owned(), function: syscall });
+        self.runtime_registry.register_custom_syscall(CustomSyscallRegistration {
+            name: name.to_owned(),
+            function: syscall,
+        });
 
         self.try_refresh_runtime_environments()?;
         self.accounts.rebuild_program_cache().map_err(HPSVMError::from)?;
+        self.invalidate_execution_outcomes();
 
         Ok(self)
     }
@@ -1812,9 +1933,11 @@ fn execution_result_if_context(
     result: Result<(), TransactionError>,
     compute_units_consumed: u64,
     fee: u64,
+    fee_payer: Option<Address>,
 ) -> ExecutionResult {
     let (signature, return_data, inner_instructions, post_accounts) =
         execute_tx_helper(sanitized_tx, ctx);
+    let fee_payer = fee_payer.filter(|_| result.is_err());
     ExecutionResult {
         tx_result: result,
         signature,
@@ -1824,7 +1947,117 @@ fn execution_result_if_context(
         return_data,
         included: true,
         fee,
+        fee_payer,
     }
+}
+
+fn execution_into_outcome(
+    vm: &HPSVM,
+    execution: ExecutionResult,
+    log_collector: Rc<RefCell<LogCollector>>,
+    method_name: &str,
+) -> ExecutionOutcome {
+    let ExecutionResult {
+        post_accounts,
+        tx_result,
+        signature,
+        compute_units_consumed,
+        inner_instructions,
+        return_data,
+        included,
+        fee,
+        fee_payer,
+    } = execution;
+    let Ok(logs) = Rc::try_unwrap(log_collector).map(|collector| collector.into_inner().messages)
+    else {
+        unreachable!("Log collector should not be used after {method_name} returns")
+    };
+
+    ExecutionOutcome {
+        meta: TransactionMetadata {
+            signature,
+            logs,
+            inner_instructions,
+            compute_units_consumed,
+            return_data,
+            fee,
+        },
+        post_accounts,
+        status: tx_result,
+        included,
+        origin_vm_instance_id: vm.instance_id,
+        origin_state_version: vm.state_version,
+        fee_payer,
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CommitDelta {
+    post_accounts: Vec<(Address, AccountSharedData)>,
+    history_entry: Option<(Signature, TransactionResult)>,
+}
+
+impl CommitDelta {
+    pub(crate) const fn new(
+        post_accounts: Vec<(Address, AccountSharedData)>,
+        history_entry: Option<(Signature, TransactionResult)>,
+    ) -> Self {
+        Self { post_accounts, history_entry }
+    }
+
+    pub(crate) const fn mutates_state(&self) -> bool {
+        !self.post_accounts.is_empty() || self.history_entry.is_some()
+    }
+}
+
+pub(crate) fn apply_commit_delta(
+    accounts: &mut AccountsDb,
+    history: &mut TransactionHistory,
+    delta: CommitDelta,
+) -> Result<(), HPSVMError> {
+    accounts.sync_accounts(delta.post_accounts)?;
+    if let Some((signature, entry)) = delta.history_entry {
+        history.add_new_transaction(signature, entry);
+    }
+    Ok(())
+}
+
+pub(crate) fn outcome_into_result_and_delta(
+    outcome: ExecutionOutcome,
+) -> (TransactionResult, CommitDelta) {
+    let ExecutionOutcome { meta, post_accounts, status, included, .. } = outcome;
+    let result = match status {
+        Ok(()) => TransactionResult::Ok(meta.clone()),
+        Err(err) => TransactionResult::Err(FailedTransactionMetadata { err, meta: meta.clone() }),
+    };
+    let delta = if included {
+        CommitDelta::new(post_accounts, Some((meta.signature, result.clone())))
+    } else {
+        CommitDelta::new(Vec::new(), None)
+    };
+    (result, delta)
+}
+
+fn commit_execution_outcome(vm: &mut HPSVM, outcome: ExecutionOutcome) -> TransactionResult {
+    let origin_vm_instance_id = outcome.origin_vm_instance_id;
+    let origin_state_version = outcome.origin_state_version;
+
+    if origin_vm_instance_id != vm.instance_id || origin_state_version != vm.state_version {
+        return TransactionResult::Err(FailedTransactionMetadata {
+            err: TransactionError::ResanitizationNeeded,
+            meta: outcome.meta,
+        });
+    }
+
+    let (result, delta) = outcome_into_result_and_delta(outcome);
+    let mutates_state = delta.mutates_state();
+
+    apply_commit_delta(&mut vm.accounts, &mut vm.history, delta)
+        .expect("It shouldn't be possible to write invalid sysvars in send_transaction.");
+    if mutates_state {
+        vm.invalidate_execution_outcomes();
+    }
+    result
 }
 
 fn execute_tx_helper(
@@ -1866,7 +2099,7 @@ fn get_compute_budget_limits(
 
 /// Get the max number of accounts that a transaction may lock in this block
 fn get_transaction_account_lock_limit(svm: &HPSVM) -> usize {
-    if svm.feature_set.is_active(&agave_feature_set::increase_tx_account_lock_limit::id()) {
+    if svm.cfg.feature_set.is_active(&agave_feature_set::increase_tx_account_lock_limit::id()) {
         MAX_TX_ACCOUNT_LOCKS
     } else {
         64
@@ -1937,6 +2170,21 @@ where
     match res {
         Ok(s_tx) => op(s_tx),
         Err(e) => e,
+    }
+}
+
+impl HPSVM {
+    fn transact_inner(&self, tx: VersionedTransaction) -> ExecutionOutcome {
+        let log_collector = Rc::new(RefCell::new(LogCollector {
+            bytes_limit: self.runtime_env.log_bytes_limit,
+            ..Default::default()
+        }));
+        let execution = if self.cfg.sigverify {
+            self.execute_transaction_readonly(tx, log_collector.clone())
+        } else {
+            self.execute_transaction_no_verify_readonly(tx, log_collector.clone())
+        };
+        execution_into_outcome(self, execution, log_collector, "transact")
     }
 }
 

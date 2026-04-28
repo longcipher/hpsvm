@@ -20,7 +20,7 @@ pub(crate) const DEFAULT_PROGRAM_IDS: [Address; 8] = [
 pub(crate) fn load_default_programs(svm: &mut HPSVM) {
     // if replace spl-token with p-token feature is enabled, the SPL token contract is loaded from
     // a different .so
-    if svm.feature_set.is_active(&replace_spl_token_with_p_token::id()) {
+    if svm.cfg.feature_set.is_active(&replace_spl_token_with_p_token::id()) {
         svm.add_program_preverified(
             address!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
             include_bytes!("../../elf/pinocchio_token_program.so"),

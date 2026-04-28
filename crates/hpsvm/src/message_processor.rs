@@ -6,12 +6,15 @@ use solana_svm_transaction::svm_message::SVMMessage;
 use solana_transaction_context::IndexOfAccount;
 use solana_transaction_error::TransactionError;
 
+use crate::HPSVM;
+
 /// Process a message.
 /// This method calls each instruction in the message over the set of loaded accounts.
 /// For each instruction it calls the program entrypoint method and verifies that the result of
 /// the call does not violate the bank's accounting rules.
 /// The accounts are committed back to the bank only if every instruction succeeds.
 pub(crate) fn process_message<'ix_data>(
+    svm: &HPSVM,
     message: &'ix_data impl SVMMessage,
     program_indices: &[IndexOfAccount],
     invoke_context: &mut InvokeContext<'_, 'ix_data>,
@@ -32,6 +35,8 @@ pub(crate) fn process_message<'ix_data>(
             .map_err(|err| {
                 TransactionError::InstructionError(top_level_instruction_index as u8, err)
             })?;
+
+        svm.on_instruction(top_level_instruction_index, program_id);
 
         let mut compute_units_consumed = 0;
         let result = if invoke_context.is_precompile(program_id) {

@@ -1,4 +1,4 @@
-//! this code is taken from https://github.com/anza-xyz/agave/blob/master/svm/src/rent_calculator.rs
+//! This code is taken from <https://github.com/anza-xyz/agave/blob/master/svm/src/rent_calculator.rs>.
 //! Commit 6fbbaf67837e2dc973822be9e1c20e1fed58e8eb
 use solana_address::Address;
 use solana_rent::Rent;

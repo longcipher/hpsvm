@@ -39,6 +39,12 @@ Add `hpsvm` as a development dependency to your Solana program project:
 cargo add --dev hpsvm
 ```
 
+To read through live RPC state while keeping execution local, add the companion crate as well:
+
+```sh
+cargo add --dev hpsvm-fork-rpc
+```
+
 ### 🤖 Quick Example
 
 Here's a minimal example that demonstrates creating a test environment, airdropping SOL, and executing a transfer transaction:
@@ -86,6 +92,92 @@ assert_eq!(to_account.lamports, 64);
 ### 📖 Usage
 
 For more advanced usage, including custom configurations, program deployment, and complex transaction scenarios, see the [full documentation](https://docs.rs/hpsvm).
+
+### Architecture Highlights
+
+`hpsvm` keeps the `HPSVM` facade stable while exposing a few sharper seams for advanced test harnesses:
+
+- `transact` computes an `ExecutionOutcome` without mutating the VM, and `commit_transaction` applies it explicitly when you want to persist the result.
+- `with_account_source` lets the VM read missing accounts from an external source while keeping local writes in the in-memory overlay.
+- `block_env` exposes the current blockhash and slot snapshot, and `with_inspector` installs lightweight top-level execution observers.
+
+```rust
+use hpsvm::HPSVM;
+use solana_address::Address;
+use solana_keypair::Keypair;
+use solana_message::Message;
+use solana_signer::Signer;
+use solana_system_interface::instruction::transfer;
+use solana_transaction::Transaction;
+
+let mut svm = HPSVM::new();
+let payer = Keypair::new();
+let recipient = Address::new_unique();
+
+svm.airdrop(&payer.pubkey(), 10_000).unwrap();
+
+let tx = Transaction::new(
+    &[&payer],
+    Message::new(&[transfer(&payer.pubkey(), &recipient, 64)], Some(&payer.pubkey())),
+    svm.latest_blockhash(),
+);
+
+let outcome = svm.transact(tx);
+assert!(outcome.status().is_ok());
+assert_eq!(svm.get_balance(&recipient), None);
+
+let commit = svm.commit_transaction(outcome);
+assert!(commit.is_ok());
+assert_eq!(svm.get_balance(&recipient), Some(64));
+assert_eq!(svm.block_env().latest_blockhash, svm.latest_blockhash());
+```
+
+### Forking RPC State
+
+`hpsvm` can read missing accounts through a configured account source. The `hpsvm-fork-rpc` companion crate provides an RPC-backed source with a local cache:
+
+```rust
+use hpsvm::HPSVM;
+use hpsvm_fork_rpc::RpcForkSource;
+
+let source = RpcForkSource::builder()
+    .with_rpc_url("http://127.0.0.1:8899")
+    .with_slot(1)
+    .build();
+
+let svm = HPSVM::default().with_account_source(source);
+```
+
+### Top-Level Instruction Inspection
+
+Use `with_inspector` when you need lightweight transaction observation without reaching into the lower-level invocation callback APIs:
+
+```rust
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
+
+use hpsvm::{HPSVM, Inspector};
+use solana_address::Address;
+
+#[derive(Default)]
+struct CountingInspector {
+    seen: Arc<AtomicUsize>,
+}
+
+impl Inspector for CountingInspector {
+    fn on_instruction(&self, _svm: &HPSVM, _index: usize, _program_id: &Address) {
+        self.seen.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+let inspector = CountingInspector::default();
+let observed = Arc::clone(&inspector.seen);
+let _svm = HPSVM::new().with_inspector(inspector);
+
+assert_eq!(observed.load(Ordering::SeqCst), 0);
+```
 
 ## 🛠️ Developing hpsvm
 

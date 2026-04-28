@@ -1,0 +1,18 @@
+[package]
+name = "hpsvm-fork-rpc"
+description = "RPC-backed account source for hpsvm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+hpsvm.workspace = true
+parking_lot.workspace = true
+solana-account.workspace = true
+solana-address.workspace = true
+solana-rpc-client.workspace = true
+solana-rpc-client-api.workspace = true
+
+[lints]
+workspace = true

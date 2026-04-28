@@ -1,16 +1,14 @@
 use std::{collections::HashSet, thread};
 
-use solana_account::AccountSharedData;
 use solana_address::Address;
 use solana_message::VersionedMessage;
-use solana_signature::Signature;
 use solana_transaction::{sanitized::SanitizedTransaction, versioned::VersionedTransaction};
 use solana_transaction_error::TransactionError;
 use thiserror::Error;
 
 use crate::{
-    HPSVM, accounts_db::AccountsDb, error::HPSVMError, history::TransactionHistory,
-    types::TransactionResult,
+    CommitDelta, HPSVM, accounts_db::AccountsDb, apply_commit_delta, history::TransactionHistory,
+    next_vm_instance_id, outcome_into_result_and_delta, types::TransactionResult,
 };
 
 /// A conflict-free stage in a transaction batch plan.
@@ -81,34 +79,6 @@ impl BatchExecutionSnapshot {
     }
 }
 
-#[derive(Debug, Clone)]
-struct BatchExecutionDelta {
-    post_accounts: Vec<(Address, AccountSharedData)>,
-    history_entry: Option<(Signature, TransactionResult)>,
-}
-
-impl BatchExecutionDelta {
-    fn new(
-        post_accounts: Vec<(Address, AccountSharedData)>,
-        history_entry: Option<(Signature, TransactionResult)>,
-    ) -> Self {
-        Self { post_accounts, history_entry }
-    }
-
-    #[cfg(test)]
-    fn merge_into(&self, runtime: &mut HpsvmRuntimeState) -> Result<(), HPSVMError> {
-        apply_post_accounts(&mut runtime.accounts, &self.post_accounts)?;
-        apply_history_entry(&mut runtime.history, &self.history_entry);
-        Ok(())
-    }
-
-    fn merge_into_vm(&self, vm: &mut HPSVM) -> Result<(), HPSVMError> {
-        apply_post_accounts(&mut vm.accounts, &self.post_accounts)?;
-        apply_history_entry(&mut vm.history, &self.history_entry);
-        Ok(())
-    }
-}
-
 pub(crate) fn plan_transaction_batch(
     vm: &HPSVM,
     txs: &[VersionedTransaction],
@@ -159,10 +129,12 @@ pub(crate) fn send_transaction_batch(
         stage_results.sort_by_key(|result| result.index);
 
         for stage_result in stage_results {
-            stage_result
-                .delta
-                .merge_into_vm(vm)
+            let mutates_state = stage_result.delta.mutates_state();
+            apply_commit_delta(&mut vm.accounts, &mut vm.history, stage_result.delta)
                 .expect("batch stage merge should only apply valid account states");
+            if mutates_state {
+                vm.invalidate_execution_outcomes();
+            }
             results[stage_result.index] = Some(stage_result.result);
         }
     }
@@ -178,7 +150,7 @@ fn sanitize_transaction_for_batch(
     vm: &HPSVM,
     tx: VersionedTransaction,
 ) -> Result<SanitizedTransaction, TransactionError> {
-    if vm.sigverify {
+    if vm.cfg.sigverify {
         vm.sanitize_transaction_inner(tx)
     } else {
         vm.sanitize_transaction_no_verify_inner(tx)
@@ -211,41 +183,22 @@ fn execute_transaction_batch_stage(
     })
 }
 
-fn apply_post_accounts(
-    accounts: &mut AccountsDb,
-    post_accounts: &[(Address, AccountSharedData)],
-) -> Result<(), HPSVMError> {
-    accounts.sync_accounts(post_accounts.to_vec())
-}
-
-fn apply_history_entry(
-    history: &mut TransactionHistory,
-    history_entry: &Option<(Signature, TransactionResult)>,
-) {
-    if let Some((signature, entry)) = history_entry {
-        history.add_new_transaction(*signature, entry.clone());
-    }
-}
-
 fn worker_vm(vm: &HPSVM, runtime: HpsvmRuntimeState) -> HPSVM {
     HPSVM {
         accounts: runtime.accounts,
         airdrop_kp: vm.airdrop_kp,
         builtins_loaded: vm.builtins_loaded,
-        custom_syscalls: vm.custom_syscalls.clone(),
         default_programs_loaded: vm.default_programs_loaded,
-        feature_set: vm.feature_set.clone(),
+        cfg: vm.cfg.clone(),
         feature_accounts_loaded: vm.feature_accounts_loaded,
+        inspector: vm.inspector.clone(),
         reserved_account_keys: vm.reserved_account_keys.clone(),
-        latest_blockhash: vm.latest_blockhash,
+        runtime_registry: vm.runtime_registry.clone(),
+        instance_id: next_vm_instance_id(),
+        state_version: vm.state_version,
+        block_env: vm.block_env,
         history: runtime.history,
-        compute_budget: vm.compute_budget,
-        sigverify: vm.sigverify,
-        blockhash_check: vm.blockhash_check,
-        fee_structure: vm.fee_structure.clone(),
-        log_bytes_limit: vm.log_bytes_limit,
-        #[cfg(feature = "precompiles")]
-        precompiles_loaded: vm.precompiles_loaded,
+        runtime_env: vm.runtime_env,
         sysvars_loaded: vm.sysvars_loaded,
         #[cfg(feature = "invocation-inspect-callback")]
         invocation_inspect_callback: vm.invocation_inspect_callback.clone(),
@@ -263,7 +216,7 @@ struct ScheduledTransactionBatchStage {
 struct BatchStageResult {
     index: usize,
     result: TransactionResult,
-    delta: BatchExecutionDelta,
+    delta: CommitDelta,
 }
 
 impl BatchStageResult {
@@ -273,39 +226,10 @@ impl BatchStageResult {
         snapshot: BatchExecutionSnapshot,
         tx: VersionedTransaction,
     ) -> Self {
-        let mut local = worker_vm(vm, snapshot.runtime);
-        let sanitized = sanitize_transaction_for_batch(&local, tx.clone())
-            .expect("planned batch transaction should remain sanitizable during execution");
-        let signature = *sanitized.signature();
-        let had_history_entry = local.history.get_transaction(&signature).is_some();
-        let writable_accounts = sanitized
-            .message()
-            .account_keys()
-            .iter()
-            .enumerate()
-            .filter_map(|(account_index, key)| {
-                sanitized
-                    .message()
-                    .is_writable(account_index)
-                    .then_some((*key, local.accounts.get_account(key)))
-            })
-            .collect::<Vec<_>>();
+        let local = worker_vm(vm, snapshot.runtime);
+        let (result, delta) = outcome_into_result_and_delta(local.transact(tx));
 
-        let result = local.send_transaction(tx);
-        let history_entry = if had_history_entry {
-            None
-        } else {
-            local.history.get_transaction(&signature).cloned().map(|entry| (signature, entry))
-        };
-        let post_accounts = writable_accounts
-            .into_iter()
-            .filter_map(|(address, before)| {
-                let after = local.accounts.get_account(&address);
-                (before != after).then_some((address, after.unwrap_or_default()))
-            })
-            .collect();
-
-        Self { index, result, delta: BatchExecutionDelta::new(post_accounts, history_entry) }
+        Self { index, result, delta }
     }
 }
 
@@ -348,15 +272,26 @@ impl TransactionLockSet {
 
 #[cfg(test)]
 mod tests {
-    use solana_account::{AccountSharedData, WritableAccount};
+    use solana_account::{Account, AccountSharedData, WritableAccount};
     use solana_address::Address;
+    use solana_address_lookup_table_interface::instruction::{
+        create_lookup_table, extend_lookup_table,
+    };
+    use solana_keypair::Keypair;
+    use solana_message::{
+        AddressLookupTableAccount, Message, VersionedMessage, v0::Message as MessageV0,
+    };
     use solana_signature::Signature;
+    use solana_signer::Signer;
+    use solana_system_interface::instruction::transfer;
+    use solana_transaction::{Transaction, versioned::VersionedTransaction};
+    use solana_transaction_error::TransactionError;
 
     use super::*;
-    use crate::types::TransactionMetadata;
+    use crate::{CommitDelta, HPSVM, apply_commit_delta, types::TransactionMetadata};
 
     #[test]
-    fn batch_execution_delta_merges_runtime_updates() {
+    fn commit_delta_merges_runtime_updates() {
         let address = Address::new_unique();
         let signature = Signature::default();
         let mut runtime = HpsvmRuntimeState::default();
@@ -371,14 +306,72 @@ mod tests {
             fee: 5000,
             ..Default::default()
         });
-        let delta = BatchExecutionDelta::new(
+        let delta = CommitDelta::new(
             vec![(address, after.clone())],
             Some((signature, history_entry.clone())),
         );
 
-        delta.merge_into(&mut runtime).expect("batch delta merge should apply valid state");
+        apply_commit_delta(&mut runtime.accounts, &mut runtime.history, delta)
+            .expect("commit delta merge should apply valid state");
 
         assert_eq!(runtime.accounts.get_account(&address), Some(after));
         assert_eq!(runtime.history.get_transaction(&signature), Some(&history_entry));
+    }
+
+    #[test]
+    fn batch_stage_result_returns_transaction_error_when_lookup_table_becomes_unsanitizable() {
+        let mut svm = HPSVM::new();
+        let authority = Keypair::new();
+        let lookup_user = Keypair::new();
+        let authority_pk = authority.pubkey();
+        let lookup_user_pk = lookup_user.pubkey();
+        let recipient = Address::new_unique();
+
+        svm.airdrop(&authority_pk, 1_000_000_000).unwrap();
+        svm.airdrop(&lookup_user_pk, 1_000_000_000).unwrap();
+
+        let setup_blockhash = svm.latest_blockhash();
+        let (create_lookup_ix, lookup_table_address) =
+            create_lookup_table(authority_pk, authority_pk, 0);
+        let extend_lookup_ix = extend_lookup_table(
+            lookup_table_address,
+            authority_pk,
+            Some(authority_pk),
+            vec![recipient],
+        );
+        let setup_lookup_tx = Transaction::new(
+            &[&authority],
+            Message::new(&[create_lookup_ix, extend_lookup_ix], Some(&authority_pk)),
+            setup_blockhash,
+        );
+        svm.send_transaction(setup_lookup_tx).unwrap();
+        svm.warp_to_slot(1);
+
+        let stage_blockhash = svm.latest_blockhash();
+        let lookup_table =
+            AddressLookupTableAccount { key: lookup_table_address, addresses: vec![recipient] };
+        let lookup_message = MessageV0::try_compile(
+            &lookup_user_pk,
+            &[transfer(&lookup_user_pk, &recipient, 1)],
+            &[lookup_table],
+            stage_blockhash,
+        )
+        .unwrap();
+        let lookup_tx =
+            VersionedTransaction::try_new(VersionedMessage::V0(lookup_message), &[&lookup_user])
+                .unwrap();
+
+        assert!(sanitize_transaction_for_batch(&svm, lookup_tx.clone()).is_ok());
+
+        svm.set_account(lookup_table_address, Account::default()).unwrap();
+
+        let stage_result =
+            BatchStageResult::new(1, &svm, BatchExecutionSnapshot::from_vm(&svm), lookup_tx);
+
+        assert_eq!(
+            stage_result.result.unwrap_err().err,
+            TransactionError::AddressLookupTableNotFound
+        );
+        assert!(!stage_result.delta.mutates_state());
     }
 }

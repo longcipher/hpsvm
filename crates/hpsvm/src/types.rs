@@ -29,6 +29,55 @@ impl TransactionMetadata {
     }
 }
 
+/// Result of [`crate::HPSVM::transact`].
+///
+/// Each outcome is tied to the VM instance and state version that produced it.
+/// [`crate::HPSVM::commit_transaction`] only accepts outcomes from that same
+/// instance before any intervening state or config mutation. Otherwise commit
+/// returns `ResanitizationNeeded`.
+///
+/// The provenance fields stay internal and are skipped from serialization, so
+/// serialized outcomes are observational only and cannot be committed on a
+/// foreign or later-mutated VM.
+#[must_use = "call HPSVM::commit_transaction to apply this outcome to the VM"]
+#[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct ExecutionOutcome {
+    pub(crate) meta: TransactionMetadata,
+    pub(crate) post_accounts: Vec<(Address, AccountSharedData)>,
+    pub(crate) status: Result<()>,
+    pub(crate) included: bool,
+    #[cfg_attr(feature = "serde", serde(skip_serializing))]
+    pub(crate) origin_vm_instance_id: u64,
+    #[cfg_attr(feature = "serde", serde(skip_serializing))]
+    pub(crate) origin_state_version: u64,
+    #[cfg_attr(feature = "serde", serde(skip_serializing, skip_deserializing))]
+    pub(crate) fee_payer: Option<Address>,
+}
+
+impl ExecutionOutcome {
+    /// Returns the transaction metadata captured during execution.
+    pub fn meta(&self) -> &TransactionMetadata {
+        &self.meta
+    }
+
+    /// Returns the writable post-execution account snapshot captured by `transact`.
+    pub fn post_accounts(&self) -> &[(Address, AccountSharedData)] {
+        &self.post_accounts
+    }
+
+    /// Returns the execution status that `commit_transaction` will commit if
+    /// the outcome provenance still matches the target VM.
+    pub fn status(&self) -> &Result<()> {
+        &self.status
+    }
+
+    /// Returns whether this outcome is eligible for commit-time side effects.
+    pub fn included(&self) -> bool {
+        self.included
+    }
+}
+
 #[expect(missing_docs)]
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -74,6 +123,7 @@ pub(crate) struct ExecutionResult {
     /// Whether the transaction can be included in a block
     pub(crate) included: bool,
     pub(crate) fee: u64,
+    pub(crate) fee_payer: Option<Address>,
 }
 
 impl Default for ExecutionResult {
@@ -87,6 +137,7 @@ impl Default for ExecutionResult {
             return_data: Default::default(),
             included: false,
             fee: 0,
+            fee_payer: None,
         }
     }
 }
