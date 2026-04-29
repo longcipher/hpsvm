@@ -1,0 +1,13 @@
+{
+  "type": "criterion_report",
+  "benchmark_group": "max_perf",
+  "benchmarks": [
+    {
+      "name": "max_perf_hpsvm",
+      "mean_ns": 4007456.476753968,
+      "median_ns": 3890076.3666666667,
+      "slope_ns": 3983216.6264935066,
+      "std_dev_ns": 312072.2137870869
+    }
+  ]
+}

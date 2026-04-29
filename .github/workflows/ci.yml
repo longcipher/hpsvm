@@ -50,3 +50,18 @@ jobs:
 
       - name: CI
         run: just ci
+
+      - name: Run hotpath benchmark baselines
+        run: just bench-hotpath
+
+      - name: Compare hotpath output against baseline
+        run: just bench-baseline-compare
+
+      - name: Upload hotpath benchmark artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hotpath-benchmarks
+          path: |
+            target/hotpath/*.json
+            target/hotpath/summary.md

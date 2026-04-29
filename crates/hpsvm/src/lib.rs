@@ -365,6 +365,21 @@ pub(crate) struct CustomSyscallRegistration {
     function: BuiltinFunction<InvokeContext<'static, 'static>>,
 }
 
+macro_rules! hotpath_block {
+    ($label:literal, $expr:expr) => {{
+        #[cfg(feature = "hotpath")]
+        {
+            hotpath::measure_block!($label, $expr)
+        }
+        #[cfg(not(feature = "hotpath"))]
+        {
+            $expr
+        }
+    }};
+}
+
+pub(crate) use hotpath_block;
+
 #[expect(missing_docs)]
 pub mod batch;
 #[expect(missing_docs)]
@@ -547,6 +562,7 @@ impl HPSVM {
     }
 
     /// Creates the basic test environment.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn new() -> Self {
         Self::builder()
             .with_program_test_defaults()
@@ -905,6 +921,7 @@ impl HPSVM {
     }
 
     /// Returns all information associated with the account of the provided pubkey.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn get_account(&self, address: &Address) -> Option<Account> {
         self.accounts.get_account(address).map(Into::into)
     }
@@ -919,6 +936,7 @@ impl HPSVM {
     /// transactions. Prefer [`airdrop`](HPSVM::airdrop) or
     /// [`send_transaction`](HPSVM::send_transaction) when you want a
     /// protocol-consistent state transition.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn set_account(&mut self, address: Address, data: Account) -> Result<(), HPSVMError> {
         self.accounts.add_account(address, data.into())?;
         self.sync_block_env_slot();
@@ -1031,6 +1049,7 @@ impl HPSVM {
     ///
     /// Unlike [`set_account`](HPSVM::set_account), this goes through the normal
     /// execution pipeline instead of mutating balances directly.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn airdrop(&mut self, address: &Address, lamports: u64) -> TransactionResult {
         let payer =
             Keypair::try_from(self.airdrop_kp.as_slice()).expect("airdrop keypair should be valid");
@@ -1067,6 +1086,7 @@ impl HPSVM {
     }
 
     /// Adds an SBF program to the test environment from the file specified.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn add_program_from_file(
         &mut self,
         program_id: impl Into<Address>,
@@ -1077,6 +1097,7 @@ impl HPSVM {
         Ok(())
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     fn add_program_internal<const PREVERIFIED: bool>(
         &mut self,
         program_id: impl Into<Address>,
@@ -1152,6 +1173,7 @@ impl HPSVM {
     /// Adds an SBF program to the test environment.
     ///
     /// Uses `BPFLoaderUpgradeable` by default for the loader.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn add_program(
         &mut self,
         program_id: impl Into<Address>,
@@ -1204,6 +1226,7 @@ impl HPSVM {
         )
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     fn sanitize_transaction_no_verify_inner(
         &self,
         tx: VersionedTransaction,
@@ -1236,6 +1259,7 @@ impl HPSVM {
             .map_err(|err| ExecutionResult { tx_result: Err(err), ..Default::default() })
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     fn sanitize_transaction_inner(
         &self,
         tx: VersionedTransaction,
@@ -1251,6 +1275,7 @@ impl HPSVM {
         Ok(tx)
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     fn process_transaction<'a, 'b>(
         &'a self,
         tx: &'b SanitizedTransaction,
@@ -1260,71 +1285,80 @@ impl HPSVM {
     where
         'a: 'b,
     {
-        let compute_budget = self.runtime_env.compute_budget.unwrap_or_else(|| ComputeBudget {
-            compute_unit_limit: u64::from(compute_budget_limits.compute_unit_limit),
-            heap_size: compute_budget_limits.updated_heap_bytes,
-            ..ComputeBudget::new_with_defaults(
-                self.cfg.feature_set.is_active(&raise_cpi_nesting_limit_to_8::ID),
-                self.cfg.feature_set.is_active(&increase_cpi_account_info_limit::ID),
-            )
+        let compute_budget = hotpath_block!("hpsvm::process_transaction::compute_budget", {
+            self.runtime_env.compute_budget.unwrap_or_else(|| ComputeBudget {
+                compute_unit_limit: u64::from(compute_budget_limits.compute_unit_limit),
+                heap_size: compute_budget_limits.updated_heap_bytes,
+                ..ComputeBudget::new_with_defaults(
+                    self.cfg.feature_set.is_active(&raise_cpi_nesting_limit_to_8::ID),
+                    self.cfg.feature_set.is_active(&increase_cpi_account_info_limit::ID),
+                )
+            })
         });
-        let rent = self
-            .accounts
-            .sysvar_cache()
-            .get_rent()
-            .expect("rent sysvar should always be available");
+        let rent = hotpath_block!("hpsvm::process_transaction::load_rent", {
+            self.accounts.sysvar_cache().get_rent().expect("rent sysvar should always be available")
+        });
         let message = tx.message();
         let blockhash = message.recent_blockhash();
         // reload program cache
-        let mut program_cache_for_tx_batch = self.accounts.cloned_programs_cache();
+        let mut program_cache_for_tx_batch = hotpath_block!(
+            "hpsvm::process_transaction::clone_program_cache",
+            self.accounts.cloned_programs_cache()
+        );
         let mut accumulated_consume_units = 0;
         let account_keys = message.account_keys();
         let prioritization_fee = compute_budget_limits.get_prioritization_fee();
-        let fee = solana_fee::calculate_fee(
-            message,
-            false,
-            self.cfg.fee_structure.lamports_per_signature,
-            prioritization_fee,
-            FeeFeatures::from(&self.cfg.feature_set),
-        );
+        let fee = hotpath_block!("hpsvm::process_transaction::calculate_fee", {
+            solana_fee::calculate_fee(
+                message,
+                false,
+                self.cfg.fee_structure.lamports_per_signature,
+                prioritization_fee,
+                FeeFeatures::from(&self.cfg.feature_set),
+            )
+        });
         let mut validated_fee_payer = false;
         let mut payer_key = None;
-        let maybe_accounts = account_keys
-            .iter()
-            .enumerate()
-            .map(|(i, key)| {
-                let account = if solana_sdk_ids::sysvar::instructions::check_id(key) {
-                    construct_instructions_account(message)
-                } else {
-                    let is_instruction_account = message.is_instruction_account(i);
-                    let mut account = if !is_instruction_account &&
-                        !message.is_writable(i) &&
-                        self.accounts.has_program_cache_entry(key)
-                    {
-                        // Optimization to skip loading of accounts which are only used as
-                        // programs in top-level instructions and not passed as instruction
-                        // accounts.
-                        self.accounts
-                            .get_account(key)
-                            .expect("account should exist during processing")
+        let maybe_accounts = hotpath_block!("hpsvm::process_transaction::load_accounts", {
+            account_keys
+                .iter()
+                .enumerate()
+                .map(|(i, key)| {
+                    let account = if solana_sdk_ids::sysvar::instructions::check_id(key) {
+                        construct_instructions_account(message)
                     } else {
-                        self.accounts.get_account(key).unwrap_or_else(|| {
-                            let mut default_account = AccountSharedData::default();
-                            default_account.set_rent_epoch(0);
-                            default_account
-                        })
-                    };
+                        let is_instruction_account = message.is_instruction_account(i);
+                        let mut account = if !is_instruction_account &&
+                            !message.is_writable(i) &&
+                            self.accounts.has_program_cache_entry(key)
+                        {
+                            // Optimization to skip loading of accounts which are only used as
+                            // programs in top-level instructions and not passed as instruction
+                            // accounts.
+                            self.accounts
+                                .get_account(key)
+                                .expect("account should exist during processing")
+                        } else {
+                            self.accounts.get_account(key).unwrap_or_else(|| {
+                                let mut default_account = AccountSharedData::default();
+                                default_account.set_rent_epoch(0);
+                                default_account
+                            })
+                        };
 
-                    if !validated_fee_payer && (!message.is_invoked(i) || is_instruction_account) {
-                        validate_fee_payer(key, &mut account, i as IndexOfAccount, &rent, fee)?;
-                        validated_fee_payer = true;
-                        payer_key = Some(*key);
-                    }
-                    account
-                };
-                Ok((*key, account))
-            })
-            .collect::<solana_transaction_error::TransactionResult<Vec<_>>>();
+                        if !validated_fee_payer &&
+                            (!message.is_invoked(i) || is_instruction_account)
+                        {
+                            validate_fee_payer(key, &mut account, i as IndexOfAccount, &rent, fee)?;
+                            validated_fee_payer = true;
+                            payer_key = Some(*key);
+                        }
+                        account
+                    };
+                    Ok((*key, account))
+                })
+                .collect::<solana_transaction_error::TransactionResult<Vec<_>>>()
+        });
         let mut accounts = match maybe_accounts {
             Ok(accs) => accs,
             Err(e) => {
@@ -1342,79 +1376,95 @@ impl HPSVM {
             );
         }
         let builtins_start_index = accounts.len();
-        let maybe_program_indices = tx
-            .message()
-            .instructions()
-            .iter()
-            .map(|c| {
-                let program_index = c.program_id_index as usize;
-                // This may never error, because the transaction is sanitized
-                let (program_id, program_account) =
-                    accounts.get(program_index).expect("program account should exist");
-                if native_loader::check_id(program_id) {
-                    return Ok(program_index as IndexOfAccount);
-                }
-                if !program_account.executable() {
-                    error!("Program account {program_id} is not executable.");
-                    return Err(TransactionError::InvalidProgramForExecution);
-                }
-
-                let owner_id = program_account.owner();
-                if native_loader::check_id(owner_id) {
-                    return Ok(program_index as IndexOfAccount);
-                }
-
-                if !accounts
-                    .get(builtins_start_index..)
-                    .ok_or(TransactionError::ProgramAccountNotFound)?
+        let maybe_program_indices = hotpath_block!(
+            "hpsvm::process_transaction::resolve_program_indices",
+            {
+                tx.message()
+                    .instructions()
                     .iter()
-                    .any(|(key, _)| key == owner_id)
-                {
-                    let owner_account =
-                        self.accounts.get_account(owner_id).expect("owner account should exist");
-                    if !native_loader::check_id(owner_account.owner()) {
-                        error!(
-                            "Owner account {owner_id} is not owned by the native loader program."
-                        );
-                        return Err(TransactionError::InvalidProgramForExecution);
-                    }
-                    if !owner_account.executable() {
-                        error!("Owner account {owner_id} is not executable");
-                        return Err(TransactionError::InvalidProgramForExecution);
-                    }
-                    // Add program_id to the stuff
-                    accounts.push((*owner_id, owner_account));
-                }
-                Ok(program_index as IndexOfAccount)
-            })
-            .collect::<Result<Vec<u16>, TransactionError>>();
+                    .map(|c| {
+                        let program_index = c.program_id_index as usize;
+                        // This may never error, because the transaction is sanitized
+                        let (program_id, program_account) =
+                            accounts.get(program_index).expect("program account should exist");
+                        if native_loader::check_id(program_id) {
+                            return Ok(program_index as IndexOfAccount);
+                        }
+                        if !program_account.executable() {
+                            error!("Program account {program_id} is not executable.");
+                            return Err(TransactionError::InvalidProgramForExecution);
+                        }
+
+                        let owner_id = program_account.owner();
+                        if native_loader::check_id(owner_id) {
+                            return Ok(program_index as IndexOfAccount);
+                        }
+
+                        if !accounts
+                            .get(builtins_start_index..)
+                            .ok_or(TransactionError::ProgramAccountNotFound)?
+                            .iter()
+                            .any(|(key, _)| key == owner_id)
+                        {
+                            let owner_account = self
+                                .accounts
+                                .get_account(owner_id)
+                                .expect("owner account should exist");
+                            if !native_loader::check_id(owner_account.owner()) {
+                                error!(
+                                    "Owner account {owner_id} is not owned by the native loader program."
+                                );
+                                return Err(TransactionError::InvalidProgramForExecution);
+                            }
+                            if !owner_account.executable() {
+                                error!("Owner account {owner_id} is not executable");
+                                return Err(TransactionError::InvalidProgramForExecution);
+                            }
+                            // Add program_id to the stuff
+                            accounts.push((*owner_id, owner_account));
+                        }
+                        Ok(program_index as IndexOfAccount)
+                    })
+                    .collect::<Result<Vec<u16>, TransactionError>>()
+            }
+        );
 
         match maybe_program_indices {
             Ok(program_indices) => {
-                let mut context = self.create_transaction_context(compute_budget, accounts);
+                let mut context = hotpath_block!(
+                    "hpsvm::process_transaction::create_transaction_context",
+                    self.create_transaction_context(compute_budget, accounts)
+                );
 
                 // Check rent before creating invoke context
-                if let Err(err) = self.check_accounts_rent(tx, &context, &rent) {
+                let rent_check = hotpath_block!(
+                    "hpsvm::process_transaction::check_accounts_rent",
+                    self.check_accounts_rent(tx, &context, &rent)
+                );
+                if let Err(err) = rent_check {
                     return (Err(err), accumulated_consume_units, None, fee, None);
                 }
 
                 let feature_set = self.cfg.feature_set.runtime_features();
-                let mut invoke_context = InvokeContext::new(
-                    &mut context,
-                    &mut program_cache_for_tx_batch,
-                    EnvironmentConfig::new(
-                        *blockhash,
-                        self.cfg.fee_structure.lamports_per_signature,
-                        self,
-                        &feature_set,
-                        self.accounts.runtime_environments(),
-                        self.accounts.runtime_environments(),
-                        self.accounts.sysvar_cache(),
-                    ),
-                    Some(log_collector),
-                    compute_budget.to_budget(),
-                    compute_budget.to_cost(),
-                );
+                let mut invoke_context =
+                    hotpath_block!("hpsvm::process_transaction::build_invoke_context", {
+                        InvokeContext::new(
+                            &mut context,
+                            &mut program_cache_for_tx_batch,
+                            EnvironmentConfig::new(
+                                *blockhash,
+                                self.cfg.fee_structure.lamports_per_signature,
+                                self,
+                                &feature_set,
+                                self.accounts.runtime_environments(),
+                                self.accounts.runtime_environments(),
+                                self.accounts.sysvar_cache(),
+                            ),
+                            Some(log_collector),
+                            compute_budget.to_budget(),
+                            compute_budget.to_cost(),
+                        )
+                    });
 
                 #[cfg(feature = "invocation-inspect-callback")]
                 self.invocation_inspect_callback.before_invocation(
@@ -1426,14 +1476,16 @@ impl HPSVM {
 
                 self.on_transaction_start(tx);
 
-                let tx_result = process_message(
-                    self,
-                    message,
-                    &program_indices,
-                    &mut invoke_context,
-                    &mut ExecuteTimings::default(),
-                    &mut accumulated_consume_units,
-                );
+                let tx_result = hotpath_block!("hpsvm::process_transaction::process_message", {
+                    process_message(
+                        self,
+                        message,
+                        &program_indices,
+                        &mut invoke_context,
+                        &mut ExecuteTimings::default(),
+                        &mut accumulated_consume_units,
+                    )
+                });
 
                 self.on_transaction_end(&tx_result);
 
@@ -1631,6 +1683,7 @@ impl HPSVM {
     /// state, so it intentionally requires `&mut self`. `hpsvm` is optimized for
     /// fast, in-process testing of a single mutable environment rather than
     /// Sealevel-style concurrent scheduling within one instance.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn send_transaction(&mut self, tx: impl Into<VersionedTransaction>) -> TransactionResult {
         let log_collector = Rc::new(RefCell::new(LogCollector {
             bytes_limit: self.runtime_env.log_bytes_limit,
@@ -1662,6 +1715,7 @@ impl HPSVM {
     /// produced them. If this VM mutated after [`HPSVM::transact`] created the
     /// outcome, or if the outcome came from a different VM instance, this
     /// returns `ResanitizationNeeded`.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn commit_transaction(&mut self, outcome: ExecutionOutcome) -> TransactionResult {
         commit_execution_outcome(self, outcome)
     }
@@ -1700,6 +1754,7 @@ impl HPSVM {
     }
 
     /// Simulates a transaction without committing post-state.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn simulate_transaction(
         &self,
         tx: impl Into<VersionedTransaction>,
@@ -1713,6 +1768,7 @@ impl HPSVM {
     }
 
     /// Expires the current blockhash.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn expire_blockhash(&mut self) {
         self.block_env.latest_blockhash =
             create_blockhash(&self.block_env.latest_blockhash.to_bytes());
@@ -2096,6 +2152,7 @@ where
 }
 
 impl HPSVM {
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     fn transact_inner(&self, tx: VersionedTransaction) -> ExecutionOutcome {
         let log_collector = Rc::new(RefCell::new(LogCollector {
             bytes_limit: self.runtime_env.log_bytes_limit,

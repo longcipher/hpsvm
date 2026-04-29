@@ -79,6 +79,7 @@ impl BatchExecutionSnapshot {
     }
 }
 
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(crate) fn plan_transaction_batch(
     vm: &HPSVM,
     txs: &[VersionedTransaction],
@@ -111,6 +112,7 @@ pub(crate) fn plan_transaction_batch(
     })
 }
 
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(crate) fn send_transaction_batch(
     vm: &mut HPSVM,
     transactions: Vec<VersionedTransaction>,
@@ -146,6 +148,7 @@ pub(crate) fn send_transaction_batch(
     Ok(TransactionBatchExecutionResult { plan, results })
 }
 
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn sanitize_transaction_for_batch(
     vm: &HPSVM,
     tx: VersionedTransaction,
@@ -157,6 +160,7 @@ fn sanitize_transaction_for_batch(
     }
 }
 
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn execute_transaction_batch_stage(
     vm: &HPSVM,
     stage: &TransactionBatchStage,
@@ -220,6 +224,7 @@ struct BatchStageResult {
 }
 
 impl BatchStageResult {
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     fn new(
         index: usize,
         vm: &HPSVM,

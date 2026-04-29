@@ -20,6 +20,7 @@ hashbrown = ["dep:hashbrown"]
 serde = []
 precompiles = ["dep:agave-precompiles"]
 register-tracing = ["invocation-inspect-callback", "dep:hex", "dep:sha2"]
+hotpath = ["dep:hotpath"]
 
 [dependencies]
 agave-feature-set.workspace = true
@@ -33,6 +34,7 @@ agave-syscalls.workspace = true
 ansi_term.workspace = true
 hashbrown = { workspace = true, optional = true }
 hex = { workspace = true, optional = true }
+hotpath = { workspace = true, optional = true, features = ["hotpath"] }
 indexmap.workspace = true
 itertools.workspace = true
 log.workspace = true
@@ -130,4 +132,8 @@ harness = false
 
 [[bench]]
 name = "hashing"
+harness = false
+
+[[bench]]
+name = "core_interfaces"
 harness = false

@@ -12,14 +12,21 @@ fn builder_program_test_defaults_match_new() {
     let feature_id = raise_cpi_nesting_limit_to_8::id();
     let token_program_id = address!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 
-    let builder_feature = svm.get_account(&feature_id).expect("builder should materialize feature account");
+    let builder_feature =
+        svm.get_account(&feature_id).expect("builder should materialize feature account");
     let baseline_feature =
         baseline.get_account(&feature_id).expect("new should materialize feature account");
 
-    assert_eq!(feature_gate::from_account(&builder_feature), feature_gate::from_account(&baseline_feature));
+    assert_eq!(
+        feature_gate::from_account(&builder_feature),
+        feature_gate::from_account(&baseline_feature)
+    );
     assert_eq!(
         svm.get_account(&token_program_id).expect("builder should materialize token program").owner,
-        baseline.get_account(&token_program_id).expect("new should materialize token program").owner,
+        baseline
+            .get_account(&token_program_id)
+            .expect("new should materialize token program")
+            .owner,
     );
     assert_eq!(svm.latest_blockhash(), baseline.latest_blockhash());
 }
@@ -58,7 +65,8 @@ fn builder_can_customize_feature_set_before_defaults() {
         .build()
         .unwrap();
 
-    let feature_account = svm.get_account(&feature_id).expect("active feature account should exist");
+    let feature_account =
+        svm.get_account(&feature_id).expect("active feature account should exist");
     let feature = feature_gate::from_account(&feature_account).expect("feature should deserialize");
 
     assert_eq!(feature, Feature { activated_at: Some(0) });

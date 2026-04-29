@@ -4,8 +4,7 @@ use agave_feature_set::FeatureSet;
 use solana_compute_budget::compute_budget::ComputeBudget;
 use solana_native_token::LAMPORTS_PER_SOL;
 use solana_program_runtime::{
-    invoke_context::InvokeContext,
-    solana_sbpf::program::BuiltinFunction,
+    invoke_context::InvokeContext, solana_sbpf::program::BuiltinFunction,
 };
 
 use crate::{
@@ -289,10 +288,9 @@ impl<State: FeatureConfigState> HpsvmBuilder<State> {
         name: &str,
         syscall: BuiltinFunction<InvokeContext<'static, 'static>>,
     ) -> Self {
-        self.plan.custom_syscalls.push(CustomSyscallRegistration {
-            name: name.to_owned(),
-            function: syscall,
-        });
+        self.plan
+            .custom_syscalls
+            .push(CustomSyscallRegistration { name: name.to_owned(), function: syscall });
         self
     }
 

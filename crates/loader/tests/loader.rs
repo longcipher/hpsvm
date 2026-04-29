@@ -60,11 +60,13 @@ fn hello_world_with_store() {
 fn hello_world_with_deploy_upgradeable() {
     let feature_set = FeatureSet::all_enabled();
 
-    let mut svm = HPSVM::default()
+    let mut svm = HPSVM::builder()
         .with_feature_set(feature_set)
         .with_builtins()
         .with_lamports(1_000_000_000_000_000)
-        .with_sysvars();
+        .with_sysvars()
+        .build()
+        .unwrap();
 
     let payer_kp = Keypair::new();
     let payer_pk = payer_kp.pubkey();

@@ -1,0 +1,104 @@
+{
+  "type": "criterion_report",
+  "benchmark_group": "core_interfaces",
+  "benchmarks": [
+    {
+      "name": "new",
+      "mean_ns": 1225313.974399471,
+      "median_ns": 1223342.7503703702,
+      "slope_ns": 1228097.972987013,
+      "std_dev_ns": 14060.333141085406
+    },
+    {
+      "name": "send_transaction_batch",
+      "mean_ns": 956182.0005102042,
+      "median_ns": 1062645.7785714285,
+      "slope_ns": 817619.7996289425,
+      "std_dev_ns": 439007.0455404372
+    },
+    {
+      "name": "add_program_from_file",
+      "mean_ns": 126461.95858974356,
+      "median_ns": 120134.43269230769,
+      "slope_ns": 121384.17382617382,
+      "std_dev_ns": 13593.197693055643
+    },
+    {
+      "name": "add_program",
+      "mean_ns": 88635.13464896215,
+      "median_ns": 87529.5534188034,
+      "slope_ns": 90334.82617382618,
+      "std_dev_ns": 7655.391512050288
+    },
+    {
+      "name": "airdrop",
+      "mean_ns": 64289.07910147393,
+      "median_ns": 63557.06428571428,
+      "slope_ns": 64635.665862708716,
+      "std_dev_ns": 3531.9154258993735
+    },
+    {
+      "name": "send_transaction_program_invocation",
+      "mean_ns": 55007.86241732804,
+      "median_ns": 53082.92083333334,
+      "slope_ns": 51589.690043290044,
+      "std_dev_ns": 7079.852462571035
+    },
+    {
+      "name": "simulate_transaction_program_invocation",
+      "mean_ns": 52291.61412367725,
+      "median_ns": 49826.81076388889,
+      "slope_ns": 52910.68614718615,
+      "std_dev_ns": 6517.651153003811
+    },
+    {
+      "name": "transact_commit_system_transfer",
+      "mean_ns": 36159.55778998779,
+      "median_ns": 32377.686813186814,
+      "slope_ns": 38938.082517482515,
+      "std_dev_ns": 7113.687993558607
+    },
+    {
+      "name": "simulate_transaction_system_transfer",
+      "mean_ns": 31787.5932020757,
+      "median_ns": 30489.10576923077,
+      "slope_ns": 35321.66953046953,
+      "std_dev_ns": 5201.479965835989
+    },
+    {
+      "name": "expire_blockhash",
+      "mean_ns": 31747.326145502644,
+      "median_ns": 30920.009523809524,
+      "slope_ns": 31541.22961038961,
+      "std_dev_ns": 3338.5058107092195
+    },
+    {
+      "name": "send_transaction_system_transfer",
+      "mean_ns": 31579.99283730159,
+      "median_ns": 30957.3189484127,
+      "slope_ns": 34264.046567718,
+      "std_dev_ns": 4895.260103882547
+    },
+    {
+      "name": "plan_transaction_batch",
+      "mean_ns": 29199.95258267196,
+      "median_ns": 28948.082291666666,
+      "slope_ns": 31592.4645021645,
+      "std_dev_ns": 3584.623638196695
+    },
+    {
+      "name": "set_account",
+      "mean_ns": 26762.568911564624,
+      "median_ns": 27170.668367346938,
+      "slope_ns": 27909.144712430425,
+      "std_dev_ns": 2338.9177760211287
+    },
+    {
+      "name": "get_account",
+      "mean_ns": 26432.85681122449,
+      "median_ns": 25830.857142857145,
+      "slope_ns": 27686.964935064934,
+      "std_dev_ns": 2247.802778594041
+    }
+  ]
+}

@@ -1,4 +1,10 @@
-use std::{fs::File, io::Write};
+use std::{
+    collections::HashMap,
+    fs::File,
+    io::{self, Write},
+    path::Path,
+    sync::{Arc, Mutex},
+};
 
 use sha2::{Digest, Sha256};
 use solana_address::Address;
@@ -9,6 +15,151 @@ use solana_transaction_context::{IndexOfAccount, InstructionContext};
 use crate::{HPSVM, InvocationInspectCallback};
 
 const DEFAULT_PATH: &str = "target/sbf/trace";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProgramTraceMetrics {
+    pub program_id: Address,
+    pub invocations: usize,
+    pub cpi_invocations: usize,
+    pub total_register_frames: usize,
+    pub max_register_frames: usize,
+    pub max_stack_height: usize,
+    pub total_instruction_accounts: usize,
+    pub max_instruction_accounts: usize,
+}
+
+impl ProgramTraceMetrics {
+    fn new(program_id: Address) -> Self {
+        Self {
+            program_id,
+            invocations: 0,
+            cpi_invocations: 0,
+            total_register_frames: 0,
+            max_register_frames: 0,
+            max_stack_height: 0,
+            total_instruction_accounts: 0,
+            max_instruction_accounts: 0,
+        }
+    }
+
+    pub fn average_register_frames(&self) -> f64 {
+        if self.invocations == 0 {
+            0.0
+        } else {
+            self.total_register_frames as f64 / self.invocations as f64
+        }
+    }
+
+    pub fn average_instruction_accounts(&self) -> f64 {
+        if self.invocations == 0 {
+            0.0
+        } else {
+            self.total_instruction_accounts as f64 / self.invocations as f64
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct TraceMetricsCollector {
+    metrics: Arc<Mutex<HashMap<Address, ProgramTraceMetrics>>>,
+}
+
+impl TraceMetricsCollector {
+    pub fn snapshot(&self) -> Vec<ProgramTraceMetrics> {
+        let mut metrics = self
+            .metrics
+            .lock()
+            .expect("trace metrics mutex should not be poisoned")
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        metrics.sort_by(|left, right| {
+            right
+                .total_register_frames
+                .cmp(&left.total_register_frames)
+                .then_with(|| right.invocations.cmp(&left.invocations))
+                .then_with(|| left.program_id.to_string().cmp(&right.program_id.to_string()))
+        });
+        metrics
+    }
+
+    pub fn write_json_path(&self, path: impl AsRef<Path>) -> io::Result<()> {
+        let mut file = File::create(path)?;
+        write_trace_metrics_json(&mut file, &self.snapshot())
+    }
+
+    fn record_trace(
+        &self,
+        instruction_context: InstructionContext<'_, '_>,
+        register_trace: RegisterTrace<'_>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if register_trace.is_empty() {
+            return Ok(());
+        }
+
+        let program_id = *instruction_context.get_program_key()?;
+        let stack_height = instruction_context.get_stack_height();
+        let instruction_accounts =
+            usize::from(instruction_context.get_number_of_instruction_accounts());
+        let register_frames = register_trace.len();
+
+        let mut metrics = self.metrics.lock().expect("trace metrics mutex should not be poisoned");
+        let entry =
+            metrics.entry(program_id).or_insert_with(|| ProgramTraceMetrics::new(program_id));
+        entry.invocations = entry.invocations.saturating_add(1);
+        if stack_height > 1 {
+            entry.cpi_invocations = entry.cpi_invocations.saturating_add(1);
+        }
+        entry.total_register_frames = entry.total_register_frames.saturating_add(register_frames);
+        entry.max_register_frames = entry.max_register_frames.max(register_frames);
+        entry.max_stack_height = entry.max_stack_height.max(stack_height);
+        entry.total_instruction_accounts =
+            entry.total_instruction_accounts.saturating_add(instruction_accounts);
+        entry.max_instruction_accounts = entry.max_instruction_accounts.max(instruction_accounts);
+        Ok(())
+    }
+}
+
+pub fn write_trace_metrics_json(
+    writer: &mut impl Write,
+    metrics: &[ProgramTraceMetrics],
+) -> io::Result<()> {
+    writeln!(writer, "{{")?;
+    writeln!(writer, "  \"programs\": [")?;
+    for (index, metric) in metrics.iter().enumerate() {
+        let suffix = if index + 1 == metrics.len() { "" } else { "," };
+        writeln!(writer, "    {{")?;
+        writeln!(writer, "      \"program_id\": \"{}\",", metric.program_id)?;
+        writeln!(writer, "      \"invocations\": {},", metric.invocations)?;
+        writeln!(writer, "      \"cpi_invocations\": {},", metric.cpi_invocations)?;
+        writeln!(writer, "      \"total_register_frames\": {},", metric.total_register_frames)?;
+        writeln!(
+            writer,
+            "      \"avg_register_frames\": {:.2},",
+            metric.average_register_frames()
+        )?;
+        writeln!(writer, "      \"max_register_frames\": {},", metric.max_register_frames)?;
+        writeln!(writer, "      \"max_stack_height\": {},", metric.max_stack_height)?;
+        writeln!(
+            writer,
+            "      \"total_instruction_accounts\": {},",
+            metric.total_instruction_accounts
+        )?;
+        writeln!(
+            writer,
+            "      \"avg_instruction_accounts\": {:.2},",
+            metric.average_instruction_accounts()
+        )?;
+        writeln!(
+            writer,
+            "      \"max_instruction_accounts\": {}",
+            metric.max_instruction_accounts
+        )?;
+        writeln!(writer, "    }}{suffix}")?;
+    }
+    writeln!(writer, "  ]")?;
+    writeln!(writer, "}}")
+}
 
 #[derive(Debug)]
 pub struct DefaultRegisterTracingCallback {
@@ -138,6 +289,36 @@ impl InvocationInspectCallback for DefaultRegisterTracingCallback {
                         self.handler(svm, instruction_context, executable, register_trace)
                     {
                         eprintln!("Error collecting the register tracing: {}", e);
+                    }
+                },
+            );
+        }
+    }
+}
+
+impl InvocationInspectCallback for TraceMetricsCollector {
+    fn before_invocation(
+        &self,
+        _: &HPSVM,
+        _: &SanitizedTransaction,
+        _: &[IndexOfAccount],
+        _: &InvokeContext<'_, '_>,
+    ) {
+    }
+
+    fn after_invocation(
+        &self,
+        _: &HPSVM,
+        invoke_context: &InvokeContext<'_, '_>,
+        register_tracing_enabled: bool,
+    ) {
+        if register_tracing_enabled {
+            invoke_context.iterate_vm_traces(
+                &|instruction_context: InstructionContext<'_, '_>,
+                  _executable: &Executable,
+                  register_trace: RegisterTrace<'_>| {
+                    if let Err(error) = self.record_trace(instruction_context, register_trace) {
+                        eprintln!("Error collecting trace metrics: {error}");
                     }
                 },
             );

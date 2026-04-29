@@ -1,0 +1,428 @@
+{
+  "type": "hotpath_report",
+  "functions_timing": {
+    "profiling_mode": "timing",
+    "time_elapsed": "2.32 s",
+    "total_elapsed_ns": 2323569041,
+    "description": "Execution duration of functions.",
+    "caller_name": "max_perf",
+    "percentiles": [
+      50.0,
+      95.0,
+      99.0
+    ],
+    "data": [
+      {
+        "id": 26,
+        "name": "max_perf",
+        "calls": 1,
+        "avg": "2.32 s",
+        "p50": "2.32 s",
+        "p99": "2.32 s",
+        "p95": "2.32 s",
+        "total": "2.32 s",
+        "percent_total": "100.00%"
+      },
+      {
+        "id": 22,
+        "name": "hpsvm::send_transaction",
+        "calls": 135151,
+        "avg": "16.68 µs",
+        "p95": "19.89 µs",
+        "p50": "15.84 µs",
+        "p99": "23.38 µs",
+        "total": "2.25 s",
+        "percent_total": "97.00%"
+      },
+      {
+        "id": 20,
+        "name": "hpsvm::process_transaction",
+        "calls": 135151,
+        "avg": "15.04 µs",
+        "p99": "21.47 µs",
+        "p50": "14.26 µs",
+        "p95": "17.97 µs",
+        "total": "2.03 s",
+        "percent_total": "87.51%"
+      },
+      {
+        "id": 19,
+        "name": "hpsvm::process_transaction::process_message",
+        "calls": 135151,
+        "avg": "13.13 µs",
+        "p50": "12.59 µs",
+        "p95": "15.34 µs",
+        "p99": "19.21 µs",
+        "total": "1.77 s",
+        "percent_total": "76.39%"
+      },
+      {
+        "id": 18,
+        "name": "hpsvm::message_processor::process_message",
+        "calls": 135151,
+        "avg": "12.97 µs",
+        "p99": "18.93 µs",
+        "p50": "12.50 µs",
+        "p95": "15.17 µs",
+        "total": "1.75 s",
+        "percent_total": "75.48%"
+      },
+      {
+        "id": 16,
+        "name": "hpsvm::process_message::execute_instruction",
+        "calls": 135151,
+        "avg": "12.70 µs",
+        "p50": "12.29 µs",
+        "p95": "14.92 µs",
+        "p99": "16.17 µs",
+        "total": "1.72 s",
+        "percent_total": "73.88%"
+      },
+      {
+        "id": 21,
+        "name": "hpsvm::commit_transaction",
+        "calls": 135151,
+        "avg": "612 ns",
+        "p50": "583 ns",
+        "p95": "750 ns",
+        "p99": "834 ns",
+        "total": "82.73 ms",
+        "percent_total": "3.56%"
+      },
+      {
+        "id": 5,
+        "name": "hpsvm::sanitize_transaction_no_verify_inner",
+        "calls": 135151,
+        "avg": "457 ns",
+        "p99": "542 ns",
+        "p95": "500 ns",
+        "p50": "458 ns",
+        "total": "61.77 ms",
+        "percent_total": "2.66%"
+      },
+      {
+        "id": 10,
+        "name": "hpsvm::process_transaction::load_accounts",
+        "calls": 135151,
+        "avg": "289 ns",
+        "p50": "292 ns",
+        "p99": "375 ns",
+        "p95": "334 ns",
+        "total": "39.18 ms",
+        "percent_total": "1.69%"
+      },
+      {
+        "id": 12,
+        "name": "hpsvm::process_transaction::create_transaction_context",
+        "calls": 135151,
+        "avg": "191 ns",
+        "p50": "167 ns",
+        "p99": "250 ns",
+        "p95": "209 ns",
+        "total": "25.89 ms",
+        "percent_total": "1.11%"
+      },
+      {
+        "id": 13,
+        "name": "hpsvm::process_transaction::check_accounts_rent",
+        "calls": 135151,
+        "avg": "77 ns",
+        "p95": "125 ns",
+        "p99": "125 ns",
+        "p50": "83 ns",
+        "total": "10.47 ms",
+        "percent_total": "0.45%"
+      },
+      {
+        "id": 8,
+        "name": "hpsvm::process_transaction::clone_program_cache",
+        "calls": 135151,
+        "avg": "76 ns",
+        "p99": "167 ns",
+        "p50": "83 ns",
+        "p95": "125 ns",
+        "total": "10.32 ms",
+        "percent_total": "0.44%"
+      },
+      {
+        "id": 11,
+        "name": "hpsvm::process_transaction::resolve_program_indices",
+        "calls": 135151,
+        "avg": "63 ns",
+        "p99": "125 ns",
+        "p95": "84 ns",
+        "p50": "42 ns",
+        "total": "8.65 ms",
+        "percent_total": "0.37%"
+      },
+      {
+        "id": 15,
+        "name": "hpsvm::process_message::prepare_instruction",
+        "calls": 135151,
+        "avg": "55 ns",
+        "p99": "125 ns",
+        "p50": "42 ns",
+        "p95": "84 ns",
+        "total": "7.47 ms",
+        "percent_total": "0.32%"
+      },
+      {
+        "id": 7,
+        "name": "hpsvm::process_transaction::load_rent",
+        "calls": 135151,
+        "avg": "51 ns",
+        "p95": "84 ns",
+        "p50": "42 ns",
+        "p99": "208 ns",
+        "total": "6.97 ms",
+        "percent_total": "0.30%"
+      },
+      {
+        "id": 14,
+        "name": "hpsvm::process_transaction::build_invoke_context",
+        "calls": 135151,
+        "avg": "37 ns",
+        "p95": "42 ns",
+        "p50": "42 ns",
+        "p99": "42 ns",
+        "total": "5.11 ms",
+        "percent_total": "0.22%"
+      },
+      {
+        "id": 6,
+        "name": "hpsvm::process_transaction::compute_budget",
+        "calls": 135151,
+        "avg": "27 ns",
+        "p50": "41 ns",
+        "p99": "42 ns",
+        "p95": "42 ns",
+        "total": "3.78 ms",
+        "percent_total": "0.16%"
+      },
+      {
+        "id": 2,
+        "name": "hpsvm::new",
+        "calls": 1,
+        "avg": "3.50 ms",
+        "p99": "3.50 ms",
+        "p50": "3.50 ms",
+        "p95": "3.50 ms",
+        "total": "3.50 ms",
+        "percent_total": "0.15%"
+      },
+      {
+        "id": 9,
+        "name": "hpsvm::process_transaction::calculate_fee",
+        "calls": 135151,
+        "avg": "24 ns",
+        "p99": "42 ns",
+        "p95": "42 ns",
+        "p50": "41 ns",
+        "total": "3.29 ms",
+        "percent_total": "0.14%"
+      },
+      {
+        "id": 1,
+        "name": "hpsvm::add_program_internal",
+        "calls": 9,
+        "avg": "333.34 µs",
+        "p95": "1.52 ms",
+        "p99": "1.52 ms",
+        "p50": "203.65 µs",
+        "total": "3.00 ms",
+        "percent_total": "0.13%"
+      }
+    ]
+  },
+  "threads": {
+    "current_elapsed_ns": 2323676041,
+    "sample_interval_ms": 250,
+    "thread_count": 20,
+    "rss_bytes": "39.1 MB",
+    "data": [
+      {
+        "os_tid": 259,
+        "name": "main",
+        "status": "Running ",
+        "status_code": "1",
+        "cpu_percent": "92.7%",
+        "cpu_percent_max": "99.8%",
+        "cpu_percent_avg": "99.5%"
+      },
+      {
+        "os_tid": 7683,
+        "name": "hp-functions",
+        "status": "Sleeping",
+        "status_code": "3",
+        "cpu_percent": "10.8%",
+        "cpu_percent_max": "12.1%",
+        "cpu_percent_avg": "11.7%"
+      },
+      {
+        "os_tid": 3075,
+        "name": "hp-cpu-baseline",
+        "status": "Sleeping",
+        "status_code": "3",
+        "cpu_percent": "0.4%",
+        "cpu_percent_max": "0.4%",
+        "cpu_percent_avg": "0.3%"
+      },
+      {
+        "os_tid": 2819,
+        "name": "hp-server",
+        "status": "Sleeping",
+        "status_code": "3",
+        "cpu_percent": "0.0%",
+        "cpu_percent_max": "0.0%",
+        "cpu_percent_avg": "0.0%"
+      },
+      {
+        "os_tid": 7427,
+        "name": "hp-threads",
+        "status": "Running ",
+        "status_code": "1",
+        "cpu_percent": "0.0%",
+        "cpu_percent_max": "0.0%",
+        "cpu_percent_avg": "0.0%"
+      },
+      {
+        "os_tid": 6915,
+        "name": "thread_5",
+        "status": "Sleeping",
+        "status_code": "3",
+        "cpu_percent": "0.0%",
+        "cpu_percent_max": "0.0%",
+        "cpu_percent_avg": "0.0%"
+      },
+      {
+        "os_tid": 3843,
+        "name": "thread_6",
+        "status": "Sleeping",
+        "status_code": "3",
+        "cpu_percent": "0.0%",
+        "cpu_percent_max": "0.0%",
+        "cpu_percent_avg": "0.0%"
+      },
+      {
+        "os_tid": 6659,
+        "name": "thread_7",
+        "status": "Sleeping",
+        "status_code": "3",
+        "cpu_percent": "0.0%",
+        "cpu_percent_max": "0.0%",
+        "cpu_percent_avg": "0.0%"
+      },
+      {
+        "os_tid": 4099,
+        "name": "thread_8",
+        "status": "Sleeping",
+        "status_code": "3",
+        "cpu_percent": "0.0%",
+        "cpu_percent_max": "0.0%",
+        "cpu_percent_avg": "0.0%"
+      },
+      {
+        "os_tid": 4355,
+        "name": "thread_9",
+        "status": "Sleeping",
+        "status_code": "3",
+        "cpu_percent": "0.0%",
+        "cpu_percent_max": "0.0%",
+        "cpu_percent_avg": "0.0%"
+      },
+      {
+        "os_tid": 5891,
+        "name": "thread_10",
+        "status": "Sleeping",
+        "status_code": "3",
+        "cpu_percent": null,
+        "cpu_percent_max": null,
+        "cpu_percent_avg": "0.6%"
+      },
+      {
+        "os_tid": 4611,
+        "name": "thread_11",
+        "status": "Sleeping",
+        "status_code": "3",
+        "cpu_percent": null,
+        "cpu_percent_max": null,
+        "cpu_percent_avg": "0.5%"
+      },
+      {
+        "os_tid": 4867,
+        "name": "thread_12",
+        "status": "Sleeping",
+        "status_code": "3",
+        "cpu_percent": null,
+        "cpu_percent_max": null,
+        "cpu_percent_avg": "0.6%"
+      },
+      {
+        "os_tid": 5635,
+        "name": "thread_13",
+        "status": "Sleeping",
+        "status_code": "3",
+        "cpu_percent": null,
+        "cpu_percent_max": null,
+        "cpu_percent_avg": "0.5%"
+      },
+      {
+        "os_tid": 5123,
+        "name": "thread_14",
+        "status": "Sleeping",
+        "status_code": "3",
+        "cpu_percent": null,
+        "cpu_percent_max": null,
+        "cpu_percent_avg": "0.6%"
+      },
+      {
+        "os_tid": 5379,
+        "name": "thread_15",
+        "status": "Sleeping",
+        "status_code": "3",
+        "cpu_percent": null,
+        "cpu_percent_max": null,
+        "cpu_percent_avg": "0.5%"
+      },
+      {
+        "os_tid": 8195,
+        "name": "thread_16",
+        "status": "Sleeping",
+        "status_code": "3",
+        "cpu_percent": null,
+        "cpu_percent_max": null,
+        "cpu_percent_avg": "0.5%"
+      },
+      {
+        "os_tid": 8451,
+        "name": "thread_17",
+        "status": "Sleeping",
+        "status_code": "3",
+        "cpu_percent": null,
+        "cpu_percent_max": null,
+        "cpu_percent_avg": "0.5%"
+      },
+      {
+        "os_tid": 8707,
+        "name": "thread_18",
+        "status": "Sleeping",
+        "status_code": "3",
+        "cpu_percent": null,
+        "cpu_percent_max": null,
+        "cpu_percent_avg": "0.5%"
+      },
+      {
+        "os_tid": 8963,
+        "name": "thread_19",
+        "status": "Sleeping",
+        "status_code": "3",
+        "cpu_percent": null,
+        "cpu_percent_max": null,
+        "cpu_percent_avg": "0.3%"
+      }
+    ]
+  },
+  "cpu_baseline": {
+    "avg": "179.46 µs"
+  }
+}

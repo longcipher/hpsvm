@@ -204,6 +204,70 @@ cargo test
 cargo bench
 ```
 
+Build the benchmark helper program and profile the public HPSVM surface:
+
+```bash
+HPSVM_HOTPATH=1 cargo bench -p hpsvm --features hotpath --bench core_interfaces
+```
+
+Profile the steady-state transaction execution hot path:
+
+```bash
+HPSVM_HOTPATH=1 cargo bench -p hpsvm --features hotpath --bench max_perf
+```
+
+Export a deeper trace summary for the steady-state SBF execution path:
+
+```bash
+just bench-hotpath-trace
+```
+
+`core_interfaces` covers the main public APIs: `new`, `set_account`, `get_account`,
+`expire_blockhash`, `add_program`, `add_program_from_file`, `airdrop`,
+`send_transaction`, `simulate_transaction`, `transact` + `commit_transaction`,
+`plan_transaction_batch`, and `send_transaction_batch`.
+
+When `HPSVM_HOTPATH=1` is set, hotpath reports are written to `target/hotpath/*.json`.
+Use `HPSVM_HOTPATH_LIMIT` to cap the number of reported functions, or `HOTPATH_OUTPUT_PATH`
+to override the default report path.
+
+When `HPSVM_TRACE_METRICS=1` is combined with the `register-tracing` feature, `just bench-hotpath-trace`
+also writes `target/hotpath/max_perf.trace.json` and `target/hotpath/simple_bench.trace.json`.
+These summaries report per-program invocation counts, CPI depth, register-frame counts, and
+instruction-account counts so you can tell whether the `execute_instruction` hotspot is dominated
+by nested CPIs or a single SBF program body in both the steady-state loop and the repeated
+transaction-loop benchmark.
+
+To compare default runtime benchmarks without hotpath overhead:
+
+```bash
+just bench-runtime
+just bench-runtime-baseline-compare
+```
+
+This writes compact Criterion reports to `target/runtime-benchmarks/*.json` and a markdown summary
+to `target/runtime-benchmarks/summary.md`. Use this runtime baseline before treating a hotpath-only
+delta as a real VM slowdown.
+
+To refresh the committed default runtime baselines:
+
+```bash
+just bench-runtime-baseline-refresh
+```
+
+To refresh the committed hotpath baselines:
+
+```bash
+just bench-baseline-refresh
+```
+
+To compare a fresh benchmark run with the committed baselines:
+
+```bash
+just bench-hotpath
+just bench-baseline-compare
+```
+
 ### Code Quality
 
 Format code:

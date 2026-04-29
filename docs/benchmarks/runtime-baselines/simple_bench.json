@@ -1,0 +1,13 @@
+{
+  "type": "criterion_report",
+  "benchmark_group": "simple_bench",
+  "benchmarks": [
+    {
+      "name": "simple_bench",
+      "mean_ns": 7997917.326468254,
+      "median_ns": 7593018.229166666,
+      "slope_ns": 7615236.903896104,
+      "std_dev_ns": 1148750.6192099173
+    }
+  ]
+}

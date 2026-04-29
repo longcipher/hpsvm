@@ -1,50 +1,32 @@
-use std::path::PathBuf;
-
 use criterion::{Criterion, criterion_group, criterion_main};
-use hpsvm::HPSVM;
-use solana_account::Account;
 use solana_address::Address;
-use solana_instruction::{Instruction, account_meta::AccountMeta};
 use solana_keypair::Keypair;
-use solana_message::Message;
 use solana_signer::Signer;
-use solana_transaction::Transaction;
+
+mod common;
+
+use common::{
+    HotpathGuard, TraceMetricsGuard, counter_account, counter_program_path, make_counter_tx,
+    new_benchmark_vm,
+};
 
 const NUM_GREETINGS: u8 = 255;
 
-fn make_tx(
-    program_id: Address,
-    counter_address: Address,
-    payer_pk: &Address,
-    blockhash: solana_hash::Hash,
-    payer_kp: &Keypair,
-    deduper: u8,
-) -> Transaction {
-    let msg = Message::new_with_blockhash(
-        &[Instruction {
-            program_id,
-            accounts: vec![AccountMeta::new(counter_address, false)],
-            data: vec![0, deduper],
-        }],
-        Some(payer_pk),
-        &blockhash,
-    );
-    Transaction::new(&[payer_kp], msg, blockhash)
-}
-
 fn criterion_benchmark(c: &mut Criterion) {
-    let mut svm =
-        HPSVM::new().with_blockhash_check(false).with_sigverify(false).with_transaction_history(0);
+    let _hotpath = HotpathGuard::new("max_perf");
+    let _trace_metrics = TraceMetricsGuard::new("max_perf");
+    let mut svm = new_benchmark_vm();
+    _trace_metrics.install(&mut svm);
     let payer_kp = Keypair::new();
     let payer_pk = payer_kp.pubkey();
     let program_id = Address::new_unique();
-    let mut so_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    so_path.push("test_programs/target/deploy/counter.so");
+    let so_path = counter_program_path();
     svm.add_program_from_file(program_id, &so_path).unwrap();
     svm.airdrop(&payer_pk, 100_000_000_000).unwrap();
     let counter_address = Address::new_unique();
     let latest_blockhash = svm.latest_blockhash();
-    let tx = make_tx(program_id, counter_address, &payer_pk, latest_blockhash, &payer_kp, 0);
+    let tx =
+        make_counter_tx(program_id, counter_address, &payer_pk, latest_blockhash, &payer_kp, 0);
     let mut group = c.benchmark_group("max_perf_comparison");
     group.bench_function("max_perf_hpsvm", |b| {
         b.iter(|| {
@@ -58,12 +40,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 }
 
 fn counter_acc(program_id: Address) -> solana_account::Account {
-    Account {
-        lamports: 5,
-        data: vec![0_u8; std::mem::size_of::<u32>()],
-        owner: program_id,
-        ..Default::default()
-    }
+    counter_account(program_id)
 }
 
 criterion_group!(benches, criterion_benchmark);

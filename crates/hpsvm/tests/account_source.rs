@@ -86,11 +86,8 @@ fn durable_nonce_transactions_can_use_source_backed_nonce_accounts() {
         accounts: Arc::new(HashMap::from([(nonce_kp.pubkey(), nonce_account)])),
     };
 
-    let mut svm = HPSVM::builder()
-        .with_program_test_defaults()
-        .with_account_source(source)
-        .build()
-        .unwrap();
+    let mut svm =
+        HPSVM::builder().with_program_test_defaults().with_account_source(source).build().unwrap();
     svm.airdrop(&from, 1_000_000_000).unwrap();
     svm.airdrop(&to, 1_000_000_000).unwrap();
 
