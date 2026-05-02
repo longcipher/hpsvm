@@ -385,6 +385,8 @@ pub mod batch;
 #[expect(missing_docs)]
 pub mod error;
 #[expect(missing_docs)]
+pub mod instruction;
+#[expect(missing_docs)]
 pub mod types;
 
 mod account_source;
@@ -1698,6 +1700,42 @@ impl HPSVM {
         self.commit_transaction(outcome)
     }
 
+    /// Executes a single instruction case against a cloned VM without mutating this instance.
+    pub fn process_instruction_case(
+        &self,
+        case: &instruction::InstructionCase,
+    ) -> Result<ExecutionOutcome, HPSVMError> {
+        let mut working = self.clone();
+        working.set_sigverify(false);
+
+        for (address, account) in &case.pre_accounts {
+            working.set_account(*address, account.clone())?;
+        }
+
+        let fee_payer = fee_payer_for_instruction_case(case);
+        if working.get_account(&fee_payer).is_none() {
+            working.set_account(
+                fee_payer,
+                Account {
+                    lamports: 1_000_000_000,
+                    owner: system_program::id(),
+                    ..Default::default()
+                },
+            )?;
+        }
+
+        let message = Message::new_with_blockhash(
+            &[case.instruction()],
+            Some(&fee_payer),
+            &working.latest_blockhash(),
+        );
+        let signatures =
+            vec![Signature::default(); usize::from(message.header.num_required_signatures)];
+        let tx = VersionedTransaction { signatures, message: VersionedMessage::Legacy(message) };
+
+        Ok(working.transact(tx))
+    }
+
     /// Executes a signed transaction without committing its post-state.
     ///
     /// The returned [`ExecutionOutcome`] is bound to this VM instance and its
@@ -2165,6 +2203,16 @@ impl HPSVM {
         };
         execution_into_outcome(self, execution, log_collector, "transact")
     }
+}
+
+fn fee_payer_for_instruction_case(case: &instruction::InstructionCase) -> Address {
+    case.accounts
+        .iter()
+        .find(|account| account.is_signer)
+        .or_else(|| case.accounts.iter().find(|account| account.is_writable))
+        .or_else(|| case.accounts.first())
+        .map(|account| account.pubkey)
+        .unwrap_or_else(Address::new_unique)
 }
 
 #[cfg(feature = "invocation-inspect-callback")]

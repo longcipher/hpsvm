@@ -1,0 +1,40 @@
+[package]
+name = "hpsvm-fixture"
+description = "Transaction-first fixture capture and replay for hpsvm"
+license.workspace = true
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+
+[features]
+default = ["json-codec", "markdown"]
+serde = ["dep:serde"]
+bin-codec = ["serde"]
+json-codec = ["serde"]
+markdown = []
+
+[dependencies]
+bincode.workspace = true
+hpsvm.workspace = true
+serde = { workspace = true, optional = true, features = ["derive"] }
+serde_json.workspace = true
+solana-account.workspace = true
+solana-address.workspace = true
+solana-message.workspace = true
+solana-rent.workspace = true
+solana-transaction.workspace = true
+solana-transaction-context.workspace = true
+solana-transaction-error.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+solana-account.workspace = true
+solana-keypair.workspace = true
+solana-message.workspace = true
+solana-sdk-ids.workspace = true
+solana-signer.workspace = true
+solana-system-interface.workspace = true
+solana-transaction.workspace = true
+
+[lints]
+workspace = true

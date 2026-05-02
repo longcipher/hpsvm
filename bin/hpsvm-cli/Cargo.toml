@@ -1,0 +1,39 @@
+[package]
+name = "hpsvm-cli"
+description = "Command-line fixture tools for hpsvm"
+license.workspace = true
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "hpsvm"
+path = "src/main.rs"
+
+[features]
+default = []
+fd-compat = ["dep:hpsvm-fixture-fd"]
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+hpsvm.workspace = true
+hpsvm-fixture = { workspace = true, features = ["bin-codec", "json-codec", "markdown"] }
+hpsvm-fixture-fd = { workspace = true, optional = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+serde_yaml.workspace = true
+solana-address.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+mollusk-svm-fuzz-fixture-firedancer.workspace = true
+solana-account.workspace = true
+solana-keypair.workspace = true
+solana-message.workspace = true
+solana-sdk-ids.workspace = true
+solana-signer.workspace = true
+solana-system-interface.workspace = true
+solana-transaction.workspace = true
+
+[lints]
+workspace = true

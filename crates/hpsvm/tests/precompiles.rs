@@ -52,7 +52,7 @@ fn ed25519_precompile_err() {
         &signature.to_bytes(),
         kp.pubkey().as_array(),
     );
-    ix.data[ed25519_instruction::DATA_START + 32] = 0;
+    ix.data[ed25519_instruction::DATA_START + 32] ^= 1;
     let tx =
         Transaction::new(&[&kp], Message::new(&[ix], Some(&kp.pubkey())), svm.latest_blockhash());
     let res = svm.send_transaction(tx);
@@ -103,7 +103,7 @@ fn secp256k1_precompile_err() {
     let mut ix =
         new_secp256k1_instruction_with_signature(msg, &signature, recovery_id, &eth_address);
 
-    ix.data[secp256k1_instruction::DATA_START + 32] += 1;
+    ix.data[secp256k1_instruction::DATA_START + 32] ^= 1;
     let tx =
         Transaction::new(&[&kp], Message::new(&[ix], Some(&kp.pubkey())), svm.latest_blockhash());
     let res = svm.send_transaction(tx);

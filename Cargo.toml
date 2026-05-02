@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["bin/*", "crates/*"]
 
 [workspace.package]
 version = "0.1.2"
@@ -11,6 +11,9 @@ repository = "https://github.com/longcipher/hpsvm"
 [workspace.dependencies]
 # local crates
 hpsvm = { path = "crates/hpsvm", version = "0.1.2" }
+hpsvm-cli = { path = "bin/hpsvm-cli", version = "0.1.2" }
+hpsvm-fixture = { path = "crates/hpsvm-fixture", version = "0.1.2" }
+hpsvm-fixture-fd = { path = "crates/hpsvm-fixture-fd", version = "0.1.2" }
 hpsvm-loader = { path = "crates/hpsvm-loader", version = "0.1.2" }
 hpsvm-token = { path = "crates/token", version = "0.1.2" }
 
@@ -20,6 +23,8 @@ agave-precompiles = "3.1.14"
 agave-reserved-account-keys = "3.1.14"
 agave-syscalls = "3.1.14"
 ansi_term = "0.12.1"
+bincode = "1.3.3"
+clap = "4.6.1"
 criterion = "0.8.2"
 cucumber = "0.23.0"
 ed25519-dalek = "=1.0.1"
@@ -30,9 +35,13 @@ indexmap = "2.14.0"
 itertools = "0.14.0"
 libsecp256k1 = "0.7.2"
 log = "0.4.29"
+mollusk-svm-fuzz-fixture-firedancer = "0.12.0"
 parking_lot = "0.12.5"
+prost = "0.14"
 qualifier_attr = "0.2.2"
 serde = "1.0.228"
+serde_json = "1.0.149"
+serde_yaml = "0.9.34"
 sha2 = "0.11.0"
 smallvec = "1.15.1"
 solana-account = "3.4.0"
