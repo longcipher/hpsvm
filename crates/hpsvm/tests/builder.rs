@@ -1,6 +1,6 @@
 use agave_feature_set::{FeatureSet, raise_cpi_nesting_limit_to_8};
 use hpsvm::HPSVM;
-use solana_address::address;
+use solana_address::{Address, address};
 use solana_feature_gate_interface::{self as feature_gate, Feature};
 use solana_native_token::LAMPORTS_PER_SOL;
 use solana_sdk_ids::{bpf_loader, bpf_loader_upgradeable};
@@ -74,4 +74,23 @@ fn builder_can_customize_feature_set_before_defaults() {
         svm.get_account(&token_program_id).expect("default token program should exist").owner,
         bpf_loader_upgradeable::id()
     );
+}
+
+#[test_log::test]
+fn builder_can_materialize_only_spl_programs() {
+    let svm = HPSVM::builder()
+        .with_feature_set(FeatureSet::all_enabled())
+        .with_sysvars()
+        .with_builtins()
+        .with_spl_programs()
+        .build()
+        .expect("SPL-only builder should succeed");
+
+    let token_program_id = address!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+    let memo_program_id = address!("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
+    let random_account = Address::new_unique();
+
+    assert!(svm.get_account(&token_program_id).is_some());
+    assert!(svm.get_account(&memo_program_id).is_none());
+    assert!(svm.get_account(&random_account).is_none());
 }

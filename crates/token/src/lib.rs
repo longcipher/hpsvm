@@ -1,6 +1,8 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 //! Token operations for the HPSVM
 
+/// Account snapshot factories for fast fixture and test setup.
+pub mod accounts;
 mod approve;
 mod approve_checked;
 mod burn;

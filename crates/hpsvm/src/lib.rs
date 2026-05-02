@@ -297,6 +297,7 @@ use solana_feature_gate_interface::{self as feature_gate, Feature};
 use solana_fee::FeeFeatures;
 use solana_fee_structure::FeeStructure;
 use solana_hash::Hash;
+use solana_instruction::{Instruction, account_meta::AccountMeta};
 use solana_keypair::Keypair;
 use solana_last_restart_slot::LastRestartSlot;
 use solana_loader_v3_interface::{get_program_data_address, state::UpgradeableLoaderState};
@@ -304,6 +305,7 @@ use solana_message::{
     Message, SanitizedMessage, VersionedMessage, inner_instruction::InnerInstructionsList,
 };
 use solana_nonce::{NONCED_TX_MARKER_IX_INDEX, state::DurableNonce};
+use solana_program_pack::Pack;
 use solana_program_runtime::{
     invoke_context::{BuiltinFunctionWithContext, EnvironmentConfig, InvokeContext},
     loaded_programs::{LoadProgramMetrics, ProgramCacheEntry},
@@ -334,6 +336,7 @@ use solana_transaction::{
 };
 use solana_transaction_context::{ExecutionRecord, IndexOfAccount, TransactionContext};
 use solana_transaction_error::TransactionError;
+use spl_token_interface::state::{Account as TokenAccount, Mint as TokenMint};
 use types::SimulatedTransactionInfo;
 use utils::{
     construct_instructions_account,
@@ -348,9 +351,10 @@ use crate::{
     error::HPSVMError,
     history::TransactionHistory,
     message_processor::process_message,
-    programs::{DEFAULT_PROGRAM_IDS, load_default_programs},
+    programs::{DEFAULT_PROGRAM_IDS, SPL_PROGRAM_IDS, load_default_programs, load_spl_programs},
     types::{
-        ExecutionOutcome, ExecutionResult, FailedTransactionMetadata, TransactionMetadata,
+        AccountDiff, ExecutedInstruction, ExecutionDiagnostics, ExecutionOutcome, ExecutionResult,
+        ExecutionTrace, FailedTransactionMetadata, TokenBalance, TransactionMetadata,
         TransactionResult,
     },
     utils::{
@@ -425,6 +429,7 @@ pub struct HPSVM {
     airdrop_kp: [u8; 64],
     builtins_loaded: bool,
     default_programs_loaded: bool,
+    spl_programs_loaded: bool,
     cfg: SvmCfg,
     feature_accounts_loaded: bool,
     inspector: Arc<dyn Inspector>,
@@ -455,6 +460,7 @@ impl std::fmt::Debug for HPSVM {
             .field("accounts", &self.accounts)
             .field("builtins_loaded", &self.builtins_loaded)
             .field("default_programs_loaded", &self.default_programs_loaded)
+            .field("spl_programs_loaded", &self.spl_programs_loaded)
             .field("cfg", &self.cfg)
             .field("feature_accounts_loaded", &self.feature_accounts_loaded)
             .field("runtime_registry", &self.runtime_registry)
@@ -475,6 +481,7 @@ impl Clone for HPSVM {
             airdrop_kp: self.airdrop_kp,
             builtins_loaded: self.builtins_loaded,
             default_programs_loaded: self.default_programs_loaded,
+            spl_programs_loaded: self.spl_programs_loaded,
             cfg: self.cfg.clone(),
             feature_accounts_loaded: self.feature_accounts_loaded,
             inspector: self.inspector.clone(),
@@ -531,6 +538,7 @@ impl HPSVM {
             airdrop_kp: Keypair::new().to_bytes(),
             builtins_loaded: false,
             default_programs_loaded: false,
+            spl_programs_loaded: false,
             reserved_account_keys: Self::reserved_account_keys_for_feature_set(&feature_set),
             cfg: SvmCfg {
                 feature_set,
@@ -640,6 +648,19 @@ impl HPSVM {
         }
     }
 
+    fn clear_spl_programs(&mut self) {
+        for program_id in &SPL_PROGRAM_IDS {
+            if self
+                .accounts
+                .get_account_ref(program_id)
+                .is_some_and(|account| account.owner() == &bpf_loader_upgradeable::id())
+            {
+                self.accounts.remove_account(&get_program_data_address(program_id));
+            }
+            self.accounts.remove_account(program_id);
+        }
+    }
+
     #[cfg(feature = "precompiles")]
     fn clear_precompile_accounts(&mut self) {
         agave_precompiles::get_precompiles().iter().for_each(|precompile| {
@@ -714,6 +735,10 @@ impl HPSVM {
             self.clear_default_programs();
         }
 
+        if self.spl_programs_loaded {
+            self.clear_spl_programs();
+        }
+
         if self.builtins_loaded {
             self.clear_builtin_accounts();
             self.load_builtins();
@@ -729,6 +754,10 @@ impl HPSVM {
 
         if self.default_programs_loaded {
             self.load_default_programs();
+        }
+
+        if self.spl_programs_loaded {
+            self.load_spl_programs();
         }
 
         assert!(
@@ -875,9 +904,20 @@ impl HPSVM {
         load_default_programs(self);
     }
 
+    fn load_spl_programs(&mut self) {
+        self.spl_programs_loaded = true;
+        load_spl_programs(self);
+    }
+
     #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
     fn set_default_programs(&mut self) {
         self.load_default_programs();
+        self.invalidate_execution_outcomes();
+    }
+
+    #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
+    fn set_spl_programs(&mut self) {
+        self.load_spl_programs();
         self.invalidate_execution_outcomes();
     }
 
@@ -1736,6 +1776,116 @@ impl HPSVM {
         Ok(working.transact(tx))
     }
 
+    /// Processes one instruction as a synthetic transaction and commits its post-state.
+    ///
+    /// This is a convenience for instruction-level harnesses that do not need to
+    /// construct and sign a full transaction. Signature verification is bypassed
+    /// for this synthetic transaction only; blockhash and runtime behavior still
+    /// use this VM's current environment.
+    pub fn process_instruction(&mut self, instruction: Instruction) -> TransactionResult {
+        self.process_instruction_chain([instruction])
+    }
+
+    /// Processes one instruction after first writing the provided account states.
+    ///
+    /// Explicit accounts are written to the VM before execution, then the
+    /// instruction post-state is committed just like [`HPSVM::process_instruction`].
+    pub fn process_instruction_with_accounts(
+        &mut self,
+        instruction: Instruction,
+        pre_accounts: impl IntoIterator<Item = (Address, Account)>,
+    ) -> Result<TransactionMetadata, FailedTransactionMetadata> {
+        self.process_instruction_chain_with_accounts([instruction], pre_accounts)
+    }
+
+    /// Processes multiple instructions atomically and commits their post-state.
+    pub fn process_instruction_chain(
+        &mut self,
+        instructions: impl IntoIterator<Item = Instruction>,
+    ) -> TransactionResult {
+        let outcome = self.transact_instruction_chain_no_verify(instructions.into_iter().collect());
+        self.commit_transaction(outcome)
+    }
+
+    /// Processes multiple instructions atomically after first writing explicit account states.
+    pub fn process_instruction_chain_with_accounts(
+        &mut self,
+        instructions: impl IntoIterator<Item = Instruction>,
+        pre_accounts: impl IntoIterator<Item = (Address, Account)>,
+    ) -> TransactionResult {
+        for (address, account) in pre_accounts {
+            if self.set_account(address, account).is_err() {
+                return Err(FailedTransactionMetadata {
+                    err: TransactionError::InstructionError(
+                        0,
+                        solana_instruction::error::InstructionError::InvalidAccountData,
+                    ),
+                    meta: TransactionMetadata::default(),
+                });
+            }
+        }
+        self.process_instruction_chain(instructions)
+    }
+
+    /// Simulates one instruction without committing post-state.
+    pub fn simulate_instruction(
+        &self,
+        instruction: Instruction,
+    ) -> Result<SimulatedTransactionInfo, FailedTransactionMetadata> {
+        self.simulate_instruction_chain([instruction])
+    }
+
+    /// Simulates one instruction with explicit temporary account states.
+    pub fn simulate_instruction_with_accounts(
+        &self,
+        instruction: Instruction,
+        pre_accounts: impl IntoIterator<Item = (Address, Account)>,
+    ) -> Result<SimulatedTransactionInfo, FailedTransactionMetadata> {
+        self.simulate_instruction_chain_with_accounts([instruction], pre_accounts)
+    }
+
+    /// Simulates multiple instructions atomically without committing post-state.
+    pub fn simulate_instruction_chain(
+        &self,
+        instructions: impl IntoIterator<Item = Instruction>,
+    ) -> Result<SimulatedTransactionInfo, FailedTransactionMetadata> {
+        let mut working = self.clone();
+        let ExecutionOutcome { meta, post_accounts, status, .. } =
+            working.transact_instruction_chain_no_verify(instructions.into_iter().collect());
+        if let Err(tx_err) = status {
+            Err(FailedTransactionMetadata { err: tx_err, meta })
+        } else {
+            Ok(SimulatedTransactionInfo { meta, post_accounts })
+        }
+    }
+
+    /// Simulates multiple instructions atomically with explicit temporary account states.
+    pub fn simulate_instruction_chain_with_accounts(
+        &self,
+        instructions: impl IntoIterator<Item = Instruction>,
+        pre_accounts: impl IntoIterator<Item = (Address, Account)>,
+    ) -> Result<SimulatedTransactionInfo, FailedTransactionMetadata> {
+        let mut working = self.clone();
+        for (address, account) in pre_accounts {
+            if working.set_account(address, account).is_err() {
+                return Err(FailedTransactionMetadata {
+                    err: TransactionError::InstructionError(
+                        0,
+                        solana_instruction::error::InstructionError::InvalidAccountData,
+                    ),
+                    meta: TransactionMetadata::default(),
+                });
+            }
+        }
+        let ExecutionOutcome { meta, post_accounts, status, .. } =
+            working.transact_instruction_chain_no_verify(instructions.into_iter().collect());
+        if let Err(tx_err) = status {
+            Err(FailedTransactionMetadata { err: tx_err, meta })
+        } else {
+            Ok(SimulatedTransactionInfo { meta, post_accounts })
+        }
+    }
+
     /// Executes a signed transaction without committing its post-state.
     ///
     /// The returned [`ExecutionOutcome`] is bound to this VM instance and its
@@ -1951,7 +2101,7 @@ fn execution_result_if_context(
     fee: u64,
     fee_payer: Option<Address>,
 ) -> ExecutionResult {
-    let (signature, return_data, inner_instructions, post_accounts) =
+    let (signature, return_data, inner_instructions, execution_trace, post_accounts) =
         execute_tx_helper(sanitized_tx, ctx);
     let fee_payer = fee_payer.filter(|_| result.is_err());
     ExecutionResult {
@@ -1961,6 +2111,7 @@ fn execution_result_if_context(
         inner_instructions,
         compute_units_consumed,
         return_data,
+        execution_trace,
         included: true,
         fee,
         fee_payer,
@@ -1980,6 +2131,7 @@ fn execution_into_outcome(
         compute_units_consumed,
         inner_instructions,
         return_data,
+        execution_trace,
         included,
         fee,
         fee_payer,
@@ -1997,6 +2149,7 @@ fn execution_into_outcome(
             compute_units_consumed,
             return_data,
             fee,
+            diagnostics: execution_diagnostics(vm, &post_accounts, execution_trace),
         },
         post_accounts,
         status: tx_result,
@@ -2083,10 +2236,12 @@ fn execute_tx_helper(
     Signature,
     solana_transaction_context::TransactionReturnData,
     InnerInstructionsList,
+    ExecutionTrace,
     Vec<(Address, AccountSharedData)>,
 ) {
     let signature = sanitized_tx.signature().to_owned();
     let inner_instructions = inner_instructions_list_from_instruction_trace(&ctx);
+    let execution_trace = execution_trace_from_transaction_context(sanitized_tx, &ctx);
     let ExecutionRecord {
         accounts,
         return_data,
@@ -2099,7 +2254,131 @@ fn execute_tx_helper(
         .enumerate()
         .filter_map(|(idx, pair)| msg.is_writable(idx).then_some(pair))
         .collect();
-    (signature, return_data, inner_instructions, post_accounts)
+    (signature, return_data, inner_instructions, execution_trace, post_accounts)
+}
+
+fn execution_diagnostics(
+    vm: &HPSVM,
+    post_accounts: &[(Address, AccountSharedData)],
+    execution_trace: ExecutionTrace,
+) -> ExecutionDiagnostics {
+    let pre_accounts = post_accounts
+        .iter()
+        .map(|(address, _)| (*address, vm.accounts.get_account(address).unwrap_or_default()))
+        .collect::<Vec<_>>();
+
+    let pre_balances = pre_accounts.iter().map(|(_, account)| account.lamports()).collect();
+    let post_balances = post_accounts.iter().map(|(_, account)| account.lamports()).collect();
+
+    let account_diffs = pre_accounts
+        .iter()
+        .zip(post_accounts.iter())
+        .filter_map(|((address, pre), (_, post))| {
+            let pre = public_account_from_shared(pre);
+            let post = public_account_from_shared(post);
+            (pre != post).then_some(AccountDiff { address: *address, pre, post })
+        })
+        .collect();
+
+    ExecutionDiagnostics {
+        pre_balances,
+        post_balances,
+        account_diffs,
+        pre_token_balances: token_balances(&pre_accounts, &vm.accounts),
+        post_token_balances: token_balances(post_accounts, &vm.accounts),
+        execution_trace,
+    }
+}
+
+fn public_account_from_shared(account: &AccountSharedData) -> Option<Account> {
+    (account.lamports() != 0).then(|| account.clone().into())
+}
+
+fn token_balances(
+    accounts: &[(Address, AccountSharedData)],
+    account_db: &AccountsDb,
+) -> Vec<TokenBalance> {
+    accounts
+        .iter()
+        .enumerate()
+        .filter_map(|(account_index, (address, account))| {
+            if account.data().len() != TokenAccount::LEN {
+                return None;
+            }
+
+            let token_account = TokenAccount::unpack(account.data()).ok()?;
+            let decimals = token_mint_decimals(accounts, account_db, &token_account.mint);
+
+            Some(TokenBalance {
+                account_index,
+                address: *address,
+                mint: token_account.mint,
+                owner: token_account.owner,
+                amount: token_account.amount,
+                decimals,
+            })
+        })
+        .collect()
+}
+
+fn token_mint_decimals(
+    accounts: &[(Address, AccountSharedData)],
+    account_db: &AccountsDb,
+    mint: &Address,
+) -> Option<u8> {
+    accounts
+        .iter()
+        .find(|(address, _)| address == mint)
+        .map(|(_, account)| account.clone())
+        .or_else(|| account_db.get_account(mint))
+        .and_then(|account| {
+            (account.data().len() == TokenMint::LEN)
+                .then(|| TokenMint::unpack(account.data()).ok().map(|mint| mint.decimals))
+                .flatten()
+        })
+}
+
+fn execution_trace_from_transaction_context(
+    sanitized_tx: &SanitizedTransaction,
+    transaction_context: &TransactionContext<'_>,
+) -> ExecutionTrace {
+    let account_keys = sanitized_tx.message().account_keys();
+    let instructions = (0..transaction_context.get_instruction_trace_length())
+        .filter_map(|index| {
+            let instruction_context =
+                transaction_context.get_instruction_context_at_index_in_trace(index).ok()?;
+            let program_index = instruction_context
+                .get_index_of_program_account_in_transaction()
+                .unwrap_or_default() as usize;
+            let program_id = account_keys.get(program_index).copied().unwrap_or_default();
+            let stack_height =
+                u8::try_from(instruction_context.get_stack_height()).unwrap_or(u8::MAX);
+            let accounts = (0..instruction_context.get_number_of_instruction_accounts())
+                .filter_map(|instruction_account_index| {
+                    let transaction_index = instruction_context
+                        .get_index_of_instruction_account_in_transaction(instruction_account_index)
+                        .ok()? as usize;
+                    let pubkey = account_keys.get(transaction_index).copied()?;
+                    let is_signer = instruction_context
+                        .is_instruction_account_signer(instruction_account_index)
+                        .unwrap_or(false);
+                    let is_writable = instruction_context
+                        .is_instruction_account_writable(instruction_account_index)
+                        .unwrap_or(false);
+                    Some(AccountMeta { pubkey, is_signer, is_writable })
+                })
+                .collect();
+
+            Some(ExecutedInstruction {
+                stack_height,
+                program_id,
+                accounts,
+                data: instruction_context.get_instruction_data().to_vec(),
+            })
+        })
+        .collect();
+
+    ExecutionTrace { instructions }
 }
 
 fn get_compute_budget_limits(
@@ -2203,6 +2482,34 @@ impl HPSVM {
         };
         execution_into_outcome(self, execution, log_collector, "transact")
     }
+
+    fn transact_instruction_chain_no_verify(
+        &mut self,
+        instructions: Vec<Instruction>,
+    ) -> ExecutionOutcome {
+        let tx = self.instruction_chain_transaction(&instructions);
+        let log_collector = Rc::new(RefCell::new(LogCollector {
+            bytes_limit: self.runtime_env.log_bytes_limit,
+            ..Default::default()
+        }));
+        let sigverify = self.cfg.sigverify;
+        self.cfg.sigverify = false;
+        let execution = self.execute_transaction_no_verify(tx, log_collector.clone());
+        self.cfg.sigverify = sigverify;
+        execution_into_outcome(self, execution, log_collector, "process_instruction_chain")
+    }
+
+    fn instruction_chain_transaction(&self, instructions: &[Instruction]) -> VersionedTransaction {
+        let fee_payer = fee_payer_for_instructions(instructions, self.airdrop_pubkey());
+        let message = Message::new_with_blockhash(
+            instructions,
+            Some(&fee_payer),
+            &self.block_env.latest_blockhash,
+        );
+        let signatures =
+            vec![Signature::default(); usize::from(message.header.num_required_signatures)];
+        VersionedTransaction { signatures, message: VersionedMessage::Legacy(message) }
+    }
 }
 
 fn fee_payer_for_instruction_case(case: &instruction::InstructionCase) -> Address {
@@ -2213,6 +2520,21 @@ fn fee_payer_for_instruction_case(case: &instruction::InstructionCase) -> Addres
         .or_else(|| case.accounts.first())
         .map(|account| account.pubkey)
         .unwrap_or_else(Address::new_unique)
+}
+
+fn fee_payer_for_instructions(instructions: &[Instruction], fallback: Address) -> Address {
+    instructions
+        .iter()
+        .flat_map(|instruction| instruction.accounts.iter())
+        .find(|account| account.is_signer)
+        .or_else(|| {
+            instructions
+                .iter()
+                .flat_map(|instruction| instruction.accounts.iter())
+                .find(|account| account.is_writable)
+        })
+        .map(|account| account.pubkey)
+        .unwrap_or(fallback)
 }
 
 #[cfg(feature = "invocation-inspect-callback")]

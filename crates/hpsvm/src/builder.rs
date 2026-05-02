@@ -47,6 +47,7 @@ struct BuildPlan {
     include_sysvars: bool,
     include_feature_accounts: bool,
     include_builtins: bool,
+    include_spl_programs: bool,
     include_default_programs: bool,
     #[cfg(feature = "precompiles")]
     include_precompiles: bool,
@@ -69,6 +70,7 @@ impl BuildPlan {
             include_sysvars: false,
             include_feature_accounts: false,
             include_builtins: false,
+            include_spl_programs: false,
             include_default_programs: false,
             #[cfg(feature = "precompiles")]
             include_precompiles: false,
@@ -161,6 +163,12 @@ impl HpsvmBuilder<FeatureConfigOpen> {
         self.seal()
     }
 
+    /// Queue only the SPL Token, Token-2022, and Associated Token programs.
+    pub fn with_spl_programs(mut self) -> HpsvmBuilder<FeatureConfigSealed> {
+        self.plan.include_spl_programs = true;
+        self.seal()
+    }
+
     /// Queue the standard precompiles and seal the feature selection window.
     #[cfg(feature = "precompiles")]
     pub fn with_precompiles(mut self) -> HpsvmBuilder<FeatureConfigSealed> {
@@ -200,6 +208,12 @@ impl HpsvmBuilder<FeatureConfigSealed> {
     /// Queue the standard default programs after the feature set has been locked in.
     pub fn with_default_programs(mut self) -> Self {
         self.plan.include_default_programs = true;
+        self
+    }
+
+    /// Queue only the SPL Token, Token-2022, and Associated Token programs.
+    pub fn with_spl_programs(mut self) -> Self {
+        self.plan.include_spl_programs = true;
         self
     }
 
@@ -305,6 +319,7 @@ impl<State: FeatureConfigState> HpsvmBuilder<State> {
             include_sysvars,
             include_feature_accounts,
             include_builtins,
+            include_spl_programs,
             include_default_programs,
             #[cfg(feature = "precompiles")]
             include_precompiles,
@@ -359,6 +374,8 @@ impl<State: FeatureConfigState> HpsvmBuilder<State> {
         }
         if include_default_programs {
             svm.set_default_programs();
+        } else if include_spl_programs {
+            svm.set_spl_programs();
         }
         #[cfg(feature = "precompiles")]
         if include_precompiles {

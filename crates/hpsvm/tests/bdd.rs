@@ -2,13 +2,17 @@ use std::{fmt, fmt::Debug, path::PathBuf};
 
 use agave_feature_set::{FeatureSet, raise_cpi_nesting_limit_to_8};
 use cucumber::{World as _, given, then, when};
-use hpsvm::HPSVM;
-use solana_address::address;
-use solana_sdk_ids::{bpf_loader, bpf_loader_upgradeable};
+use hpsvm::{HPSVM, types::TransactionMetadata};
+use solana_account::Account;
+use solana_address::{Address, address};
+use solana_sdk_ids::{bpf_loader, bpf_loader_upgradeable, system_program};
+use solana_system_interface::instruction::transfer;
 
 #[derive(Default, cucumber::World)]
 struct FeatureSetWorld {
     svm: Option<HPSVM>,
+    recipient: Option<Address>,
+    last_meta: Option<TransactionMetadata>,
 }
 
 impl Debug for FeatureSetWorld {
@@ -53,6 +57,45 @@ fn token_program_uses_legacy_loader(world: &mut FeatureSetWorld) {
         svm.get_account(&token_program_id).expect("token program should exist").owner,
         bpf_loader::id()
     );
+}
+
+#[when("a direct system transfer instruction is processed")]
+fn process_system_transfer_instruction(world: &mut FeatureSetWorld) {
+    let mut svm = world.svm.take().expect("world should contain an HPSVM instance");
+    let sender = Address::new_unique();
+    let recipient = Address::new_unique();
+    svm.set_account(sender, Account::new(10_000, 0, &system_program::id()))
+        .expect("sender account should be inserted");
+
+    let meta = svm
+        .process_instruction(transfer(&sender, &recipient, 64))
+        .expect("instruction should succeed");
+
+    world.recipient = Some(recipient);
+    world.last_meta = Some(meta);
+    world.svm = Some(svm);
+}
+
+#[then("the recipient account should be committed")]
+fn recipient_account_committed(world: &mut FeatureSetWorld) {
+    let svm = world.svm.as_ref().expect("world should contain an HPSVM instance");
+    let recipient = world.recipient.expect("scenario should record recipient");
+
+    assert_eq!(svm.get_balance(&recipient), Some(64));
+}
+
+#[then("the instruction metadata should include account diagnostics")]
+fn instruction_metadata_has_account_diagnostics(world: &mut FeatureSetWorld) {
+    let meta = world.last_meta.as_ref().expect("scenario should record metadata");
+    let recipient = world.recipient.expect("scenario should record recipient");
+
+    assert!(
+        meta.diagnostics
+            .account_diffs
+            .iter()
+            .any(|diff| diff.address == recipient && diff.pre.is_none())
+    );
+    assert!(!meta.diagnostics.execution_trace.instructions.is_empty());
 }
 
 #[tokio::test]

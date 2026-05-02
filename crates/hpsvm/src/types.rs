@@ -1,6 +1,6 @@
-use solana_account::AccountSharedData;
+use solana_account::{Account, AccountSharedData};
 use solana_address::Address;
-use solana_instruction::error::InstructionError;
+use solana_instruction::{Instruction, account_meta::AccountMeta, error::InstructionError};
 use solana_message::inner_instruction::InnerInstructionsList;
 use solana_program_error::ProgramError;
 use solana_signature::Signature;
@@ -20,12 +20,86 @@ pub struct TransactionMetadata {
     pub compute_units_consumed: u64,
     pub return_data: TransactionReturnData,
     pub fee: u64,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub diagnostics: ExecutionDiagnostics,
 }
 
 impl TransactionMetadata {
     #[expect(missing_docs)]
     pub fn pretty_logs(&self) -> String {
         format_logs(&self.logs)
+    }
+}
+
+/// Structured execution details captured alongside transaction metadata.
+#[expect(missing_docs)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+pub struct ExecutionDiagnostics {
+    pub pre_balances: Vec<u64>,
+    pub post_balances: Vec<u64>,
+    pub account_diffs: Vec<AccountDiff>,
+    pub pre_token_balances: Vec<TokenBalance>,
+    pub post_token_balances: Vec<TokenBalance>,
+    pub execution_trace: ExecutionTrace,
+}
+
+/// Pre/post account state for a writable account touched by execution.
+#[expect(missing_docs)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+pub struct AccountDiff {
+    pub address: Address,
+    pub pre: Option<Account>,
+    pub post: Option<Account>,
+}
+
+/// SPL token balance metadata for a token account present in execution diagnostics.
+#[expect(missing_docs)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+pub struct TokenBalance {
+    pub account_index: usize,
+    pub address: Address,
+    pub mint: Address,
+    pub owner: Address,
+    pub amount: u64,
+    pub decimals: Option<u8>,
+}
+
+/// Instruction trace frames captured directly from the Solana transaction context.
+#[expect(missing_docs)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+pub struct ExecutionTrace {
+    pub instructions: Vec<ExecutedInstruction>,
+}
+
+/// One executed top-level or CPI instruction.
+#[expect(missing_docs)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+pub struct ExecutedInstruction {
+    pub stack_height: u8,
+    pub program_id: Address,
+    pub accounts: Vec<AccountMeta>,
+    pub data: Vec<u8>,
+}
+
+impl ExecutedInstruction {
+    /// Returns this trace frame as a normal Solana instruction.
+    #[must_use]
+    pub fn instruction(&self) -> Instruction {
+        Instruction {
+            program_id: self.program_id,
+            accounts: self.accounts.clone(),
+            data: self.data.clone(),
+        }
     }
 }
 
@@ -120,6 +194,7 @@ pub(crate) struct ExecutionResult {
     pub(crate) compute_units_consumed: u64,
     pub(crate) inner_instructions: InnerInstructionsList,
     pub(crate) return_data: TransactionReturnData,
+    pub(crate) execution_trace: ExecutionTrace,
     /// Whether the transaction can be included in a block
     pub(crate) included: bool,
     pub(crate) fee: u64,
@@ -135,6 +210,7 @@ impl Default for ExecutionResult {
             compute_units_consumed: Default::default(),
             inner_instructions: Default::default(),
             return_data: Default::default(),
+            execution_trace: Default::default(),
             included: false,
             fee: 0,
             fee_payer: None,

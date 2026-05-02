@@ -72,6 +72,7 @@ solana-nonce.workspace = true
 solana-nonce-account.workspace = true
 solana-precompile-error.workspace = true
 solana-program-error.workspace = true
+solana-program-pack.workspace = true
 solana-program-runtime.workspace = true
 solana-rent.workspace = true
 solana-sdk-ids.workspace = true
@@ -92,6 +93,7 @@ solana-sysvar-id.workspace = true
 solana-transaction = { workspace = true, features = ["verify"] }
 solana-transaction-context.workspace = true
 solana-transaction-error.workspace = true
+spl-token-interface.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

@@ -17,7 +17,18 @@ pub(crate) const DEFAULT_PROGRAM_IDS: [Address; 8] = [
     stake::ID,
 ];
 
+pub(crate) const SPL_PROGRAM_IDS: [Address; 3] = [
+    address!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+    address!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"),
+    address!("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"),
+];
+
 pub(crate) fn load_default_programs(svm: &mut HPSVM) {
+    load_spl_programs(svm);
+    load_non_spl_default_programs(svm);
+}
+
+pub(crate) fn load_spl_programs(svm: &mut HPSVM) {
     // if replace spl-token with p-token feature is enabled, the SPL token contract is loaded from
     // a different .so
     if svm.cfg.feature_set.is_active(&replace_spl_token_with_p_token::id()) {
@@ -43,6 +54,15 @@ pub(crate) fn load_default_programs(svm: &mut HPSVM) {
     )
     .expect("failed to load built-in program");
     svm.add_program_preverified(
+        address!("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"),
+        include_bytes!("../../elf/spl_associated_token_account-1.1.1.so"),
+        &bpf_loader::id(),
+    )
+    .expect("failed to load built-in program");
+}
+
+fn load_non_spl_default_programs(svm: &mut HPSVM) {
+    svm.add_program_preverified(
         address!("Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo"),
         include_bytes!("../../elf/spl_memo-1.0.0.so"),
         &bpf_loader_deprecated::id(),
@@ -51,12 +71,6 @@ pub(crate) fn load_default_programs(svm: &mut HPSVM) {
     svm.add_program_preverified(
         address!("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"),
         include_bytes!("../../elf/spl_memo-3.0.0.so"),
-        &bpf_loader::id(),
-    )
-    .expect("failed to load built-in program");
-    svm.add_program_preverified(
-        address!("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"),
-        include_bytes!("../../elf/spl_associated_token_account-1.1.1.so"),
         &bpf_loader::id(),
     )
     .expect("failed to load built-in program");

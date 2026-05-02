@@ -193,6 +193,7 @@ fn worker_vm(vm: &HPSVM, runtime: HpsvmRuntimeState) -> HPSVM {
         airdrop_kp: vm.airdrop_kp,
         builtins_loaded: vm.builtins_loaded,
         default_programs_loaded: vm.default_programs_loaded,
+        spl_programs_loaded: vm.spl_programs_loaded,
         cfg: vm.cfg.clone(),
         feature_accounts_loaded: vm.feature_accounts_loaded,
         inspector: vm.inspector.clone(),
