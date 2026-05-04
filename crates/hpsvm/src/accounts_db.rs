@@ -450,7 +450,9 @@ impl AccountsDb {
                     metrics,
                 )
                 .map_err(|_| {
-                    tracing::error!("Error encountered when calling LoadedProgram::new() for loader_v4.");
+                    tracing::error!(
+                        "Error encountered when calling LoadedProgram::new() for loader_v4."
+                    );
                     InstructionError::InvalidAccountData
                 })
             } else {

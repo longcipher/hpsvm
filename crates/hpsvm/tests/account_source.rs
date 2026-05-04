@@ -96,9 +96,8 @@ fn transaction_execution_preserves_account_source_failures() {
         )
     };
 
-    let err = svm
-        .try_transact(build_tx())
-        .expect_err("try_transact should preserve source failures");
+    let err =
+        svm.try_transact(build_tx()).expect_err("try_transact should preserve source failures");
 
     assert!(matches!(err, HPSVMError::AccountSource { pubkey, .. } if pubkey == recipient));
 
@@ -108,9 +107,7 @@ fn transaction_execution_preserves_account_source_failures() {
     assert_eq!(outcome.meta().diagnostics.account_source_failures.len(), 1);
     assert_eq!(outcome.meta().diagnostics.account_source_failures[0].pubkey, recipient);
     assert!(
-        outcome.meta().diagnostics.account_source_failures[0]
-            .error
-            .contains("source unavailable")
+        outcome.meta().diagnostics.account_source_failures[0].error.contains("source unavailable")
     );
 }
 

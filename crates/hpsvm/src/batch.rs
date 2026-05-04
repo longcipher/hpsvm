@@ -7,9 +7,9 @@ use solana_transaction_error::TransactionError;
 use thiserror::Error;
 
 use crate::{
-    CommitDelta, HPSVM, accounts_db::AccountsDb, apply_commit_delta, history::TransactionHistory,
-    next_vm_instance_id, outcome_into_result_and_delta, types::TransactionResult,
-    TransactionOrigin,
+    CommitDelta, HPSVM, TransactionOrigin, accounts_db::AccountsDb, apply_commit_delta,
+    history::TransactionHistory, next_vm_instance_id, outcome_into_result_and_delta,
+    types::TransactionResult,
 };
 
 /// A conflict-free stage in a transaction batch plan.

@@ -38,8 +38,7 @@ fn default_hpsvm(world: &mut FeatureSetWorld) {
 #[when("the VM feature set is replaced with the default disabled feature set")]
 fn replace_feature_set(world: &mut FeatureSetWorld) {
     let mut svm = world.svm.take().expect("world should contain an HPSVM instance");
-    svm.set_feature_set(FeatureSet::default())
-        .expect("feature-set reconfiguration should succeed");
+    svm.set_feature_set(FeatureSet::default()).expect("feature-set reconfiguration should succeed");
     world.svm = Some(svm);
 }
 

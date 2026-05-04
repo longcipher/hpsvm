@@ -76,8 +76,11 @@ fn keyed_system_and_token_factories_preserve_addresses() {
 fn get_spl_account_reports_short_account_data_without_panicking() {
     let mut svm = HPSVM::new();
     let account = Address::new_unique();
-    svm.set_account(account, Account { lamports: 1, data: vec![0; 1], owner: TOKEN_ID, ..Default::default() })
-        .expect("short token account should be inserted");
+    svm.set_account(
+        account,
+        Account { lamports: 1, data: vec![0; 1], owner: TOKEN_ID, ..Default::default() },
+    )
+    .expect("short token account should be inserted");
 
     let err = get_spl_account::<TokenAccount>(&svm, &account)
         .expect_err("short account data should be reported as a transaction failure");

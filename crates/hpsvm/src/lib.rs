@@ -353,8 +353,8 @@ use crate::{
     programs::{DEFAULT_PROGRAM_IDS, SPL_PROGRAM_IDS, load_default_programs, load_spl_programs},
     types::{
         AccountDiff, AccountSourceFailure, ExecutedInstruction, ExecutionDiagnostics,
-        ExecutionOutcome, ExecutionResult, ExecutionTrace, FailedTransactionMetadata,
-        TokenBalance, TransactionMetadata, TransactionResult,
+        ExecutionOutcome, ExecutionResult, ExecutionTrace, FailedTransactionMetadata, TokenBalance,
+        TransactionMetadata, TransactionResult,
     },
     utils::{
         create_blockhash,
@@ -596,22 +596,15 @@ impl HPSVM {
     }
 
     fn on_transaction_start(&self, tx: &SanitizedTransaction) {
-        self.inspector
-            .on_transaction_start_with_origin(self.inspection_origin, self, tx);
+        self.inspector.on_transaction_start_with_origin(self.inspection_origin, self, tx);
     }
 
     pub(crate) fn on_instruction(&self, index: usize, program_id: &Address) {
-        self.inspector.on_instruction_with_origin(
-            self.inspection_origin,
-            self,
-            index,
-            program_id,
-        );
+        self.inspector.on_instruction_with_origin(self.inspection_origin, self, index, program_id);
     }
 
     fn on_transaction_end(&self, result: &solana_transaction_error::TransactionResult<()>) {
-        self.inspector
-            .on_transaction_end_with_origin(self.inspection_origin, self, result);
+        self.inspector.on_transaction_end_with_origin(self.inspection_origin, self, result);
     }
 
     pub(crate) fn with_transaction_origin<T>(
@@ -1008,9 +1001,7 @@ impl HPSVM {
         &self,
         address: &Address,
     ) -> Result<Option<Account>, AccountSourceError> {
-        self.accounts
-            .try_get_account(address)
-            .map(|account| account.map(Into::into))
+        self.accounts.try_get_account(address).map(|account| account.map(Into::into))
     }
 
     /// **⚠️ ADVANCED USE ONLY ⚠️**
@@ -1113,8 +1104,7 @@ impl HPSVM {
     where
         T: Sysvar + SysvarId + DeserializeOwned,
     {
-        self.try_get_sysvar()
-            .expect("sysvar account should exist and deserialize")
+        self.try_get_sysvar().expect("sysvar account should exist and deserialize")
     }
 
     fn try_get_sysvar<T>(&self) -> Result<T, HPSVMError>
@@ -1126,12 +1116,10 @@ impl HPSVM {
             .get_account_ref(&T::id())
             .ok_or(HPSVMError::MissingRuntimeComponent { component: "sysvars" })?;
 
-        account
-            .deserialize_data()
-            .map_err(|error| HPSVMError::SysvarSerialization {
-                sysvar: std::any::type_name::<T>(),
-                reason: error.to_string(),
-            })
+        account.deserialize_data().map_err(|error| HPSVMError::SysvarSerialization {
+            sysvar: std::any::type_name::<T>(),
+            reason: error.to_string(),
+        })
     }
 
     fn require_sysvars_loaded(&self) -> Result<(), HPSVMError> {
@@ -1496,91 +1484,94 @@ impl HPSVM {
             });
         }
         let builtins_start_index = accounts.len();
-        let program_indices = hotpath_block!("hpsvm::process_transaction::resolve_program_indices", {
-            let mut program_indices = Vec::with_capacity(tx.message().instructions().len());
+        let program_indices = hotpath_block!(
+            "hpsvm::process_transaction::resolve_program_indices",
+            {
+                let mut program_indices = Vec::with_capacity(tx.message().instructions().len());
 
-            for compiled_instruction in tx.message().instructions() {
-                let program_index = compiled_instruction.program_id_index as usize;
-                let (program_id, program_account) =
-                    accounts.get(program_index).expect("program account should exist");
-                if native_loader::check_id(program_id) {
-                    program_indices.push(program_index as IndexOfAccount);
-                    continue;
-                }
-                if !program_account.executable() {
-                    tracing::error!("Program account {program_id} is not executable.");
-                    return Err(ExecutionResult {
-                        tx_result: Err(TransactionError::InvalidProgramForExecution),
-                        compute_units_consumed: accumulated_consume_units,
-                        fee,
-                        ..Default::default()
-                    });
-                }
+                for compiled_instruction in tx.message().instructions() {
+                    let program_index = compiled_instruction.program_id_index as usize;
+                    let (program_id, program_account) =
+                        accounts.get(program_index).expect("program account should exist");
+                    if native_loader::check_id(program_id) {
+                        program_indices.push(program_index as IndexOfAccount);
+                        continue;
+                    }
+                    if !program_account.executable() {
+                        tracing::error!("Program account {program_id} is not executable.");
+                        return Err(ExecutionResult {
+                            tx_result: Err(TransactionError::InvalidProgramForExecution),
+                            compute_units_consumed: accumulated_consume_units,
+                            fee,
+                            ..Default::default()
+                        });
+                    }
 
-                let owner_id = program_account.owner();
-                if native_loader::check_id(owner_id) {
-                    program_indices.push(program_index as IndexOfAccount);
-                    continue;
-                }
+                    let owner_id = program_account.owner();
+                    if native_loader::check_id(owner_id) {
+                        program_indices.push(program_index as IndexOfAccount);
+                        continue;
+                    }
 
-                let Some(cached_program_accounts) = accounts.get(builtins_start_index..) else {
-                    return Err(ExecutionResult {
-                        tx_result: Err(TransactionError::ProgramAccountNotFound),
-                        compute_units_consumed: accumulated_consume_units,
-                        fee,
-                        ..Default::default()
-                    });
-                };
+                    let Some(cached_program_accounts) = accounts.get(builtins_start_index..) else {
+                        return Err(ExecutionResult {
+                            tx_result: Err(TransactionError::ProgramAccountNotFound),
+                            compute_units_consumed: accumulated_consume_units,
+                            fee,
+                            ..Default::default()
+                        });
+                    };
 
-                if !cached_program_accounts.iter().any(|(key, _)| key == owner_id) {
-                    let owner_account = match self.accounts.try_get_account(owner_id) {
-                        Ok(Some(account)) => account,
-                        Ok(None) => {
+                    if !cached_program_accounts.iter().any(|(key, _)| key == owner_id) {
+                        let owner_account = match self.accounts.try_get_account(owner_id) {
+                            Ok(Some(account)) => account,
+                            Ok(None) => {
+                                return Err(ExecutionResult {
+                                    tx_result: Err(TransactionError::ProgramAccountNotFound),
+                                    compute_units_consumed: accumulated_consume_units,
+                                    fee,
+                                    ..Default::default()
+                                });
+                            }
+                            Err(error) => {
+                                return Err(execution_result_with_account_source_error(
+                                    *owner_id,
+                                    error,
+                                    TransactionError::ProgramAccountNotFound,
+                                    fee,
+                                    "failed to load owner account from source",
+                                ));
+                            }
+                        };
+                        if !native_loader::check_id(owner_account.owner()) {
+                            tracing::error!(
+                                "Owner account {owner_id} is not owned by the native loader program."
+                            );
                             return Err(ExecutionResult {
-                                tx_result: Err(TransactionError::ProgramAccountNotFound),
+                                tx_result: Err(TransactionError::InvalidProgramForExecution),
                                 compute_units_consumed: accumulated_consume_units,
                                 fee,
                                 ..Default::default()
                             });
                         }
-                        Err(error) => {
-                            return Err(execution_result_with_account_source_error(
-                                *owner_id,
-                                error,
-                                TransactionError::ProgramAccountNotFound,
+                        if !owner_account.executable() {
+                            tracing::error!("Owner account {owner_id} is not executable");
+                            return Err(ExecutionResult {
+                                tx_result: Err(TransactionError::InvalidProgramForExecution),
+                                compute_units_consumed: accumulated_consume_units,
                                 fee,
-                                "failed to load owner account from source",
-                            ));
+                                ..Default::default()
+                            });
                         }
-                    };
-                    if !native_loader::check_id(owner_account.owner()) {
-                        tracing::error!(
-                            "Owner account {owner_id} is not owned by the native loader program."
-                        );
-                        return Err(ExecutionResult {
-                            tx_result: Err(TransactionError::InvalidProgramForExecution),
-                            compute_units_consumed: accumulated_consume_units,
-                            fee,
-                            ..Default::default()
-                        });
+                        accounts.push((*owner_id, owner_account));
                     }
-                    if !owner_account.executable() {
-                        tracing::error!("Owner account {owner_id} is not executable");
-                        return Err(ExecutionResult {
-                            tx_result: Err(TransactionError::InvalidProgramForExecution),
-                            compute_units_consumed: accumulated_consume_units,
-                            fee,
-                            ..Default::default()
-                        });
-                    }
-                    accounts.push((*owner_id, owner_account));
+
+                    program_indices.push(program_index as IndexOfAccount);
                 }
 
-                program_indices.push(program_index as IndexOfAccount);
+                Ok(program_indices)
             }
-
-            Ok(program_indices)
-        })?;
+        )?;
 
         let mut context = hotpath_block!(
             "hpsvm::process_transaction::create_transaction_context",
@@ -1668,20 +1659,20 @@ impl HPSVM {
         let message = tx.message();
         for index in 0..message.account_keys().len() {
             if message.is_writable(index) {
-                let account = context
-                    .accounts()
-                    .try_borrow(index as IndexOfAccount)
-                    .map_err(|err| ExecutionResult {
-                        tx_result: Err(TransactionError::InstructionError(index as u8, err)),
-                        ..Default::default()
+                let account =
+                    context.accounts().try_borrow(index as IndexOfAccount).map_err(|err| {
+                        ExecutionResult {
+                            tx_result: Err(TransactionError::InstructionError(index as u8, err)),
+                            ..Default::default()
+                        }
                     })?;
 
-                let pubkey = context
-                    .get_key_of_account_at_index(index as IndexOfAccount)
-                    .map_err(|err| ExecutionResult {
+                let pubkey = context.get_key_of_account_at_index(index as IndexOfAccount).map_err(
+                    |err| ExecutionResult {
                         tx_result: Err(TransactionError::InstructionError(index as u8, err)),
                         ..Default::default()
-                    })?;
+                    },
+                )?;
 
                 let post_rent_state =
                     get_account_rent_state(rent, account.lamports(), account.data().len());
@@ -1705,10 +1696,7 @@ impl HPSVM {
                     pubkey,
                     index as IndexOfAccount,
                 )
-                .map_err(|error| ExecutionResult {
-                    tx_result: Err(error),
-                    ..Default::default()
-                })?;
+                .map_err(|error| ExecutionResult { tx_result: Err(error), ..Default::default() })?;
             }
         }
         Ok(())
@@ -2285,10 +2273,7 @@ fn execution_result_with_account_source_error(
     ExecutionResult {
         tx_result: Err(tx_error),
         fee,
-        account_source_failures: vec![AccountSourceFailure {
-            pubkey,
-            error: source.to_string(),
-        }],
+        account_source_failures: vec![AccountSourceFailure { pubkey, error: source.to_string() }],
         fatal_error: Some(HPSVMError::AccountSource { pubkey, source }),
         ..Default::default()
     }
