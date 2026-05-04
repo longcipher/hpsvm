@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use hpsvm::{AccountSource, HPSVM};
+use hpsvm::{AccountSource, AccountSourceError, HPSVM, error::HPSVMError};
 use solana_account::{AccountSharedData, ReadableAccount, state_traits::StateMut};
 use solana_address::Address;
 use solana_keypair::Keypair;
@@ -14,6 +14,7 @@ use solana_sdk_ids::system_program;
 use solana_signer::Signer;
 use solana_system_interface::instruction::{advance_nonce_account, transfer};
 use solana_transaction::Transaction;
+use solana_transaction_error::TransactionError;
 
 #[derive(Clone, Default)]
 struct StaticAccountSource {
@@ -26,6 +27,18 @@ impl AccountSource for StaticAccountSource {
         pubkey: &Address,
     ) -> Result<Option<AccountSharedData>, hpsvm::AccountSourceError> {
         Ok(self.accounts.get(pubkey).cloned())
+    }
+}
+
+#[derive(Clone, Default)]
+struct FailingAccountSource;
+
+impl AccountSource for FailingAccountSource {
+    fn get_account(
+        &self,
+        pubkey: &Address,
+    ) -> Result<Option<AccountSharedData>, hpsvm::AccountSourceError> {
+        Err(AccountSourceError::new(format!("source unavailable for {pubkey}")))
     }
 }
 
@@ -50,6 +63,55 @@ fn vm_reads_missing_accounts_from_the_configured_source() {
     let svm = HPSVM::builder().with_account_source(source).build().unwrap();
 
     assert_eq!(svm.get_account(&address).unwrap().lamports, 77);
+}
+
+#[test]
+fn vm_exposes_account_source_failures_to_callers() {
+    let address = Address::new_unique();
+    let svm = HPSVM::builder().with_account_source(FailingAccountSource).build().unwrap();
+
+    let err = svm
+        .try_get_account(&address)
+        .expect_err("source failure should not be collapsed into a missing account");
+
+    assert!(err.to_string().contains("source unavailable"));
+}
+
+#[test]
+fn transaction_execution_preserves_account_source_failures() {
+    let payer = Keypair::new();
+    let recipient = Address::new_unique();
+    let mut svm = HPSVM::builder()
+        .with_program_test_defaults()
+        .with_account_source(FailingAccountSource)
+        .build()
+        .unwrap();
+    svm.airdrop(&payer.pubkey(), 10_000).unwrap();
+
+    let build_tx = || {
+        Transaction::new(
+            &[&payer],
+            Message::new(&[transfer(&payer.pubkey(), &recipient, 1)], Some(&payer.pubkey())),
+            svm.latest_blockhash(),
+        )
+    };
+
+    let err = svm
+        .try_transact(build_tx())
+        .expect_err("try_transact should preserve source failures");
+
+    assert!(matches!(err, HPSVMError::AccountSource { pubkey, .. } if pubkey == recipient));
+
+    let outcome = svm.transact(build_tx());
+
+    assert_eq!(outcome.status(), &Err(TransactionError::AccountNotFound));
+    assert_eq!(outcome.meta().diagnostics.account_source_failures.len(), 1);
+    assert_eq!(outcome.meta().diagnostics.account_source_failures[0].pubkey, recipient);
+    assert!(
+        outcome.meta().diagnostics.account_source_failures[0]
+            .error
+            .contains("source unavailable")
+    );
 }
 
 #[test]

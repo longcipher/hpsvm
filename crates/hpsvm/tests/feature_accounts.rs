@@ -32,7 +32,8 @@ fn with_feature_set_rebuilds_materialized_defaults() {
     );
     assert!(svm.get_account(&feature_id).is_some());
 
-    svm.set_feature_set(FeatureSet::default());
+    svm.set_feature_set(FeatureSet::default())
+        .expect("feature-set reconfiguration should report success");
 
     assert!(svm.get_account(&feature_id).is_none());
     assert_eq!(

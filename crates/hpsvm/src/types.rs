@@ -7,7 +7,7 @@ use solana_signature::Signature;
 use solana_transaction_context::TransactionReturnData;
 use solana_transaction_error::{TransactionError, TransactionResult as Result};
 
-use crate::format_logs::format_logs;
+use crate::{error::HPSVMError, format_logs::format_logs};
 
 #[expect(missing_docs)]
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -40,9 +40,20 @@ pub struct ExecutionDiagnostics {
     pub pre_balances: Vec<u64>,
     pub post_balances: Vec<u64>,
     pub account_diffs: Vec<AccountDiff>,
+    pub account_source_failures: Vec<AccountSourceFailure>,
     pub pre_token_balances: Vec<TokenBalance>,
     pub post_token_balances: Vec<TokenBalance>,
     pub execution_trace: ExecutionTrace,
+}
+
+/// External account source failures observed while preparing execution.
+#[expect(missing_docs)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+pub struct AccountSourceFailure {
+    pub pubkey: Address,
+    pub error: String,
 }
 
 /// Pre/post account state for a writable account touched by execution.
@@ -199,6 +210,8 @@ pub(crate) struct ExecutionResult {
     pub(crate) included: bool,
     pub(crate) fee: u64,
     pub(crate) fee_payer: Option<Address>,
+    pub(crate) account_source_failures: Vec<AccountSourceFailure>,
+    pub(crate) fatal_error: Option<HPSVMError>,
 }
 
 impl Default for ExecutionResult {
@@ -214,6 +227,8 @@ impl Default for ExecutionResult {
             included: false,
             fee: 0,
             fee_payer: None,
+            account_source_failures: Default::default(),
+            fatal_error: None,
         }
     }
 }

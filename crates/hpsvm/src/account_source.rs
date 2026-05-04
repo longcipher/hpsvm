@@ -1,7 +1,7 @@
 use solana_account::AccountSharedData;
 use solana_address::Address;
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("{message}")]
 pub struct AccountSourceError {
     message: String,

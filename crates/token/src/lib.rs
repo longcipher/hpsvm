@@ -66,14 +66,18 @@ pub fn get_spl_account<T: Pack + IsInitialized>(
     svm: &HPSVM,
     account: &Address,
 ) -> Result<T, FailedTransactionMetadata> {
-    let account = T::unpack(
-        &svm.get_account(account)
-            .ok_or(FailedTransactionMetadata {
-                err: TransactionError::AccountNotFound,
-                meta: Default::default(),
-            })?
-            .data[..T::LEN],
-    )?;
+    let account = svm.get_account(account).ok_or(FailedTransactionMetadata {
+        err: TransactionError::AccountNotFound,
+        meta: Default::default(),
+    })?;
+    let data = account.data.get(..T::LEN).ok_or(FailedTransactionMetadata {
+        err: TransactionError::InstructionError(
+            0,
+            solana_instruction::error::InstructionError::AccountDataTooSmall,
+        ),
+        meta: Default::default(),
+    })?;
+    let account = T::unpack(data)?;
 
     Ok(account)
 }

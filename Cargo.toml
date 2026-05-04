@@ -11,11 +11,8 @@ repository = "https://github.com/longcipher/hpsvm"
 [workspace.dependencies]
 # local crates
 hpsvm = { path = "crates/hpsvm", version = "0.1.2" }
-hpsvm-cli = { path = "bin/hpsvm-cli", version = "0.1.2" }
 hpsvm-fixture = { path = "crates/hpsvm-fixture", version = "0.1.2" }
 hpsvm-fixture-fd = { path = "crates/hpsvm-fixture-fd", version = "0.1.2" }
-hpsvm-loader = { path = "crates/hpsvm-loader", version = "0.1.2" }
-hpsvm-token = { path = "crates/token", version = "0.1.2" }
 
 # external crates
 agave-feature-set = "3.1.14"
@@ -34,7 +31,6 @@ hotpath = "0.15.1"
 indexmap = "2.14.0"
 itertools = "0.14.0"
 libsecp256k1 = "0.7.2"
-log = "0.4.29"
 mollusk-svm-fuzz-fixture-firedancer = "0.12.0"
 parking_lot = "0.12.5"
 prost = "0.14"
@@ -105,6 +101,7 @@ spl-token-interface = "2.0.0"
 test-log = "0.2.20"
 thiserror = "2.0.18"
 tokio = "1.52.1"
+tracing = "0.1.44"
 
 [workspace.lints.clippy]
 # Enable pedantic lints for stricter code quality

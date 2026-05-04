@@ -1,16 +1,20 @@
 //! Account snapshot factory coverage.
 
+use hpsvm::HPSVM;
 use hpsvm_token::{
     TOKEN_ID,
     accounts::{
         keyed_associated_token_account, keyed_mint_account, keyed_system_account,
         keyed_token_account,
     },
+    get_spl_account,
     spl_token::state::{Account as TokenAccount, AccountState, Mint},
 };
+use solana_account::Account;
 use solana_address::Address;
 use solana_program_pack::Pack;
 use solana_system_interface::program as system_program;
+use solana_transaction_error::TransactionError;
 use spl_associated_token_account_interface::address::get_associated_token_address_with_program_id;
 
 #[test]
@@ -66,4 +70,23 @@ fn keyed_system_and_token_factories_preserve_addresses() {
     let (token_key, token_account) = keyed_token_account(token_address, token);
     assert_eq!(token_key, token_address);
     assert_eq!(token_account.owner, TOKEN_ID);
+}
+
+#[test]
+fn get_spl_account_reports_short_account_data_without_panicking() {
+    let mut svm = HPSVM::new();
+    let account = Address::new_unique();
+    svm.set_account(account, Account { lamports: 1, data: vec![0; 1], owner: TOKEN_ID, ..Default::default() })
+        .expect("short token account should be inserted");
+
+    let err = get_spl_account::<TokenAccount>(&svm, &account)
+        .expect_err("short account data should be reported as a transaction failure");
+
+    assert_eq!(
+        err.err,
+        TransactionError::InstructionError(
+            0,
+            solana_instruction::error::InstructionError::AccountDataTooSmall,
+        )
+    );
 }

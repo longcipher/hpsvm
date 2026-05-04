@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 #[cfg(feature = "hashbrown")]
 use hashbrown::{HashMap, HashSet};
-use log::error;
 use solana_account::{AccountSharedData, ReadableAccount, state_traits::StateMut};
 use solana_address::Address;
 use solana_address_lookup_table_interface::{error::AddressLookupError, state::AddressLookupTable};
@@ -36,7 +35,7 @@ use solana_sdk_ids::{
 use solana_transaction_error::AddressLoaderError;
 
 use crate::{
-    account_source::{AccountSource, EmptyAccountSource},
+    account_source::{AccountSource, AccountSourceError, EmptyAccountSource},
     error::{HPSVMError, InvalidSysvarDataError},
 };
 
@@ -197,23 +196,29 @@ impl AccountsDb {
         self.source = source;
     }
 
-    fn get_account_from_source(&self, pubkey: &Address) -> Option<AccountSharedData> {
-        match self.source.get_account(pubkey) {
-            Ok(account) => account,
-            Err(error) => {
-                error!("Failed to load account {pubkey:?} from source: {error}");
-                None
-            }
-        }
-    }
-
     pub fn get_account_ref(&self, pubkey: &Address) -> Option<&AccountSharedData> {
         self.inner.get(pubkey)
     }
 
+    pub fn try_get_account(
+        &self,
+        pubkey: &Address,
+    ) -> Result<Option<AccountSharedData>, AccountSourceError> {
+        if let Some(account) = self.get_account_ref(pubkey) {
+            return Ok(Some(account.clone()));
+        }
+
+        if self.removed.contains(pubkey) {
+            return Ok(None);
+        }
+
+        self.source.get_account(pubkey)
+    }
+
     pub fn get_account(&self, pubkey: &Address) -> Option<AccountSharedData> {
-        self.get_account_ref(pubkey).cloned().or_else(|| {
-            if self.removed.contains(pubkey) { None } else { self.get_account_from_source(pubkey) }
+        self.try_get_account(pubkey).unwrap_or_else(|error| {
+            tracing::error!(?pubkey, %error, "failed to load account from source");
+            None
         })
     }
 
@@ -390,14 +395,14 @@ impl AccountsDb {
                 metrics,
             )
             .map_err(|e| {
-                error!("Failed to load program: {e:?}");
+                tracing::error!("Failed to load program: {e:?}");
                 InstructionError::InvalidAccountData
             })
         } else if bpf_loader_upgradeable::check_id(owner) {
             let Ok(UpgradeableLoaderState::Program { programdata_address }) =
                 program_account.state()
             else {
-                error!(
+                tracing::error!(
                     "Program account data does not deserialize to UpgradeableLoaderState::Program"
                 );
                 return Err(InstructionError::InvalidAccountData);
@@ -424,11 +429,11 @@ impl AccountsDb {
                         .len()
                         .saturating_add(program_data.len()),
                     metrics).map_err(|e| {
-                        error!("Error encountered when calling ProgramCacheEntry::new() for bpf_loader_upgradeable: {e:?}");
+                        tracing::error!("Error encountered when calling ProgramCacheEntry::new() for bpf_loader_upgradeable: {e:?}");
                         InstructionError::InvalidAccountData
                     })
             } else {
-                error!("Index out of bounds using bpf_loader_upgradeable.");
+                tracing::error!("Index out of bounds using bpf_loader_upgradeable.");
                 Err(InstructionError::InvalidAccountData)
             }
         } else if loader_v4::check_id(owner) {
@@ -445,15 +450,15 @@ impl AccountsDb {
                     metrics,
                 )
                 .map_err(|_| {
-                    error!("Error encountered when calling LoadedProgram::new() for loader_v4.");
+                    tracing::error!("Error encountered when calling LoadedProgram::new() for loader_v4.");
                     InstructionError::InvalidAccountData
                 })
             } else {
-                error!("Index out of bounds using loader_v4.");
+                tracing::error!("Index out of bounds using loader_v4.");
                 Err(InstructionError::InvalidAccountData)
             }
         } else {
-            error!("Owner does not match any expected loader.");
+            tracing::error!("Owner does not match any expected loader.");
             Err(InstructionError::IncorrectProgramId)
         }
     }
@@ -516,7 +521,7 @@ impl AccountsDb {
             };
             let programdata_account =
                 self.get_account_ref(&programdata_address).ok_or_else(|| {
-                    error!("Program data account {programdata_address} not found");
+                    tracing::error!("Program data account {programdata_address} not found");
                     InstructionError::MissingAccount
                 })?;
             let program_data = programdata_account.data();
@@ -525,7 +530,7 @@ impl AccountsDb {
             {
                 Ok(programdata)
             } else {
-                error!("Index out of bounds using bpf_loader_upgradeable.");
+                tracing::error!("Index out of bounds using bpf_loader_upgradeable.");
                 Err(InstructionError::InvalidAccountData)
             }
         } else if loader_v4::check_id(owner) {
@@ -534,11 +539,11 @@ impl AccountsDb {
             {
                 Ok(elf_bytes)
             } else {
-                error!("Index out of bounds using loader_v4.");
+                tracing::error!("Index out of bounds using loader_v4.");
                 Err(InstructionError::InvalidAccountData)
             }
         } else {
-            error!("Owner does not match any expected loader.");
+            tracing::error!("Owner does not match any expected loader.");
             Err(InstructionError::IncorrectProgramId)
         }
     }

@@ -37,7 +37,6 @@ hex = { workspace = true, optional = true }
 hotpath = { workspace = true, optional = true, features = ["hotpath"] }
 indexmap.workspace = true
 itertools.workspace = true
-log.workspace = true
 qualifier_attr = { workspace = true, optional = true }
 serde.workspace = true
 sha2 = { workspace = true, optional = true }
@@ -95,6 +94,7 @@ solana-transaction-context.workspace = true
 solana-transaction-error.workspace = true
 spl-token-interface.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true

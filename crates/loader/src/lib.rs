@@ -2,14 +2,23 @@
 
 use hpsvm::{HPSVM, types::FailedTransactionMetadata};
 use solana_address::Address;
+use solana_instruction::error::InstructionError;
 use solana_keypair::Keypair;
 use solana_loader_v3_interface::{
     instruction as bpf_loader_upgradeable, state::UpgradeableLoaderState,
 };
 use solana_signer::Signer;
 use solana_transaction::Transaction;
+use solana_transaction_error::TransactionError;
 
 const CHUNK_SIZE: usize = 512;
+
+fn loader_instruction_error(source: InstructionError) -> FailedTransactionMetadata {
+    FailedTransactionMetadata {
+        err: TransactionError::InstructionError(0, source),
+        meta: Default::default(),
+    }
+}
 
 /// Set the upgrade authority for an upgradeable program
 pub fn set_upgrade_authority(
@@ -52,15 +61,16 @@ fn load_upgradeable_buffer(
     let buffer_len = UpgradeableLoaderState::size_of_buffer(program_bytes.len());
     let lamports = svm.minimum_balance_for_rent_exemption(buffer_len);
 
+    let create_buffer_ixs = bpf_loader_upgradeable::create_buffer(
+        &payer_pk,
+        &buffer_pk,
+        &payer_pk,
+        lamports,
+        program_bytes.len(),
+    )
+    .map_err(loader_instruction_error)?;
     let tx = Transaction::new_signed_with_payer(
-        &bpf_loader_upgradeable::create_buffer(
-            &payer_pk,
-            &buffer_pk,
-            &payer_pk,
-            lamports,
-            program_bytes.len(),
-        )
-        .expect("Failed to create buffer instruction"),
+        &create_buffer_ixs,
         Some(&payer_pk),
         &[payer_kp, &buffer_kp],
         svm.latest_blockhash(),
@@ -97,16 +107,17 @@ pub fn deploy_upgradeable_program(
     let buffer_pk = load_upgradeable_buffer(svm, payer_kp, program_bytes)?;
 
     let lamports = svm.minimum_balance_for_rent_exemption(program_bytes.len());
+    let deploy_ixs = bpf_loader_upgradeable::deploy_with_max_program_len(
+        &payer_pk,
+        &program_pk,
+        &buffer_pk,
+        &payer_pk,
+        lamports,
+        program_bytes.len() * 2,
+    )
+    .map_err(loader_instruction_error)?;
     let tx = Transaction::new_signed_with_payer(
-        &bpf_loader_upgradeable::deploy_with_max_program_len(
-            &payer_pk,
-            &program_pk,
-            &buffer_pk,
-            &payer_pk,
-            lamports,
-            program_bytes.len() * 2,
-        )
-        .expect("Failed to create deploy instruction"),
+        &deploy_ixs,
         Some(&payer_pk),
         &[&payer_kp, &program_kp],
         svm.latest_blockhash(),

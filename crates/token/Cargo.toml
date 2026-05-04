@@ -19,6 +19,7 @@ hpsvm.workspace = true
 smallvec.workspace = true
 solana-account = { workspace = true, optional = true }
 solana-address.workspace = true
+solana-instruction.workspace = true
 solana-keypair.workspace = true
 solana-program-option.workspace = true
 solana-program-pack.workspace = true

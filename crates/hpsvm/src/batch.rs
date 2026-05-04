@@ -9,6 +9,7 @@ use thiserror::Error;
 use crate::{
     CommitDelta, HPSVM, accounts_db::AccountsDb, apply_commit_delta, history::TransactionHistory,
     next_vm_instance_id, outcome_into_result_and_delta, types::TransactionResult,
+    TransactionOrigin,
 };
 
 /// A conflict-free stage in a transaction batch plan.
@@ -120,14 +121,18 @@ pub(crate) fn send_transaction_batch(
     let plan = plan_transaction_batch(vm, &transactions)?;
     let mut results = vec![None; transactions.len()];
 
-    for stage in &plan.stages {
+    for (stage_index, stage) in plan.stages.iter().enumerate() {
         if stage.transaction_indexes.len() == 1 {
             let index = stage.transaction_indexes[0];
-            results[index] = Some(vm.send_transaction(transactions[index].clone()));
+            results[index] = Some(vm.with_transaction_origin(
+                TransactionOrigin::Batch { stage_index, transaction_index: index },
+                |vm| vm.send_transaction(transactions[index].clone()),
+            ));
             continue;
         }
 
-        let mut stage_results = execute_transaction_batch_stage(vm, stage, &transactions);
+        let mut stage_results =
+            execute_transaction_batch_stage(vm, stage_index, stage, &transactions);
         stage_results.sort_by_key(|result| result.index);
 
         for stage_result in stage_results {
@@ -163,6 +168,7 @@ fn sanitize_transaction_for_batch(
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn execute_transaction_batch_stage(
     vm: &HPSVM,
+    stage_index: usize,
     stage: &TransactionBatchStage,
     transactions: &[VersionedTransaction],
 ) -> Vec<BatchStageResult> {
@@ -176,7 +182,7 @@ fn execute_transaction_batch_stage(
                 let tx = transactions[index].clone();
                 let snapshot = snapshot.clone();
 
-                scope.spawn(move || BatchStageResult::new(index, vm, snapshot, tx))
+                scope.spawn(move || BatchStageResult::new(stage_index, index, vm, snapshot, tx))
             })
             .collect::<Vec<_>>();
 
@@ -187,7 +193,7 @@ fn execute_transaction_batch_stage(
     })
 }
 
-fn worker_vm(vm: &HPSVM, runtime: HpsvmRuntimeState) -> HPSVM {
+fn worker_vm(vm: &HPSVM, runtime: HpsvmRuntimeState, origin: TransactionOrigin) -> HPSVM {
     HPSVM {
         accounts: runtime.accounts,
         airdrop_kp: vm.airdrop_kp,
@@ -197,6 +203,7 @@ fn worker_vm(vm: &HPSVM, runtime: HpsvmRuntimeState) -> HPSVM {
         cfg: vm.cfg.clone(),
         feature_accounts_loaded: vm.feature_accounts_loaded,
         inspector: vm.inspector.clone(),
+        inspection_origin: origin,
         reserved_account_keys: vm.reserved_account_keys.clone(),
         runtime_registry: vm.runtime_registry.clone(),
         instance_id: next_vm_instance_id(),
@@ -227,12 +234,17 @@ struct BatchStageResult {
 impl BatchStageResult {
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     fn new(
+        stage_index: usize,
         index: usize,
         vm: &HPSVM,
         snapshot: BatchExecutionSnapshot,
         tx: VersionedTransaction,
     ) -> Self {
-        let local = worker_vm(vm, snapshot.runtime);
+        let local = worker_vm(
+            vm,
+            snapshot.runtime,
+            TransactionOrigin::Batch { stage_index, transaction_index: index },
+        );
         let (result, delta) = outcome_into_result_and_delta(local.transact(tx));
 
         Self { index, result, delta }
@@ -372,7 +384,7 @@ mod tests {
         svm.set_account(lookup_table_address, Account::default()).unwrap();
 
         let stage_result =
-            BatchStageResult::new(1, &svm, BatchExecutionSnapshot::from_vm(&svm), lookup_tx);
+            BatchStageResult::new(1, 0, &svm, BatchExecutionSnapshot::from_vm(&svm), lookup_tx);
 
         assert_eq!(
             stage_result.result.unwrap_err().err,

@@ -331,10 +331,25 @@ impl<State: FeatureConfigState> HpsvmBuilder<State> {
             enable_register_tracing,
         } = self.plan;
 
+        #[cfg(feature = "precompiles")]
+        let needs_precompiles = include_precompiles;
+        #[cfg(not(feature = "precompiles"))]
+        let needs_precompiles = false;
+
+        let needs_sysvars = include_builtins ||
+            include_default_programs ||
+            include_spl_programs ||
+            needs_precompiles ||
+            sigverify == Some(true) ||
+            blockhash_check == Some(true);
+        if needs_sysvars && !include_sysvars {
+            return Err(HPSVMError::MissingRuntimeComponent { component: "sysvars" });
+        }
+
         let mut svm = HPSVM::new_inner(enable_register_tracing);
 
         if let Some(feature_set) = feature_set {
-            svm.set_feature_set(feature_set);
+            svm.set_feature_set(feature_set)?;
         }
         if let Some(compute_budget) = compute_budget {
             svm.set_compute_budget(compute_budget);

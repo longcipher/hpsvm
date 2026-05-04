@@ -2,6 +2,8 @@ use solana_address::Address;
 use solana_instruction::error::InstructionError;
 use thiserror::Error;
 
+use crate::AccountSourceError;
+
 /// Errors related to invalid sysvar data
 #[derive(Error, Debug)]
 pub enum InvalidSysvarDataError {
@@ -58,4 +60,15 @@ pub enum HPSVMError {
     /// Invalid loader error
     #[error("unsupported loader {loader_id} for program {program_id}")]
     InvalidLoader { program_id: Address, loader_id: Address },
+    /// Required runtime component was not materialized.
+    #[error("missing runtime component: {component}")]
+    MissingRuntimeComponent { component: &'static str },
+    /// External account source failure.
+    #[error("account source failed while loading {pubkey}: {source}")]
+    AccountSource {
+        /// Account address that triggered the source read.
+        pubkey: Address,
+        /// Underlying account source error.
+        source: AccountSourceError,
+    },
 }
