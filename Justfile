@@ -86,9 +86,9 @@ bench-baseline-compare:
 check:
   cargo check --all-targets --all-features
 
-# Publish all crates to crates.io (dry run)
+# Verify all workspace crates package and compile from their published layout
 publish-check:
-  cargo publish --workspace --dry-run --allow-dirty
+  cargo package --workspace --allow-dirty
 
 # Publish all crates to crates.io
 publish:

@@ -42,8 +42,6 @@ pub use crate::{
 
 pub type FixtureBenchCase<'a> = (&'a str, &'a Fixture);
 
-const WORKSPACE_MANIFEST: &str = include_str!("../../../Cargo.toml");
-
 pub(crate) const BUILTIN_VARIANT_NAME: &str = "builtin";
 
 pub(crate) fn generated_at_string() -> String {
@@ -53,15 +51,7 @@ pub(crate) fn generated_at_string() -> String {
 }
 
 pub(crate) fn solana_runtime_version_string() -> String {
-    WORKSPACE_MANIFEST
-        .lines()
-        .map(str::trim)
-        .find_map(|line| {
-            line.strip_prefix("agave-feature-set = \"")
-                .and_then(|value| value.strip_suffix('"'))
-                .map(String::from)
-        })
-        .unwrap_or_else(|| String::from("unknown"))
+    option_env!("HPSVM_AGAVE_FEATURE_SET_VERSION").unwrap_or("unknown").to_owned()
 }
 
 impl Fixture {
@@ -133,5 +123,15 @@ fn fixture_format_for_path(path: &std::path::Path) -> Result<FixtureFormat, Fixt
         Some("json") => Ok(FixtureFormat::Json),
         Some("bin") => Ok(FixtureFormat::Binary),
         _ => Err(FixtureError::UnsupportedFormat { path: path.display().to_string() }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::solana_runtime_version_string;
+
+    #[test]
+    fn solana_runtime_version_string_is_known() {
+        assert_ne!(solana_runtime_version_string(), "unknown");
     }
 }
