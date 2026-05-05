@@ -196,6 +196,13 @@ impl AccountsDb {
         self.source = source;
     }
 
+    pub(crate) fn replace_account_source(
+        &mut self,
+        source: Arc<dyn AccountSource>,
+    ) -> Arc<dyn AccountSource> {
+        std::mem::replace(&mut self.source, source)
+    }
+
     pub fn get_account_ref(&self, pubkey: &Address) -> Option<&AccountSharedData> {
         self.inner.get(pubkey)
     }

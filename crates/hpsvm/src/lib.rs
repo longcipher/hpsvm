@@ -345,6 +345,7 @@ use utils::{
 #[cfg(feature = "register-tracing")]
 use crate::register_tracing::DefaultRegisterTracingCallback;
 use crate::{
+    account_source::EmptyAccountSource,
     accounts_db::AccountsDb,
     batch::{TransactionBatchError, TransactionBatchExecutionResult, TransactionBatchPlan},
     error::HPSVMError,
@@ -622,6 +623,20 @@ impl HPSVM {
         }
     }
 
+    fn with_temporary_account_source<T>(
+        &mut self,
+        source: Arc<dyn AccountSource>,
+        op: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let previous_source = self.accounts.replace_account_source(source);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| op(self)));
+        self.accounts.set_account_source(previous_source);
+        match result {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
+
     #[cfg(feature = "register-tracing")]
     /// Create a test environment with debugging features.
     ///
@@ -856,6 +871,7 @@ impl HPSVM {
         let previous_feature_set = self.cfg.feature_set.clone();
         let previous_accounts = self.accounts.clone();
         let previous_reserved_account_keys = self.reserved_account_keys.clone();
+        let previous_state_version = self.state_version;
 
         self.cfg.feature_set = feature_set;
         self.reserved_account_keys =
@@ -864,6 +880,7 @@ impl HPSVM {
             self.cfg.feature_set = previous_feature_set;
             self.reserved_account_keys = previous_reserved_account_keys;
             self.accounts = previous_accounts;
+            self.state_version = previous_state_version;
             return Err(error);
         }
 
@@ -1164,8 +1181,10 @@ impl HPSVM {
         )
         .expect("failed to create airdrop transaction");
 
-        self.with_transaction_origin(TransactionOrigin::InternalAirdrop, |svm| {
-            svm.send_transaction(tx)
+        self.with_temporary_account_source(Arc::new(EmptyAccountSource), |svm| {
+            svm.with_transaction_origin(TransactionOrigin::InternalAirdrop, |svm| {
+                svm.send_transaction(tx)
+            })
         })
     }
 
@@ -1381,6 +1400,7 @@ impl HPSVM {
     where
         'a: 'b,
     {
+        let mut account_source_failures = Vec::new();
         let compute_budget = hotpath_block!("hpsvm::process_transaction::compute_budget", {
             self.runtime_env.compute_budget.unwrap_or_else(|| ComputeBudget {
                 compute_unit_limit: u64::from(compute_budget_limits.compute_unit_limit),
@@ -1534,13 +1554,11 @@ impl HPSVM {
                                 });
                             }
                             Err(error) => {
-                                return Err(execution_result_with_account_source_error(
-                                    *owner_id,
-                                    error,
-                                    TransactionError::ProgramAccountNotFound,
-                                    fee,
-                                    "failed to load owner account from source",
-                                ));
+                                account_source_failures.push(AccountSourceFailure {
+                                    pubkey: *owner_id,
+                                    error: error.to_string(),
+                                });
+                                AccountSharedData::default()
                             }
                         };
                         if !native_loader::check_id(owner_account.owner()) {
@@ -1551,6 +1569,7 @@ impl HPSVM {
                                 tx_result: Err(TransactionError::InvalidProgramForExecution),
                                 compute_units_consumed: accumulated_consume_units,
                                 fee,
+                                account_source_failures: account_source_failures.clone(),
                                 ..Default::default()
                             });
                         }
@@ -1560,6 +1579,7 @@ impl HPSVM {
                                 tx_result: Err(TransactionError::InvalidProgramForExecution),
                                 compute_units_consumed: accumulated_consume_units,
                                 fee,
+                                account_source_failures: account_source_failures.clone(),
                                 ..Default::default()
                             });
                         }
@@ -1580,11 +1600,12 @@ impl HPSVM {
 
         let rent_check = hotpath_block!(
             "hpsvm::process_transaction::check_accounts_rent",
-            self.check_accounts_rent(tx, &context, &rent)
+            self.check_accounts_rent(tx, &context, &rent, &mut account_source_failures)
         );
         if let Err(mut error) = rent_check {
             error.compute_units_consumed = accumulated_consume_units;
             error.fee = fee;
+            error.account_source_failures = account_source_failures;
             return Err(error);
         }
 
@@ -1647,6 +1668,7 @@ impl HPSVM {
             },
             fee,
             payer_key,
+            account_source_failures,
         })
     }
 
@@ -1655,6 +1677,7 @@ impl HPSVM {
         tx: &SanitizedTransaction,
         context: &TransactionContext<'_>,
         rent: &Rent,
+        account_source_failures: &mut Vec<AccountSourceFailure>,
     ) -> Result<(), ExecutionResult> {
         let message = tx.message();
         for index in 0..message.account_keys().len() {
@@ -1680,13 +1703,11 @@ impl HPSVM {
                     Ok(Some(acc)) => get_account_rent_state(rent, acc.lamports(), acc.data().len()),
                     Ok(None) => RentState::Uninitialized,
                     Err(error) => {
-                        return Err(execution_result_with_account_source_error(
-                            *pubkey,
-                            error,
-                            TransactionError::AccountNotFound,
-                            0,
-                            "failed to load rent pre-state from source",
-                        ));
+                        account_source_failures.push(AccountSourceFailure {
+                            pubkey: *pubkey,
+                            error: error.to_string(),
+                        });
+                        RentState::Uninitialized
                     }
                 };
 
@@ -1731,6 +1752,7 @@ impl HPSVM {
             core: CheckAndProcessTransactionSuccessCore { result, compute_units_consumed, context },
             fee,
             payer_key,
+            account_source_failures,
         } = match self.check_and_process_transaction(sanitized_tx, log_collector) {
             Ok(value) => value,
             Err(value) => return value,
@@ -1743,9 +1765,16 @@ impl HPSVM {
                 compute_units_consumed,
                 fee,
                 payer_key,
+                account_source_failures,
             )
         } else {
-            ExecutionResult { tx_result: result, compute_units_consumed, fee, ..Default::default() }
+            ExecutionResult {
+                tx_result: result,
+                compute_units_consumed,
+                fee,
+                account_source_failures,
+                ..Default::default()
+            }
         }
     }
 
@@ -1758,6 +1787,7 @@ impl HPSVM {
             core: CheckAndProcessTransactionSuccessCore { result, compute_units_consumed, context },
             fee,
             payer_key,
+            account_source_failures,
         } = match self.check_and_process_transaction(sanitized_tx, log_collector) {
             Ok(value) => value,
             Err(value) => return value,
@@ -1770,9 +1800,16 @@ impl HPSVM {
                 compute_units_consumed,
                 fee,
                 payer_key,
+                account_source_failures,
             )
         } else {
-            ExecutionResult { tx_result: result, compute_units_consumed, fee, ..Default::default() }
+            ExecutionResult {
+                tx_result: result,
+                compute_units_consumed,
+                fee,
+                account_source_failures,
+                ..Default::default()
+            }
         }
     }
 
@@ -2232,6 +2269,7 @@ struct CheckAndProcessTransactionSuccess<'ix_data> {
     core: CheckAndProcessTransactionSuccessCore<'ix_data>,
     fee: u64,
     payer_key: Option<Address>,
+    account_source_failures: Vec<AccountSourceFailure>,
 }
 
 fn execution_result_if_context(
@@ -2241,6 +2279,7 @@ fn execution_result_if_context(
     compute_units_consumed: u64,
     fee: u64,
     fee_payer: Option<Address>,
+    account_source_failures: Vec<AccountSourceFailure>,
 ) -> ExecutionResult {
     let (signature, return_data, inner_instructions, execution_trace, post_accounts) =
         execute_tx_helper(sanitized_tx, ctx);
@@ -2256,7 +2295,7 @@ fn execution_result_if_context(
         included: true,
         fee,
         fee_payer,
-        account_source_failures: Vec::new(),
+        account_source_failures,
         fatal_error: None,
     }
 }
