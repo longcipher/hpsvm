@@ -3,16 +3,16 @@ resolver = "3"
 members = ["bin/*", "crates/*"]
 
 [workspace.package]
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/longcipher/hpsvm"
 
 [workspace.dependencies]
 # local crates
-hpsvm = { path = "crates/hpsvm", version = "0.1.2" }
-hpsvm-fixture = { path = "crates/hpsvm-fixture", version = "0.1.2" }
-hpsvm-fixture-fd = { path = "crates/hpsvm-fixture-fd", version = "0.1.2" }
+hpsvm = { path = "crates/hpsvm", version = "0.1.3" }
+hpsvm-fixture = { path = "crates/hpsvm-fixture", version = "0.1.3" }
+hpsvm-fixture-fd = { path = "crates/hpsvm-fixture-fd", version = "0.1.3" }
 
 # external crates
 agave-feature-set = "3.1.14"
@@ -31,7 +31,7 @@ hotpath = "0.15.1"
 indexmap = "2.14.0"
 itertools = "0.14.0"
 libsecp256k1 = "0.7.2"
-mollusk-svm-fuzz-fixture-firedancer = "0.12.0"
+mollusk-svm-fuzz-fixture-firedancer = "0.12.1-agave-4.0"
 parking_lot = "0.12.5"
 prost = "0.14"
 qualifier_attr = "0.2.2"
@@ -100,7 +100,7 @@ spl-token-2022-interface = "2.1.0"
 spl-token-interface = "2.0.0"
 test-log = "0.2.20"
 thiserror = "2.0.18"
-tokio = "1.52.1"
+tokio = "1.52.2"
 tracing = "0.1.44"
 
 [workspace.lints.clippy]
