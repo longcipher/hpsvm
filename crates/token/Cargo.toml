@@ -25,7 +25,7 @@ solana-program-option.workspace = true
 solana-program-pack.workspace = true
 solana-rent = { workspace = true, optional = true }
 solana-signer.workspace = true
-solana-system-interface = { workspace = true, features = ["wincode"] }
+solana-system-interface.workspace = true
 solana-transaction = { workspace = true, features = ["verify"] }
 solana-transaction-error.workspace = true
 spl-associated-token-account-interface.workspace = true
