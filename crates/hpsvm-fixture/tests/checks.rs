@@ -118,7 +118,7 @@ fn checks_use_rent_model_for_account_and_all_rent_exempt() {
     assert!(closed_account_snapshot.run_checks(&[Check::AllRentExempt], &config));
 }
 
-#[cfg(feature = "serde")]
+#[cfg(feature = "json-codec")]
 #[test]
 fn checks_and_account_expectations_round_trip_through_serde() {
     let address = Address::new_unique();

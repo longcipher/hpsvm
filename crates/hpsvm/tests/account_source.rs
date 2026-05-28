@@ -1,10 +1,14 @@
 use std::{collections::HashMap, sync::Arc};
 
-use hpsvm::{AccountSource, AccountSourceError, HPSVM, error::HPSVMError};
+use hpsvm::{
+    AccountSource, AccountSourceError, HPSVM, batch::TransactionBatchError, error::HPSVMError,
+};
 use solana_account::{AccountSharedData, ReadableAccount, state_traits::StateMut};
 use solana_address::Address;
 use solana_keypair::Keypair;
-use solana_message::Message;
+use solana_message::{
+    AddressLookupTableAccount, Message, VersionedMessage, v0::Message as MessageV0,
+};
 use solana_nonce::{
     state::{Data, State as NonceState},
     versions::Versions,
@@ -13,7 +17,7 @@ use solana_rent::Rent;
 use solana_sdk_ids::system_program;
 use solana_signer::Signer;
 use solana_system_interface::instruction::{advance_nonce_account, transfer};
-use solana_transaction::Transaction;
+use solana_transaction::{Transaction, versioned::VersionedTransaction};
 use solana_transaction_error::TransactionError;
 
 #[derive(Clone, Default)]
@@ -108,6 +112,66 @@ fn transaction_execution_preserves_account_source_failures() {
     assert_eq!(outcome.meta().diagnostics.account_source_failures[0].pubkey, recipient);
     assert!(
         outcome.meta().diagnostics.account_source_failures[0].error.contains("source unavailable")
+    );
+}
+
+#[test]
+fn lookup_table_sanitization_preserves_account_source_failures() {
+    let payer = Keypair::new();
+    let recipient = Address::new_unique();
+    let lookup_table = Address::new_unique();
+    let mut svm = HPSVM::builder()
+        .with_program_test_defaults()
+        .with_account_source(FailingAccountSource)
+        .build()
+        .unwrap();
+    svm.airdrop(&payer.pubkey(), 10_000).unwrap();
+
+    let lookup_message = MessageV0::try_compile(
+        &payer.pubkey(),
+        &[transfer(&payer.pubkey(), &recipient, 1)],
+        &[AddressLookupTableAccount { key: lookup_table, addresses: vec![recipient] }],
+        svm.latest_blockhash(),
+    )
+    .unwrap();
+    let tx =
+        VersionedTransaction::try_new(VersionedMessage::V0(lookup_message), &[&payer]).unwrap();
+
+    let err = svm
+        .try_transact(tx)
+        .expect_err("try_transact should preserve lookup-table account source failures");
+
+    assert!(matches!(err, HPSVMError::AccountSource { pubkey, .. } if pubkey == lookup_table));
+}
+
+#[test]
+fn batch_planning_preserves_lookup_table_account_source_failures() {
+    let payer = Keypair::new();
+    let recipient = Address::new_unique();
+    let lookup_table = Address::new_unique();
+    let mut svm = HPSVM::builder()
+        .with_program_test_defaults()
+        .with_account_source(FailingAccountSource)
+        .build()
+        .unwrap();
+    svm.airdrop(&payer.pubkey(), 10_000).unwrap();
+
+    let lookup_message = MessageV0::try_compile(
+        &payer.pubkey(),
+        &[transfer(&payer.pubkey(), &recipient, 1)],
+        &[AddressLookupTableAccount { key: lookup_table, addresses: vec![recipient] }],
+        svm.latest_blockhash(),
+    )
+    .unwrap();
+    let tx =
+        VersionedTransaction::try_new(VersionedMessage::V0(lookup_message), &[&payer]).unwrap();
+
+    let err = svm
+        .plan_transaction_batch([tx])
+        .expect_err("batch planning should preserve lookup-table account source failures");
+
+    assert!(
+        matches!(err, TransactionBatchError::AccountSource { index: 0, pubkey, .. } if pubkey == lookup_table)
     );
 }
 

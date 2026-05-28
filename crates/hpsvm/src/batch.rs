@@ -7,9 +7,9 @@ use solana_transaction_error::TransactionError;
 use thiserror::Error;
 
 use crate::{
-    CommitDelta, HPSVM, TransactionOrigin, accounts_db::AccountsDb, apply_commit_delta,
-    history::TransactionHistory, next_vm_instance_id, outcome_into_result_and_delta,
-    types::TransactionResult,
+    AccountSourceError, CommitDelta, HPSVM, TransactionOrigin, accounts_db::AccountsDb,
+    apply_commit_delta, error::HPSVMError, history::TransactionHistory, next_vm_instance_id,
+    outcome_into_result_and_delta, types::TransactionResult,
 };
 
 /// A conflict-free stage in a transaction batch plan.
@@ -40,6 +40,7 @@ pub struct TransactionBatchExecutionResult {
 
 /// Errors encountered while planning a transaction batch.
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum TransactionBatchError {
     /// The transaction could not be sanitized for scheduling.
     #[error("failed to sanitize transaction #{index} for batch scheduling: {source}")]
@@ -49,6 +50,35 @@ pub enum TransactionBatchError {
         /// Underlying transaction sanitization error.
         source: TransactionError,
     },
+    /// The configured account source failed while loading data needed for scheduling.
+    #[error(
+        "account source failed while sanitizing transaction #{index} account {pubkey}: {source}"
+    )]
+    AccountSource {
+        /// Original transaction index in the submitted batch.
+        index: usize,
+        /// Account address that triggered the source read.
+        pubkey: Address,
+        /// Underlying account source error.
+        source: AccountSourceError,
+    },
+}
+
+#[derive(Debug)]
+enum BatchSanitizeError {
+    Transaction(TransactionError),
+    AccountSource { pubkey: Address, source: AccountSourceError },
+}
+
+impl BatchSanitizeError {
+    fn into_batch_error(self, index: usize) -> TransactionBatchError {
+        match self {
+            Self::Transaction(source) => TransactionBatchError::Sanitize { index, source },
+            Self::AccountSource { pubkey, source } => {
+                TransactionBatchError::AccountSource { index, pubkey, source }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -89,7 +119,7 @@ pub(crate) fn plan_transaction_batch(
 
     for (index, tx) in txs.iter().enumerate() {
         let sanitized = sanitize_transaction_for_batch(vm, tx.clone())
-            .map_err(|source| TransactionBatchError::Sanitize { index, source })?;
+            .map_err(|source| source.into_batch_error(index))?;
         let lock_set = TransactionLockSet::from_transaction(&sanitized, &tx.message);
 
         if let Some(stage) =
@@ -148,7 +178,9 @@ pub(crate) fn send_transaction_batch(
 
     let results = results
         .into_iter()
-        .map(|result| result.expect("each batch result slot should be filled exactly once"))
+        .map(|result| {
+            result.expect("internal invariant: every transaction index in the batch plan must have a corresponding result slot")
+        })
         .collect();
     Ok(TransactionBatchExecutionResult { plan, results })
 }
@@ -157,12 +189,21 @@ pub(crate) fn send_transaction_batch(
 fn sanitize_transaction_for_batch(
     vm: &HPSVM,
     tx: VersionedTransaction,
-) -> Result<SanitizedTransaction, TransactionError> {
-    if vm.cfg.sigverify {
-        vm.sanitize_transaction_inner(tx)
+) -> Result<SanitizedTransaction, BatchSanitizeError> {
+    let result = if vm.cfg.sigverify {
+        vm.sanitize_transaction(tx)
     } else {
-        vm.sanitize_transaction_no_verify_inner(tx)
-    }
+        vm.sanitize_transaction_no_verify(tx)
+    };
+
+    result.map_err(|execution| match execution.fatal_error {
+        Some(HPSVMError::AccountSource { pubkey, source }) => {
+            BatchSanitizeError::AccountSource { pubkey, source }
+        }
+        _ => BatchSanitizeError::Transaction(
+            execution.tx_result.err().unwrap_or(TransactionError::SanitizeFailure),
+        ),
+    })
 }
 
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
@@ -173,24 +214,46 @@ fn execute_transaction_batch_stage(
     transactions: &[VersionedTransaction],
 ) -> Vec<BatchStageResult> {
     let snapshot = BatchExecutionSnapshot::from_vm(vm);
+    let worker_limit = batch_stage_worker_limit(stage.transaction_indexes.len());
+
+    debug_assert!(worker_limit > 0, "batch stage should never have zero workers");
+
+    let chunk_size = stage.transaction_indexes.len().div_ceil(worker_limit);
 
     thread::scope(|scope| {
         let handles = stage
             .transaction_indexes
-            .iter()
-            .map(|&index| {
-                let tx = transactions[index].clone();
-                let snapshot = snapshot.clone();
+            .chunks(chunk_size)
+            .map(|transaction_indexes| {
+                let worker_snapshot = snapshot.clone();
 
-                scope.spawn(move || BatchStageResult::new(stage_index, index, vm, snapshot, tx))
+                scope.spawn(move || {
+                    transaction_indexes
+                        .iter()
+                        .map(|&index| {
+                            let tx = transactions[index].clone();
+                            let snapshot = worker_snapshot.clone();
+
+                            BatchStageResult::new(stage_index, index, vm, snapshot, tx)
+                        })
+                        .collect::<Vec<_>>()
+                })
             })
             .collect::<Vec<_>>();
 
         handles
             .into_iter()
-            .map(|handle| handle.join().expect("transaction batch worker should not panic"))
+            .flat_map(|handle| handle.join().expect("transaction batch worker should not panic"))
             .collect()
     })
+}
+
+fn default_batch_stage_worker_limit() -> usize {
+    thread::available_parallelism().map_or(1, |parallelism| parallelism.get())
+}
+
+fn batch_stage_worker_limit(transaction_count: usize) -> usize {
+    transaction_count.min(default_batch_stage_worker_limit())
 }
 
 fn worker_vm(vm: &HPSVM, runtime: HpsvmRuntimeState, origin: TransactionOrigin) -> HPSVM {
@@ -391,5 +454,14 @@ mod tests {
             TransactionError::AddressLookupTableNotFound
         );
         assert!(!stage_result.delta.mutates_state());
+    }
+
+    #[test]
+    fn batch_stage_worker_limit_caps_large_stage_to_available_parallelism() {
+        let available_parallelism = default_batch_stage_worker_limit();
+        let transaction_count = available_parallelism + 1;
+
+        assert_eq!(batch_stage_worker_limit(transaction_count), available_parallelism);
+        assert!(batch_stage_worker_limit(transaction_count) < transaction_count);
     }
 }

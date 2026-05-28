@@ -6,6 +6,7 @@ use thiserror::Error;
 use crate::FixtureError;
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum BenchError {
     #[error("bench requires at least one fixture case")]
     MissingCases,

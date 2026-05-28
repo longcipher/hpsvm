@@ -1,4 +1,5 @@
 #![allow(missing_docs)]
+#![cfg(feature = "bin-codec")]
 
 use std::path::PathBuf;
 

@@ -12,13 +12,20 @@ path = "src/main.rs"
 
 [features]
 default = []
-fd-compat = ["dep:hpsvm-fixture-fd"]
+fd-compat = ["dep:hpsvm-fixture-fd", "hpsvm-fixture-fd/json-codec"]
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
 hpsvm.workspace = true
-hpsvm-fixture = { workspace = true, features = ["bin-codec", "json-codec", "markdown"] }
-hpsvm-fixture-fd = { workspace = true, optional = true }
+hpsvm-fixture = { workspace = true, default-features = false, features = [
+    "bin-codec",
+    "instruction-fixture",
+    "json-codec",
+    "markdown",
+] }
+hpsvm-fixture-fd = { workspace = true, default-features = false, optional = true, features = [
+    "prost-codec",
+] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 serde_yaml.workspace = true

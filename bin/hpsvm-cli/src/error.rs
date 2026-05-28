@@ -3,6 +3,7 @@ use hpsvm_fixture::BenchError;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub(crate) enum CliError {
     #[error(transparent)]
     Bench(#[from] BenchError),

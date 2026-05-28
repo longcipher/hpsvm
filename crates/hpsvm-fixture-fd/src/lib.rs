@@ -3,10 +3,11 @@
 
 mod error;
 
+use std::{fs, path::Path};
+#[cfg(feature = "json-codec")]
 use std::{
-    fs::{self, File},
+    fs::File,
     io::{BufReader, BufWriter},
-    path::Path,
 };
 
 use hpsvm_fixture::{
@@ -55,6 +56,7 @@ impl FiredancerFixture {
                 let inner = fd_codec::proto::InstrFixture::decode(bytes.as_slice())?;
                 Ok(Self { inner })
             }
+            #[cfg(feature = "json-codec")]
             FiredancerFixtureFormat::Json => {
                 let reader = BufReader::new(File::open(path)?);
                 let inner = serde_json::from_reader(reader)?;
@@ -67,6 +69,7 @@ impl FiredancerFixture {
         let path = path.as_ref();
         match fixture_format_for_path(path)? {
             FiredancerFixtureFormat::Binary => fs::write(path, self.inner.encode_to_vec())?,
+            #[cfg(feature = "json-codec")]
             FiredancerFixtureFormat::Json => {
                 let writer = BufWriter::new(File::create(path)?);
                 serde_json::to_writer_pretty(writer, &self.inner)?;
@@ -128,7 +131,7 @@ impl TryFrom<FiredancerFixture> for hpsvm_fixture::Fixture {
             },
         )?;
         let baseline = ExecutionSnapshot::from_fields(ExecutionSnapshotFields {
-            status: status_from_output(output.result, output.custom_err),
+            status: status_from_output(output.result, output.custom_err)?,
             included: true,
             compute_units_consumed,
             fee: 0,
@@ -157,7 +160,8 @@ impl TryFrom<FiredancerFixture> for hpsvm_fixture::Fixture {
                     None,
                     false,
                     false,
-                ),
+                )
+                .with_compute_unit_limit(input.cu_avail),
                 Vec::new(),
                 pre_accounts,
                 program_id,
@@ -175,9 +179,16 @@ impl TryFrom<hpsvm_fixture::Fixture> for FiredancerFixture {
     fn try_from(value: hpsvm_fixture::Fixture) -> Result<Self, Self::Error> {
         match value.input {
             FixtureInput::Instruction(instruction) => {
-                let output_cu_avail = 0;
-                let input_cu_avail =
-                    value.expectations.baseline.compute_units_consumed + output_cu_avail;
+                let input_cu_avail = instruction
+                    .runtime
+                    .compute_unit_limit
+                    .ok_or(AdapterError::MissingComputeUnitBudget)?;
+                let output_cu_avail = input_cu_avail
+                    .checked_sub(value.expectations.baseline.compute_units_consumed)
+                    .ok_or(AdapterError::ComputeUnitsExceedBudget {
+                        budget: input_cu_avail,
+                        consumed: value.expectations.baseline.compute_units_consumed,
+                    })?;
                 let input = fd_codec::proto::InstrContext {
                     program_id: address_to_bytes(instruction.program_id),
                     accounts: instruction
@@ -225,12 +236,14 @@ impl TryFrom<hpsvm_fixture::Fixture> for FiredancerFixture {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FiredancerFixtureFormat {
     Binary,
+    #[cfg(feature = "json-codec")]
     Json,
 }
 
 fn fixture_format_for_path(path: &Path) -> Result<FiredancerFixtureFormat, AdapterError> {
     match path.extension().and_then(|value| value.to_str()) {
         Some("fix") => Ok(FiredancerFixtureFormat::Binary),
+        #[cfg(feature = "json-codec")]
         Some("json") => Ok(FiredancerFixtureFormat::Json),
         _ => Err(AdapterError::UnsupportedFormat { path: path.display().to_string() }),
     }
@@ -329,7 +342,7 @@ fn snapshot_to_proto_effects(
     instruction_program_id: Address,
     cu_avail: u64,
 ) -> Result<fd_codec::proto::InstrEffects, AdapterError> {
-    let (result, custom_err) = status_to_output(&snapshot.status);
+    let (result, custom_err) = status_to_output(&snapshot.status)?;
     let return_data = snapshot
         .return_data
         .as_ref()
@@ -355,43 +368,57 @@ fn snapshot_to_proto_effects(
     })
 }
 
-fn status_to_output(status: &ExecutionStatus) -> (i32, u32) {
+fn status_to_output(status: &ExecutionStatus) -> Result<(i32, u32), AdapterError> {
     match status {
-        ExecutionStatus::Success => (0, 0),
+        ExecutionStatus::Success => Ok((0, 0)),
         ExecutionStatus::Failure { kind, .. } => {
-            if let Some(value) = kind
-                .strip_prefix("FiredancerCustomError(")
-                .and_then(|value| value.strip_suffix(')'))
-                .and_then(|value| value.parse::<u32>().ok())
-            {
-                (1, value)
-            } else if let Some(value) = kind
-                .strip_prefix("FiredancerProgramResult(")
-                .and_then(|value| value.strip_suffix(')'))
-                .and_then(|value| value.parse::<i32>().ok())
-            {
-                (value, 0)
+            if let Some(value) = parse_firedancer_result_with_custom_error(kind) {
+                Ok(value)
+            } else if let Some(value) = parse_firedancer_custom_error(kind) {
+                Ok((1, value))
+            } else if let Some(value) = parse_firedancer_program_result(kind) {
+                Ok((value, 0))
             } else {
-                (1, 0)
+                Err(AdapterError::UnsupportedExecutionStatus { kind: kind.clone() })
             }
         }
-        _ => (1, 0),
+        status => Err(AdapterError::UnsupportedExecutionStatus { kind: format!("{status:?}") }),
     }
 }
 
-fn status_from_output(result: i32, custom_err: u32) -> ExecutionStatus {
-    if result == 0 {
-        ExecutionStatus::Success
-    } else if custom_err == 0 {
-        ExecutionStatus::Failure {
+fn parse_firedancer_result_with_custom_error(kind: &str) -> Option<(i32, u32)> {
+    let inner =
+        kind.strip_prefix("FiredancerProgramResult(").and_then(|value| value.strip_suffix(')'))?;
+    let (result, custom_err) = inner.split_once(",CustomError(")?;
+    Some((result.parse().ok()?, custom_err.strip_suffix(')')?.parse().ok()?))
+}
+
+fn parse_firedancer_custom_error(kind: &str) -> Option<u32> {
+    kind.strip_prefix("FiredancerCustomError(")
+        .and_then(|value| value.strip_suffix(')'))
+        .and_then(|value| value.parse::<u32>().ok())
+}
+
+fn parse_firedancer_program_result(kind: &str) -> Option<i32> {
+    kind.strip_prefix("FiredancerProgramResult(")
+        .and_then(|value| value.strip_suffix(')'))
+        .and_then(|value| value.parse::<i32>().ok())
+}
+
+fn status_from_output(result: i32, custom_err: u32) -> Result<ExecutionStatus, AdapterError> {
+    match (result, custom_err) {
+        (0, 0) => Ok(ExecutionStatus::Success),
+        (0, custom_err) => Err(AdapterError::InconsistentExecutionStatus { result, custom_err }),
+        (result, 0) => Ok(ExecutionStatus::Failure {
             kind: format!("FiredancerProgramResult({result})"),
             message: format!("firedancer program returned status {result}"),
-        }
-    } else {
-        ExecutionStatus::Failure {
-            kind: format!("FiredancerCustomError({custom_err})"),
-            message: format!("firedancer program returned custom error {custom_err}"),
-        }
+        }),
+        (result, custom_err) => Ok(ExecutionStatus::Failure {
+            kind: format!("FiredancerProgramResult({result},CustomError({custom_err}))"),
+            message: format!(
+                "firedancer program returned status {result} with custom error {custom_err}"
+            ),
+        }),
     }
 }
 

@@ -18,6 +18,8 @@ mod runner;
 mod single;
 mod snapshot;
 
+#[cfg(feature = "instruction-fixture")]
+pub use crate::model::{InstructionAccountMeta, InstructionFixture};
 pub use crate::{
     bench_error::BenchError,
     capture::CaptureBuilder,
@@ -28,8 +30,7 @@ pub use crate::{
     matrix::{ComputeUnitMatrixBencher, MatrixReport},
     model::{
         Fixture, FixtureExpectations, FixtureFormat, FixtureHeader, FixtureInput, FixtureKind,
-        InstructionAccountMeta, InstructionFixture, ProgramBinding, RuntimeFixtureConfig,
-        TransactionFixture,
+        ProgramBinding, RuntimeFixtureConfig, TransactionFixture,
     },
     report::{CuDelta, CuReport, CuReportRow},
     runner::{FixtureExecution, FixtureRunner},

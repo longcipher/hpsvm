@@ -1,6 +1,6 @@
 #[cfg(not(feature = "hashbrown"))]
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::{cell::RefCell, sync::Arc};
 
 #[cfg(feature = "hashbrown")]
 use hashbrown::{HashMap, HashSet};
@@ -120,6 +120,46 @@ pub(crate) struct AccountsDb {
     programs_cache: ProgramCacheForTxBatch,
     sysvar_cache: SysvarCache,
     environments: ProgramRuntimeEnvironments,
+}
+
+#[derive(Debug)]
+pub(crate) struct AccountSourceLoadFailure {
+    pub(crate) pubkey: Address,
+    pub(crate) source: AccountSourceError,
+}
+
+#[derive(Debug)]
+enum LookupTableLoadError {
+    AddressLookup(AddressLookupError),
+    AccountSource(AccountSourceLoadFailure),
+}
+
+impl From<AddressLookupError> for LookupTableLoadError {
+    fn from(value: AddressLookupError) -> Self {
+        Self::AddressLookup(value)
+    }
+}
+
+pub(crate) struct AccountSourceTrackingAddressLoader<'a> {
+    accounts_db: &'a AccountsDb,
+    failure: RefCell<Option<AccountSourceLoadFailure>>,
+}
+
+impl<'a> AccountSourceTrackingAddressLoader<'a> {
+    pub(crate) const fn new(accounts_db: &'a AccountsDb) -> Self {
+        Self { accounts_db, failure: RefCell::new(None) }
+    }
+
+    pub(crate) fn take_failure(&self) -> Option<AccountSourceLoadFailure> {
+        self.failure.take()
+    }
+
+    fn record_failure(&self, failure: AccountSourceLoadFailure) {
+        let mut current = self.failure.borrow_mut();
+        if current.is_none() {
+            *current = Some(failure);
+        }
+    }
 }
 
 impl Clone for AccountsDb {
@@ -472,13 +512,20 @@ impl AccountsDb {
         }
     }
 
-    fn load_lookup_table_addresses(
+    fn try_load_lookup_table_addresses(
         &self,
         address_table_lookup: &MessageAddressTableLookup,
-    ) -> std::result::Result<LoadedAddresses, AddressLookupError> {
-        let table_account = self
-            .get_account(&address_table_lookup.account_key)
-            .ok_or(AddressLookupError::LookupTableAccountNotFound)?;
+    ) -> Result<LoadedAddresses, LookupTableLoadError> {
+        let table_account = match self.try_get_account(&address_table_lookup.account_key) {
+            Ok(Some(account)) => account,
+            Ok(None) => return Err(AddressLookupError::LookupTableAccountNotFound.into()),
+            Err(source) => {
+                return Err(LookupTableLoadError::AccountSource(AccountSourceLoadFailure {
+                    pubkey: address_table_lookup.account_key,
+                    source,
+                }));
+            }
+        };
 
         if table_account.owner() == &solana_sdk_ids::address_lookup_table::id() {
             let slot_hashes = self
@@ -506,8 +553,20 @@ impl AccountsDb {
                 )?,
             })
         } else {
-            Err(AddressLookupError::InvalidAccountOwner)
+            Err(AddressLookupError::InvalidAccountOwner.into())
         }
+    }
+
+    fn load_lookup_table_addresses(
+        &self,
+        address_table_lookup: &MessageAddressTableLookup,
+    ) -> std::result::Result<LoadedAddresses, AddressLookupError> {
+        self.try_load_lookup_table_addresses(address_table_lookup).map_err(|error| match error {
+            LookupTableLoadError::AddressLookup(error) => error,
+            LookupTableLoadError::AccountSource(_) => {
+                AddressLookupError::LookupTableAccountNotFound
+            }
+        })
     }
 
     /// Returns a borrowed slice of ELF bytes for this account.
@@ -578,6 +637,30 @@ impl AddressLoader for &AccountsDb {
             .iter()
             .map(|lookup| {
                 self.load_lookup_table_addresses(lookup).map_err(into_address_loader_error)
+            })
+            .collect()
+    }
+}
+
+impl AddressLoader for &AccountSourceTrackingAddressLoader<'_> {
+    fn load_addresses(
+        self,
+        lookups: &[MessageAddressTableLookup],
+    ) -> Result<LoadedAddresses, AddressLoaderError> {
+        lookups
+            .iter()
+            .map(|lookup| {
+                self.accounts_db.try_load_lookup_table_addresses(lookup).map_err(
+                    |error| match error {
+                        LookupTableLoadError::AccountSource(failure) => {
+                            self.record_failure(failure);
+                            AddressLoaderError::LookupTableAccountNotFound
+                        }
+                        LookupTableLoadError::AddressLookup(error) => {
+                            into_address_loader_error(error)
+                        }
+                    },
+                )
             })
             .collect()
     }

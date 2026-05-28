@@ -87,6 +87,7 @@ fn fixture_for_preloaded_vm(fixture: &Fixture) -> Fixture {
     let mut normalized = fixture.clone();
     match &mut normalized.input {
         FixtureInput::Transaction(transaction) => transaction.programs.clear(),
+        #[cfg(feature = "instruction-fixture")]
         FixtureInput::Instruction(instruction) => instruction.programs.clear(),
     }
     normalized

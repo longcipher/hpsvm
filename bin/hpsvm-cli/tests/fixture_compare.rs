@@ -109,6 +109,30 @@ fn fixture_compare_passes_for_fixture_directory() {
         .output()
         .expect("compare command must execute");
 
+    eprintln!("status: {}", output.status);
+    eprintln!("stdout: {}", String::from_utf8_lossy(&output.stdout));
+    eprintln!("stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    // Also try loading each file individually via the CLI
+    for ext in &["json", "bin"] {
+        for entry in std::fs::read_dir(dir.path()).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some(*ext) {
+                let output = Command::new(env!("CARGO_BIN_EXE_hpsvm"))
+                    .args(["fixture", "compare", path.to_str().unwrap()])
+                    .output()
+                    .unwrap();
+                eprintln!(
+                    "individual {}: status={}, stderr={}",
+                    path.display(),
+                    output.status,
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+        }
+    }
+
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     let first = stdout.find("PASS: cli-compare-dir-first").expect("first fixture should pass");

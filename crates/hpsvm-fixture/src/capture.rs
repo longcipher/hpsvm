@@ -1,10 +1,12 @@
+#[cfg(feature = "bin-codec")]
 use solana_transaction::versioned::VersionedTransaction;
 
 use crate::{
-    AccountSnapshot, Compare, ExecutionSnapshot, Fixture, FixtureError, FixtureExpectations,
-    FixtureHeader, FixtureInput, FixtureKind, ProgramBinding, RuntimeFixtureConfig,
-    TransactionFixture,
+    AccountSnapshot, Compare, ExecutionSnapshot, FixtureHeader, FixtureKind, ProgramBinding,
+    RuntimeFixtureConfig,
 };
+#[cfg(feature = "bin-codec")]
+use crate::{Fixture, FixtureError, FixtureExpectations, FixtureInput, TransactionFixture};
 
 #[derive(Debug, Default, Clone)]
 #[must_use = "capture builders do nothing unless you finish them into a fixture"]
@@ -70,6 +72,7 @@ impl CaptureBuilder {
         self
     }
 
+    #[cfg(feature = "bin-codec")]
     pub fn capture_transaction(self, tx: &VersionedTransaction) -> Result<Fixture, FixtureError> {
         let transaction_bytes = bincode::serialize(tx).map_err(FixtureError::EncodeTransaction)?;
         let header = self.header.ok_or(FixtureError::MissingField { field: "header" })?;

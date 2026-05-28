@@ -198,6 +198,7 @@ impl From<ProgramError> for FailedTransactionMetadata {
 #[expect(missing_docs)]
 pub type TransactionResult = std::result::Result<TransactionMetadata, FailedTransactionMetadata>;
 
+#[derive(Debug)]
 pub(crate) struct ExecutionResult {
     pub(crate) post_accounts: Vec<(Address, AccountSharedData)>,
     pub(crate) tx_result: Result<()>,

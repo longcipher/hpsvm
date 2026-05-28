@@ -6,6 +6,7 @@ use crate::AccountSourceError;
 
 /// Errors related to invalid sysvar data
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum InvalidSysvarDataError {
     /// Invalid Clock sysvar data
     #[error("Invalid Clock sysvar data.")]
@@ -38,6 +39,7 @@ pub enum InvalidSysvarDataError {
 
 /// High level SVM errors
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum HPSVMError {
     /// Invalid sysvar data error
     #[error("{0}")]

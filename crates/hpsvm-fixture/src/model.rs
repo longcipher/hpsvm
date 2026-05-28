@@ -1,6 +1,9 @@
+#[cfg(feature = "instruction-fixture")]
 use hpsvm::instruction::InstructionCase;
+#[cfg(feature = "instruction-fixture")]
 use solana_account::Account;
 use solana_address::Address;
+#[cfg(feature = "instruction-fixture")]
 use solana_transaction::AccountMeta;
 
 use crate::{AccountSnapshot, Compare, ExecutionSnapshot};
@@ -56,6 +59,7 @@ impl FixtureHeader {
 #[non_exhaustive]
 pub enum FixtureKind {
     Transaction,
+    #[cfg(feature = "instruction-fixture")]
     Instruction,
 }
 
@@ -64,6 +68,7 @@ pub enum FixtureKind {
 #[non_exhaustive]
 pub enum FixtureInput {
     Transaction(TransactionFixture),
+    #[cfg(feature = "instruction-fixture")]
     Instruction(InstructionFixture),
 }
 
@@ -88,6 +93,7 @@ impl TransactionFixture {
     }
 }
 
+#[cfg(feature = "instruction-fixture")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
@@ -100,6 +106,7 @@ pub struct InstructionFixture {
     pub data: Vec<u8>,
 }
 
+#[cfg(feature = "instruction-fixture")]
 impl InstructionFixture {
     pub fn new(
         runtime: RuntimeFixtureConfig,
@@ -138,6 +145,7 @@ impl InstructionFixture {
     }
 }
 
+#[cfg(feature = "instruction-fixture")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
@@ -147,6 +155,7 @@ pub struct InstructionAccountMeta {
     pub is_writable: bool,
 }
 
+#[cfg(feature = "instruction-fixture")]
 impl InstructionAccountMeta {
     pub const fn new(pubkey: Address, is_signer: bool, is_writable: bool) -> Self {
         Self { pubkey, is_signer, is_writable }
@@ -170,6 +179,8 @@ pub struct RuntimeFixtureConfig {
     pub log_bytes_limit: Option<usize>,
     pub sigverify: bool,
     pub blockhash_check: bool,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub compute_unit_limit: Option<u64>,
 }
 
 impl RuntimeFixtureConfig {
@@ -179,7 +190,12 @@ impl RuntimeFixtureConfig {
         sigverify: bool,
         blockhash_check: bool,
     ) -> Self {
-        Self { slot, log_bytes_limit, sigverify, blockhash_check }
+        Self { slot, log_bytes_limit, sigverify, blockhash_check, compute_unit_limit: None }
+    }
+
+    pub const fn with_compute_unit_limit(mut self, compute_unit_limit: u64) -> Self {
+        self.compute_unit_limit = Some(compute_unit_limit);
+        self
     }
 }
 

@@ -346,7 +346,7 @@ use utils::{
 use crate::register_tracing::DefaultRegisterTracingCallback;
 use crate::{
     account_source::EmptyAccountSource,
-    accounts_db::AccountsDb,
+    accounts_db::{AccountSourceTrackingAddressLoader, AccountsDb},
     batch::{TransactionBatchError, TransactionBatchExecutionResult, TransactionBatchPlan},
     error::HPSVMError,
     history::TransactionHistory,
@@ -805,6 +805,18 @@ impl HPSVM {
     pub const fn set_compute_budget(&mut self, compute_budget: ComputeBudget) {
         self.runtime_env.compute_budget = Some(compute_budget);
         self.invalidate_execution_outcomes();
+    }
+
+    /// **Advanced reconfiguration.** Replaces only the runtime compute unit limit.
+    pub fn set_compute_unit_limit(&mut self, compute_unit_limit: u64) {
+        let mut compute_budget = self.runtime_env.compute_budget.unwrap_or_else(|| {
+            ComputeBudget::new_with_defaults(
+                self.cfg.feature_set.is_active(&raise_cpi_nesting_limit_to_8::ID),
+                self.cfg.feature_set.is_active(&increase_cpi_account_info_limit::ID),
+            )
+        });
+        compute_budget.compute_unit_limit = compute_unit_limit;
+        self.set_compute_budget(compute_budget);
     }
 
     #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
@@ -1341,51 +1353,33 @@ impl HPSVM {
         )
     }
 
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    fn sanitize_transaction_no_verify_inner(
-        &self,
-        tx: VersionedTransaction,
-    ) -> Result<SanitizedTransaction, TransactionError> {
-        let res = SanitizedTransaction::try_create(
-            tx,
-            MessageHash::Compute,
-            Some(false),
-            &self.accounts,
-            &self.reserved_account_keys.active,
-        );
-        res.inspect_err(|_| {
-            tracing::error!("Transaction sanitization failed");
-        })
-    }
-
     fn sanitize_transaction_no_verify(
         &self,
         tx: VersionedTransaction,
     ) -> Result<SanitizedTransaction, ExecutionResult> {
-        self.sanitize_transaction_no_verify_inner(tx)
-            .map_err(|err| ExecutionResult { tx_result: Err(err), ..Default::default() })
+        let loader = AccountSourceTrackingAddressLoader::new(&self.accounts);
+        SanitizedTransaction::try_create(
+            tx,
+            MessageHash::Compute,
+            Some(false),
+            &loader,
+            &self.reserved_account_keys.active,
+        )
+        .map_err(|err| sanitize_error_into_execution_result(&loader, err))
     }
 
     fn sanitize_transaction(
         &self,
         tx: VersionedTransaction,
     ) -> Result<SanitizedTransaction, ExecutionResult> {
-        self.sanitize_transaction_inner(tx)
-            .map_err(|err| ExecutionResult { tx_result: Err(err), ..Default::default() })
-    }
+        let tx = self.sanitize_transaction_no_verify(tx)?;
 
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    fn sanitize_transaction_inner(
-        &self,
-        tx: VersionedTransaction,
-    ) -> Result<SanitizedTransaction, TransactionError> {
-        let tx = self.sanitize_transaction_no_verify_inner(tx)?;
-
-        tx.verify()?;
+        tx.verify().map_err(|err| ExecutionResult { tx_result: Err(err), ..Default::default() })?;
         SanitizedTransaction::validate_account_locks(
             tx.message(),
             get_transaction_account_lock_limit(self),
-        )?;
+        )
+        .map_err(|err| ExecutionResult { tx_result: Err(err), ..Default::default() })?;
 
         Ok(tx)
     }
@@ -2300,6 +2294,7 @@ fn execution_result_if_context(
     }
 }
 
+#[cold]
 fn execution_result_with_account_source_error(
     pubkey: Address,
     source: AccountSourceError,
@@ -2315,6 +2310,24 @@ fn execution_result_with_account_source_error(
         account_source_failures: vec![AccountSourceFailure { pubkey, error: source.to_string() }],
         fatal_error: Some(HPSVMError::AccountSource { pubkey, source }),
         ..Default::default()
+    }
+}
+
+#[cold]
+fn sanitize_error_into_execution_result(
+    loader: &AccountSourceTrackingAddressLoader<'_>,
+    err: TransactionError,
+) -> ExecutionResult {
+    if let Some(failure) = loader.take_failure() {
+        execution_result_with_account_source_error(
+            failure.pubkey,
+            failure.source,
+            err,
+            0,
+            "failed to load address lookup table account from source",
+        )
+    } else {
+        ExecutionResult { tx_result: Err(err), ..Default::default() }
     }
 }
 
@@ -2811,7 +2824,7 @@ mod tests {
         let message = Message::new(&[ix], Some(&payer.pubkey()));
         let tx =
             VersionedTransaction::try_new(VersionedMessage::Legacy(message), &[&payer]).unwrap();
-        let sanitized = svm.sanitize_transaction_no_verify_inner(tx).unwrap();
+        let sanitized = svm.sanitize_transaction_no_verify(tx).unwrap();
 
         assert!(!sanitized.message().is_writable(1));
     }

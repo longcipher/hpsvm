@@ -68,7 +68,7 @@ fn compare_presets_only_differ_on_compute_units() {
     assert!(baseline.compare_with(&candidate, &Compare::everything_but_compute_units(), &config,));
 }
 
-#[cfg(feature = "serde")]
+#[cfg(feature = "json-codec")]
 #[test]
 fn compares_and_account_scopes_round_trip_through_serde() {
     let addresses = vec![Address::new_unique(), Address::new_unique()];

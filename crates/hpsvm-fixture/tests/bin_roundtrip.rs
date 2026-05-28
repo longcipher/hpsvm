@@ -3,10 +3,15 @@
 
 use hpsvm::HPSVM;
 use hpsvm_fixture::{
-    AccountSnapshot, CaptureBuilder, Compare, ExecutionSnapshot, Fixture, FixtureExpectations,
-    FixtureFormat, FixtureHeader, FixtureInput, FixtureKind, InstructionAccountMeta,
-    InstructionFixture, RuntimeFixtureConfig,
+    AccountSnapshot, CaptureBuilder, Compare, ExecutionSnapshot, Fixture, FixtureFormat,
+    RuntimeFixtureConfig,
 };
+#[cfg(feature = "instruction-fixture")]
+use hpsvm_fixture::{
+    FixtureExpectations, FixtureHeader, FixtureInput, FixtureKind, InstructionAccountMeta,
+    InstructionFixture,
+};
+#[cfg(feature = "instruction-fixture")]
 use solana_account::Account;
 use solana_address::Address;
 use solana_keypair::Keypair;
@@ -20,6 +25,7 @@ fn snapshot_account(svm: &HPSVM, address: Address) -> AccountSnapshot {
     AccountSnapshot::from_readable(address, &account)
 }
 
+#[cfg(feature = "instruction-fixture")]
 fn snapshot_readable(address: Address, account: &Account) -> AccountSnapshot {
     AccountSnapshot::from_readable(address, account)
 }
@@ -60,6 +66,7 @@ fn binary_fixture_roundtrip_preserves_transaction_fixture() {
 }
 
 #[test]
+#[cfg(feature = "instruction-fixture")]
 fn binary_fixture_roundtrip_preserves_instruction_fixture() {
     let svm = HPSVM::new();
     let sender = Address::new_unique();

@@ -4,6 +4,7 @@ use thiserror::Error;
 pub enum AdapterError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+    #[cfg(feature = "json-codec")]
     #[error("JSON codec error: {0}")]
     Json(#[from] serde_json::Error),
     #[error("protobuf codec decode error: {0}")]
@@ -22,6 +23,14 @@ pub enum AdapterError {
     UnsupportedSeedAddress { field: &'static str },
     #[error("firedancer compute units are inconsistent: before={before}, after={after}")]
     InconsistentComputeUnits { before: u64, after: u64 },
+    #[error("hpsvm fixture consumed {consumed} compute units but runtime budget is {budget}")]
+    ComputeUnitsExceedBudget { budget: u64, consumed: u64 },
+    #[error(
+        "firedancer execution status is inconsistent: result={result}, custom_err={custom_err}"
+    )]
+    InconsistentExecutionStatus { result: i32, custom_err: u32 },
+    #[error("execution status {kind} cannot be exported to firedancer status fields")]
+    UnsupportedExecutionStatus { kind: String },
     #[error(
         "return data program {program_id} cannot be exported to firedancer fixture for instruction program {instruction_program_id}"
     )]

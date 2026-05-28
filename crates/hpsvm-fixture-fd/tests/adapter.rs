@@ -112,6 +112,7 @@ fn firedancer_fixture_imports_into_hpsvm_instruction_fixture() -> Result<(), Ada
         panic!("expected instruction fixture")
     };
     assert_eq!(instruction.runtime.slot, 77);
+    assert_eq!(instruction.runtime.compute_unit_limit, Some(500));
     assert_eq!(instruction.programs, Vec::new());
     assert_eq!(instruction.program_id, address(9));
     assert_eq!(instruction.data, vec![8, 6, 7, 5, 3, 0, 9]);
@@ -153,7 +154,7 @@ fn hpsvm_instruction_fixture_exports_to_firedancer_proto() -> Result<(), Adapter
     let fixture = Fixture::new(
         FixtureHeader::new("instruction", FixtureKind::Instruction),
         FixtureInput::Instruction(InstructionFixture::new(
-            RuntimeFixtureConfig::new(7, None, false, false),
+            RuntimeFixtureConfig::new(7, None, false, false).with_compute_unit_limit(100),
             Vec::new(),
             vec![
                 AccountSnapshot::new(address(1), 5, address(7), false, 0, vec![1]),
@@ -207,15 +208,73 @@ fn hpsvm_instruction_fixture_exports_to_firedancer_proto() -> Result<(), Adapter
     assert!(!input.instr_accounts[1].is_signer);
     assert!(input.instr_accounts[1].is_writable);
     assert_eq!(input.data, vec![1, 2, 3]);
-    assert_eq!(input.cu_avail, 12);
+    assert_eq!(input.cu_avail, 100);
     assert_eq!(input.slot_context.as_ref().map(|slot| slot.slot), Some(7));
 
     let output = proto.output.as_ref().expect("output");
     assert_eq!(output.result, 0);
     assert_eq!(output.custom_err, 0);
-    assert_eq!(output.cu_avail, 0);
+    assert_eq!(output.cu_avail, 88);
     assert_eq!(output.modified_accounts.len(), 1);
     assert_eq!(output.modified_accounts[0].address, address_bytes(2));
+
+    Ok(())
+}
+
+#[test]
+fn hpsvm_instruction_fixture_export_requires_compute_unit_budget() {
+    let fixture = Fixture::new(
+        FixtureHeader::new("instruction", FixtureKind::Instruction),
+        FixtureInput::Instruction(InstructionFixture::new(
+            RuntimeFixtureConfig::new(7, None, false, false),
+            Vec::new(),
+            Vec::new(),
+            address(9),
+            Vec::new(),
+            Vec::new(),
+        )),
+        FixtureExpectations::new(
+            ExecutionSnapshot::from_fields(ExecutionSnapshotFields {
+                status: ExecutionStatus::Success,
+                included: true,
+                compute_units_consumed: 12,
+                fee: 0,
+                logs: Vec::new(),
+                return_data: None,
+                inner_instructions: Vec::new(),
+                post_accounts: Vec::new(),
+            }),
+            vec![Compare::Status],
+        ),
+    );
+
+    let error = FiredancerFixture::try_from(fixture).expect_err("budget should be required");
+
+    assert!(matches!(error, AdapterError::MissingComputeUnitBudget));
+}
+
+#[test]
+fn firedancer_status_preserves_program_result_and_custom_error() -> Result<(), AdapterError> {
+    let mut proto = sample_proto_fixture();
+    let output = proto.output.as_mut().expect("sample output");
+    output.result = 7;
+    output.custom_err = 42;
+
+    let imported = Fixture::try_from(FiredancerFixture::from_proto(proto))?;
+    assert_eq!(
+        imported.expectations.baseline.status,
+        ExecutionStatus::Failure {
+            kind: String::from("FiredancerProgramResult(7,CustomError(42))"),
+            message: String::from("firedancer program returned status 7 with custom error 42"),
+        }
+    );
+
+    let exported = FiredancerFixture::try_from(imported)?;
+    let output = exported.as_proto().output.as_ref().expect("output");
+
+    assert_eq!(output.result, 7);
+    assert_eq!(output.custom_err, 42);
+    assert_eq!(output.cu_avail, 420);
 
     Ok(())
 }

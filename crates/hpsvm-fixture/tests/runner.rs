@@ -1,11 +1,16 @@
 #![allow(missing_docs)]
+#![cfg(feature = "bin-codec")]
 
 use hpsvm::HPSVM;
 use hpsvm_fixture::{
     AccountSnapshot, CaptureBuilder, Compare, ExecutionSnapshot, Fixture, FixtureError,
-    FixtureExpectations, FixtureHeader, FixtureInput, FixtureKind, FixtureRunner,
-    InstructionAccountMeta, InstructionFixture, ProgramBinding, ResultConfig, RuntimeFixtureConfig,
+    FixtureInput, FixtureRunner, ProgramBinding, ResultConfig, RuntimeFixtureConfig,
 };
+#[cfg(feature = "instruction-fixture")]
+use hpsvm_fixture::{
+    FixtureExpectations, FixtureHeader, FixtureKind, InstructionAccountMeta, InstructionFixture,
+};
+#[cfg(feature = "instruction-fixture")]
 use solana_account::Account;
 use solana_address::Address;
 use solana_keypair::Keypair;
@@ -45,10 +50,12 @@ fn build_fixture() -> Fixture {
         .unwrap()
 }
 
+#[cfg(feature = "instruction-fixture")]
 fn snapshot_readable(address: Address, account: &Account) -> AccountSnapshot {
     AccountSnapshot::from_readable(address, account)
 }
 
+#[cfg(feature = "instruction-fixture")]
 fn build_instruction_fixture() -> Fixture {
     let svm = HPSVM::new();
     let sender = Address::new_unique();
@@ -124,6 +131,7 @@ fn runner_can_apply_fixture_default_compares() {
 }
 
 #[test]
+#[cfg(feature = "instruction-fixture")]
 fn runner_replays_instruction_fixture_against_a_cloned_vm() {
     let fixture = build_instruction_fixture();
     let mut runner = FixtureRunner::new(HPSVM::new());
@@ -138,6 +146,7 @@ fn runner_replays_instruction_fixture_against_a_cloned_vm() {
 }
 
 #[test]
+#[cfg(feature = "instruction-fixture")]
 fn runner_can_validate_instruction_fixture() {
     let fixture = build_instruction_fixture();
     let mut runner = FixtureRunner::new(HPSVM::new());

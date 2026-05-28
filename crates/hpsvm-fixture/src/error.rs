@@ -15,10 +15,14 @@ pub enum FixtureError {
     #[cfg(feature = "bin-codec")]
     #[error("binary codec decode error: {0}")]
     DecodeFixture(Box<bincode::ErrorKind>),
+    #[cfg(feature = "bin-codec")]
     #[error("failed to encode transaction: {0}")]
     EncodeTransaction(Box<bincode::ErrorKind>),
+    #[cfg(feature = "bin-codec")]
     #[error("failed to decode transaction: {0}")]
     DecodeTransaction(Box<bincode::ErrorKind>),
+    #[error("fixture codec feature `{feature}` is not enabled")]
+    CodecDisabled { feature: &'static str },
     #[error("unsupported fixture format for {path}")]
     UnsupportedFormat { path: String },
     #[error("runtime config field {field} is not replayable with the current hpsvm API")]

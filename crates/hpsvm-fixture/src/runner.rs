@@ -1,13 +1,16 @@
 use std::collections::HashMap;
 
 use hpsvm::HPSVM;
+#[cfg(feature = "bin-codec")]
 use solana_account::Account;
 use solana_address::Address;
+#[cfg(feature = "bin-codec")]
 use solana_transaction::versioned::VersionedTransaction;
 
+#[cfg(feature = "instruction-fixture")]
+use crate::InstructionFixture;
 use crate::{
-    ExecutionSnapshot, Fixture, FixtureError, FixtureInput, InstructionFixture, ResultConfig,
-    TransactionFixture,
+    ExecutionSnapshot, Fixture, FixtureError, FixtureInput, ResultConfig, TransactionFixture,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,6 +38,7 @@ impl FixtureRunner {
     pub fn run(&mut self, fixture: &Fixture) -> Result<FixtureExecution, FixtureError> {
         let snapshot = match &fixture.input {
             FixtureInput::Transaction(transaction) => self.run_transaction_fixture(transaction)?,
+            #[cfg(feature = "instruction-fixture")]
             FixtureInput::Instruction(instruction) => self.run_instruction_fixture(instruction)?,
         };
 
@@ -58,32 +62,42 @@ impl FixtureRunner {
         &self,
         fixture: &TransactionFixture,
     ) -> Result<ExecutionSnapshot, FixtureError> {
-        if fixture.runtime.blockhash_check {
-            return Err(FixtureError::UnsupportedRuntimeConfig { field: "blockhash_check" });
+        #[cfg(not(feature = "bin-codec"))]
+        {
+            let _ = (self, fixture);
+            return Err(FixtureError::CodecDisabled { feature: "bin-codec" });
         }
 
-        let mut vm = self.base_vm.clone();
-        Self::configure_vm(&mut vm, fixture.runtime);
-        self.load_programs(&mut vm, &fixture.programs)?;
+        #[cfg(feature = "bin-codec")]
+        {
+            if fixture.runtime.blockhash_check {
+                return Err(FixtureError::UnsupportedRuntimeConfig { field: "blockhash_check" });
+            }
 
-        for account in &fixture.pre_accounts {
-            vm.set_account(
-                account.address,
-                Account {
-                    lamports: account.lamports,
-                    data: account.data.clone(),
-                    owner: account.owner,
-                    executable: account.executable,
-                    rent_epoch: account.rent_epoch,
-                },
-            )?;
+            let mut vm = self.base_vm.clone();
+            Self::configure_vm(&mut vm, fixture.runtime);
+            self.load_programs(&mut vm, &fixture.programs)?;
+
+            for account in &fixture.pre_accounts {
+                vm.set_account(
+                    account.address,
+                    Account {
+                        lamports: account.lamports,
+                        data: account.data.clone(),
+                        owner: account.owner,
+                        executable: account.executable,
+                        rent_epoch: account.rent_epoch,
+                    },
+                )?;
+            }
+
+            let tx: VersionedTransaction = bincode::deserialize(&fixture.transaction_bytes)
+                .map_err(FixtureError::DecodeTransaction)?;
+            Ok(ExecutionSnapshot::from_outcome(&vm.transact(tx)))
         }
-
-        let tx: VersionedTransaction = bincode::deserialize(&fixture.transaction_bytes)
-            .map_err(FixtureError::DecodeTransaction)?;
-        Ok(ExecutionSnapshot::from_outcome(&vm.transact(tx)))
     }
 
+    #[cfg(feature = "instruction-fixture")]
     fn run_instruction_fixture(
         &self,
         fixture: &InstructionFixture,
@@ -100,6 +114,9 @@ impl FixtureRunner {
         vm.set_sigverify(runtime.sigverify);
         vm.set_blockhash_check(runtime.blockhash_check);
         vm.set_log_bytes_limit(runtime.log_bytes_limit);
+        if let Some(compute_unit_limit) = runtime.compute_unit_limit {
+            vm.set_compute_unit_limit(compute_unit_limit);
+        }
         vm.warp_to_slot(runtime.slot);
     }
 

@@ -202,6 +202,7 @@ fn validate_variant_programs(
 fn fixture_programs(fixture: &crate::Fixture) -> &[crate::ProgramBinding] {
     match &fixture.input {
         FixtureInput::Transaction(transaction) => &transaction.programs,
+        #[cfg(feature = "instruction-fixture")]
         FixtureInput::Instruction(instruction) => &instruction.programs,
     }
 }

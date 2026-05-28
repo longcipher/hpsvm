@@ -42,7 +42,7 @@ serde.workspace = true
 sha2 = { workspace = true, optional = true }
 solana-account.workspace = true
 solana-address.workspace = true
-solana-address-lookup-table-interface = { workspace = true, features = ["bytemuck"] }
+solana-address-lookup-table-interface = { workspace = true, features = ["bincode", "bytemuck"] }
 solana-bpf-loader-program.workspace = true
 solana-builtins = { workspace = true, features = ["agave-unstable-api"] }
 solana-clock.workspace = true
