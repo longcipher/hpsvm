@@ -2,7 +2,6 @@ use hpsvm::{HPSVM, types::FailedTransactionMetadata};
 use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
-use solana_transaction::Transaction;
 use spl_associated_token_account_interface::instruction::create_associated_token_account;
 
 use super::TOKEN_ID;
@@ -50,11 +49,7 @@ impl<'a> CreateAssociatedTokenAccount<'a> {
         let ix =
             create_associated_token_account(&payer_pk, &authority, self.mint, token_program_id);
 
-        let block_hash = self.svm.latest_blockhash();
-        let tx =
-            Transaction::new_signed_with_payer(&[ix], Some(&payer_pk), &[self.payer], block_hash);
-
-        self.svm.send_transaction(tx)?;
+        super::sign_and_send(self.svm, self.payer, &[], ix)?;
 
         let ata = spl_associated_token_account_interface::address::get_associated_token_address_with_program_id(
             &authority,

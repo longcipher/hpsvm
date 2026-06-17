@@ -47,7 +47,10 @@ pub use mint_to_checked::*;
 pub use revoke::*;
 pub use set_authority::*;
 use solana_address::Address;
+use solana_keypair::Keypair;
 use solana_program_pack::{IsInitialized, Pack};
+use solana_signer::Signer;
+use solana_transaction::Transaction;
 use solana_transaction_error::TransactionError;
 #[cfg(feature = "token-2022")]
 pub use spl_token_2022_interface as spl_token;
@@ -91,4 +94,19 @@ fn get_multisig_signers<'a>(
     } else {
         signing_pubkeys.iter().collect::<Vec<_>>()
     }
+}
+
+pub(crate) fn sign_and_send(
+    svm: &mut HPSVM,
+    payer: &Keypair,
+    signers: &[&Keypair],
+    ix: solana_instruction::Instruction,
+) -> Result<(), FailedTransactionMetadata> {
+    let payer_pk = payer.pubkey();
+    let block_hash = svm.latest_blockhash();
+    let mut tx = Transaction::new_with_payer(&[ix], Some(&payer_pk));
+    tx.partial_sign(&[payer], block_hash);
+    tx.partial_sign(signers, block_hash);
+    svm.send_transaction(tx)?;
+    Ok(())
 }

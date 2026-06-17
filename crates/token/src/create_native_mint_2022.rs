@@ -2,7 +2,6 @@ use hpsvm::{HPSVM, types::FailedTransactionMetadata};
 use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
-use solana_transaction::Transaction;
 use spl_token_2022_interface::instruction::create_native_mint;
 
 /// ### Description
@@ -33,11 +32,6 @@ impl<'a> CreateNativeMint<'a> {
 
         let ix = create_native_mint(token_program_id, &payer_pk)?;
 
-        let block_hash = self.svm.latest_blockhash();
-        let tx =
-            Transaction::new_signed_with_payer(&[ix], Some(&payer_pk), &[self.payer], block_hash);
-        self.svm.send_transaction(tx)?;
-
-        Ok(())
+        super::sign_and_send(self.svm, self.payer, &[], ix)
     }
 }

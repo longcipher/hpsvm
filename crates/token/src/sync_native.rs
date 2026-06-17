@@ -1,8 +1,6 @@
 use hpsvm::{HPSVM, types::FailedTransactionMetadata};
 use solana_address::Address;
 use solana_keypair::Keypair;
-use solana_signer::Signer;
-use solana_transaction::Transaction;
 
 use super::{TOKEN_ID, spl_token::instruction::sync_native};
 
@@ -37,15 +35,6 @@ impl<'a> SyncNative<'a> {
 
         let ix = sync_native(token_program_id, self.account)?;
 
-        let block_hash = self.svm.latest_blockhash();
-        let tx = Transaction::new_signed_with_payer(
-            &[ix],
-            Some(&self.payer.pubkey()),
-            &[self.payer],
-            block_hash,
-        );
-        self.svm.send_transaction(tx)?;
-
-        Ok(())
+        super::sign_and_send(self.svm, self.payer, &[], ix)
     }
 }

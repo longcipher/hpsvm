@@ -31,7 +31,6 @@ agave-reserved-account-keys = { workspace = true, features = [
     "agave-unstable-api",
 ] }
 agave-syscalls.workspace = true
-ansi_term.workspace = true
 hashbrown = { workspace = true, optional = true }
 hex = { workspace = true, optional = true }
 hotpath = { workspace = true, optional = true, features = ["hotpath"] }
@@ -115,6 +114,7 @@ test-log.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]
+rust.dead_code = "allow"
 clippy.allow_attributes = "warn"
 
 [[test]]

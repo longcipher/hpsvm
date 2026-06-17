@@ -1,4 +1,4 @@
-use ed25519_dalek::ed25519::signature::Signer;
+use ed25519_dalek::Signer;
 use hpsvm::HPSVM;
 use solana_ed25519_program::{self as ed25519_instruction, new_ed25519_instruction_with_signature};
 use solana_instruction::error::InstructionError;
@@ -15,7 +15,8 @@ use solana_transaction_error::TransactionError;
 #[test_log::test]
 fn ed25519_precompile_ok() {
     let kp = Keypair::new();
-    let kp_dalek = ed25519_dalek::Keypair::from_bytes(&kp.to_bytes()).unwrap();
+    let kp_dalek =
+        ed25519_dalek::SigningKey::from_keypair_bytes(&kp.to_bytes().try_into().unwrap()).unwrap();
 
     let mut svm = HPSVM::new();
     svm.airdrop(&kp.pubkey(), 10u64.pow(9)).unwrap();
@@ -39,7 +40,8 @@ fn ed25519_precompile_ok() {
 #[test_log::test]
 fn ed25519_precompile_err() {
     let kp = Keypair::new();
-    let kp_dalek = ed25519_dalek::Keypair::from_bytes(&kp.to_bytes()).unwrap();
+    let kp_dalek =
+        ed25519_dalek::SigningKey::from_keypair_bytes(&kp.to_bytes().try_into().unwrap()).unwrap();
 
     let mut svm = HPSVM::new();
     svm.airdrop(&kp.pubkey(), 10u64.pow(9)).unwrap();

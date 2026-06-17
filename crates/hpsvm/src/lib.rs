@@ -286,81 +286,58 @@ use solana_account::{
 use solana_address::Address;
 use solana_builtins::BUILTINS;
 use solana_clock::Clock;
-use solana_compute_budget::{
-    compute_budget::ComputeBudget, compute_budget_limits::ComputeBudgetLimits,
-};
-use solana_compute_budget_instruction::instructions_processor::process_compute_budget_instructions;
+use solana_compute_budget::compute_budget::ComputeBudget;
 use solana_epoch_rewards::EpochRewards;
 use solana_epoch_schedule::EpochSchedule;
 use solana_feature_gate_interface::{self as feature_gate, Feature};
-use solana_fee::FeeFeatures;
 use solana_fee_structure::FeeStructure;
 use solana_hash::Hash;
-use solana_instruction::{Instruction, account_meta::AccountMeta};
+use solana_instruction::Instruction;
 use solana_keypair::Keypair;
 use solana_last_restart_slot::LastRestartSlot;
 use solana_loader_v3_interface::{get_program_data_address, state::UpgradeableLoaderState};
-use solana_message::{
-    Message, SanitizedMessage, VersionedMessage, inner_instruction::InnerInstructionsList,
-};
+use solana_message::{Message, SanitizedMessage, VersionedMessage};
 use solana_nonce::{NONCED_TX_MARKER_IX_INDEX, state::DurableNonce};
-use solana_program_pack::Pack;
 use solana_program_runtime::{
-    invoke_context::{BuiltinFunctionWithContext, EnvironmentConfig, InvokeContext},
+    invoke_context::{BuiltinFunctionWithContext, InvokeContext},
     loaded_programs::{LoadProgramMetrics, ProgramCacheEntry},
     solana_sbpf::program::BuiltinFunction,
 };
 use solana_rent::Rent;
-use solana_sdk_ids::{
-    bpf_loader, bpf_loader_deprecated, bpf_loader_upgradeable, native_loader, system_program,
-};
+use solana_sdk_ids::{bpf_loader, bpf_loader_deprecated, bpf_loader_upgradeable, system_program};
 use solana_signature::Signature;
 use solana_signer::Signer;
 use solana_slot_hashes::SlotHashes;
 use solana_slot_history::SlotHistory;
 use solana_stake_interface::stake_history::StakeHistory;
 use solana_svm_log_collector::LogCollector;
-use solana_svm_timings::ExecuteTimings;
-use solana_svm_transaction::svm_message::SVMMessage;
-use solana_system_program::{SystemAccountKind, get_system_account_kind};
 #[expect(deprecated)]
 use solana_sysvar::recent_blockhashes::IterItem;
 use solana_sysvar::{Sysvar, SysvarSerialize};
 #[expect(deprecated)]
 use solana_sysvar::{fees::Fees, recent_blockhashes::RecentBlockhashes};
 use solana_sysvar_id::SysvarId;
-use solana_transaction::{
-    sanitized::{MAX_TX_ACCOUNT_LOCKS, MessageHash, SanitizedTransaction},
-    versioned::VersionedTransaction,
-};
-use solana_transaction_context::{ExecutionRecord, IndexOfAccount, TransactionContext};
+use solana_transaction::{sanitized::SanitizedTransaction, versioned::VersionedTransaction};
+#[cfg(feature = "invocation-inspect-callback")]
+use solana_transaction_context::IndexOfAccount;
 use solana_transaction_error::TransactionError;
-use spl_token_interface::state::{Account as TokenAccount, Mint as TokenMint};
 use types::SimulatedTransactionInfo;
-use utils::{
-    construct_instructions_account,
-    inner_instructions::inner_instructions_list_from_instruction_trace,
-};
 
+pub(crate) use crate::helpers::*;
 #[cfg(feature = "register-tracing")]
 use crate::register_tracing::DefaultRegisterTracingCallback;
 use crate::{
     account_source::EmptyAccountSource,
-    accounts_db::{AccountSourceTrackingAddressLoader, AccountsDb},
+    accounts_db::AccountsDb,
     batch::{TransactionBatchError, TransactionBatchExecutionResult, TransactionBatchPlan},
     error::HPSVMError,
     history::TransactionHistory,
-    message_processor::process_message,
     programs::{DEFAULT_PROGRAM_IDS, SPL_PROGRAM_IDS, load_default_programs, load_spl_programs},
     types::{
-        AccountDiff, AccountSourceFailure, ExecutedInstruction, ExecutionDiagnostics,
-        ExecutionOutcome, ExecutionResult, ExecutionTrace, FailedTransactionMetadata, TokenBalance,
-        TransactionMetadata, TransactionResult,
+        AccountDiff, AccountSourceFailure, ExecutionDiagnostics, ExecutionOutcome, ExecutionResult,
+        ExecutionTrace, FailedTransactionMetadata, TransactionMetadata, TransactionResult,
     },
-    utils::{
-        create_blockhash,
-        rent::{RentState, check_rent_state_with_account, get_account_rent_state},
-    },
+    utils::create_blockhash,
 };
 
 #[derive(Clone)]
@@ -384,13 +361,13 @@ macro_rules! hotpath_block {
 
 pub(crate) use hotpath_block;
 
-#[expect(missing_docs)]
+/// Transaction batch planning and parallel execution.
 pub mod batch;
-#[expect(missing_docs)]
+/// Error types for the HPSVM.
 pub mod error;
-#[expect(missing_docs)]
+/// Solana instruction types and helpers.
 pub mod instruction;
-#[expect(missing_docs)]
+/// Public return types and execution metadata.
 pub mod types;
 
 mod account_source;
@@ -398,7 +375,9 @@ mod accounts_db;
 mod builder;
 mod callback;
 mod env;
+mod execution;
 mod format_logs;
+mod helpers;
 mod history;
 mod inspector;
 mod message_processor;
@@ -423,7 +402,10 @@ pub(crate) fn next_vm_instance_id() -> u64 {
     NEXT_VM_INSTANCE_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-#[expect(missing_docs)]
+/// The core Solana Virtual Machine simulator.
+///
+/// HPSVM manages account state, program execution, and transaction processing
+/// in a deterministic, single-threaded environment.
 pub struct HPSVM {
     accounts: AccountsDb,
     airdrop_kp: [u8; 64],
@@ -548,6 +530,7 @@ impl HPSVM {
                 sigverify: false,
                 blockhash_check: false,
                 fee_structure: FeeStructure::default(),
+                compute_diagnostics: true,
             },
             feature_accounts_loaded: false,
             inspector: Arc::new(inspector::NoopInspector),
@@ -832,6 +815,18 @@ impl HPSVM {
     /// transactions and invalidates any previously transacted but uncommitted outcomes.
     pub const fn set_blockhash_check(&mut self, check: bool) {
         self.cfg.blockhash_check = check;
+        self.invalidate_execution_outcomes();
+    }
+
+    #[cfg_attr(feature = "nodejs-internal", qualifiers(pub))]
+    /// **Advanced reconfiguration.** Enables or disables execution diagnostics for future
+    /// transactions and invalidates any previously transacted but uncommitted outcomes.
+    ///
+    /// When diagnostics are disabled, `send_transaction` / `transact` returns an empty
+    /// [`ExecutionDiagnostics`](types::ExecutionDiagnostics) instead of computing pre/post
+    /// account diffs and token balances.
+    pub const fn set_compute_diagnostics(&mut self, enabled: bool) {
+        self.cfg.compute_diagnostics = enabled;
         self.invalidate_execution_outcomes();
     }
 
@@ -1340,536 +1335,6 @@ impl HPSVM {
         self.add_program_internal::<true>(program_id, program_bytes, loader_id)
     }
 
-    fn create_transaction_context(
-        &self,
-        compute_budget: ComputeBudget,
-        accounts: Vec<(Address, AccountSharedData)>,
-    ) -> TransactionContext<'_> {
-        TransactionContext::new(
-            accounts,
-            self.get_sysvar(),
-            compute_budget.max_instruction_stack_depth,
-            compute_budget.max_instruction_trace_length,
-        )
-    }
-
-    fn sanitize_transaction_no_verify(
-        &self,
-        tx: VersionedTransaction,
-    ) -> Result<SanitizedTransaction, ExecutionResult> {
-        let loader = AccountSourceTrackingAddressLoader::new(&self.accounts);
-        SanitizedTransaction::try_create(
-            tx,
-            MessageHash::Compute,
-            Some(false),
-            &loader,
-            &self.reserved_account_keys.active,
-        )
-        .map_err(|err| sanitize_error_into_execution_result(&loader, err))
-    }
-
-    fn sanitize_transaction(
-        &self,
-        tx: VersionedTransaction,
-    ) -> Result<SanitizedTransaction, ExecutionResult> {
-        let tx = self.sanitize_transaction_no_verify(tx)?;
-
-        tx.verify().map_err(|err| ExecutionResult { tx_result: Err(err), ..Default::default() })?;
-        SanitizedTransaction::validate_account_locks(
-            tx.message(),
-            get_transaction_account_lock_limit(self),
-        )
-        .map_err(|err| ExecutionResult { tx_result: Err(err), ..Default::default() })?;
-
-        Ok(tx)
-    }
-
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    fn process_transaction<'a, 'b>(
-        &'a self,
-        tx: &'b SanitizedTransaction,
-        compute_budget_limits: ComputeBudgetLimits,
-        log_collector: Rc<RefCell<LogCollector>>,
-    ) -> Result<CheckAndProcessTransactionSuccess<'b>, ExecutionResult>
-    where
-        'a: 'b,
-    {
-        let mut account_source_failures = Vec::new();
-        let compute_budget = hotpath_block!("hpsvm::process_transaction::compute_budget", {
-            self.runtime_env.compute_budget.unwrap_or_else(|| ComputeBudget {
-                compute_unit_limit: u64::from(compute_budget_limits.compute_unit_limit),
-                heap_size: compute_budget_limits.updated_heap_bytes,
-                ..ComputeBudget::new_with_defaults(
-                    self.cfg.feature_set.is_active(&raise_cpi_nesting_limit_to_8::ID),
-                    self.cfg.feature_set.is_active(&increase_cpi_account_info_limit::ID),
-                )
-            })
-        });
-        let rent = hotpath_block!("hpsvm::process_transaction::load_rent", {
-            self.accounts.sysvar_cache().get_rent().expect("rent sysvar should always be available")
-        });
-        let message = tx.message();
-        let blockhash = message.recent_blockhash();
-        // reload program cache
-        let mut program_cache_for_tx_batch = hotpath_block!(
-            "hpsvm::process_transaction::clone_program_cache",
-            self.accounts.cloned_programs_cache()
-        );
-        let mut accumulated_consume_units = 0;
-        let account_keys = message.account_keys();
-        let prioritization_fee = compute_budget_limits.get_prioritization_fee();
-        let fee = hotpath_block!("hpsvm::process_transaction::calculate_fee", {
-            solana_fee::calculate_fee(
-                message,
-                false,
-                self.cfg.fee_structure.lamports_per_signature,
-                prioritization_fee,
-                FeeFeatures::from(&self.cfg.feature_set),
-            )
-        });
-        let mut validated_fee_payer = false;
-        let mut payer_key = None;
-        let mut accounts = hotpath_block!("hpsvm::process_transaction::load_accounts", {
-            let mut accounts = Vec::with_capacity(account_keys.len());
-
-            for (i, key) in account_keys.iter().enumerate() {
-                let account = if solana_sdk_ids::sysvar::instructions::check_id(key) {
-                    construct_instructions_account(message)
-                } else {
-                    let is_instruction_account = message.is_instruction_account(i);
-                    let mut account = if !is_instruction_account &&
-                        !message.is_writable(i) &&
-                        self.accounts.has_program_cache_entry(key)
-                    {
-                        self.accounts
-                            .get_account(key)
-                            .expect("account should exist during processing")
-                    } else {
-                        match self.accounts.try_get_account(key) {
-                            Ok(Some(account)) => account,
-                            Ok(None) => {
-                                let mut default_account = AccountSharedData::default();
-                                default_account.set_rent_epoch(0);
-                                default_account
-                            }
-                            Err(error) => {
-                                return Err(execution_result_with_account_source_error(
-                                    *key,
-                                    error,
-                                    TransactionError::AccountNotFound,
-                                    fee,
-                                    "failed to load transaction account from source",
-                                ));
-                            }
-                        }
-                    };
-
-                    if !validated_fee_payer && (!message.is_invoked(i) || is_instruction_account) {
-                        if let Err(error) =
-                            validate_fee_payer(key, &mut account, i as IndexOfAccount, &rent, fee)
-                        {
-                            return Err(ExecutionResult {
-                                tx_result: Err(error),
-                                compute_units_consumed: accumulated_consume_units,
-                                fee,
-                                ..Default::default()
-                            });
-                        }
-                        validated_fee_payer = true;
-                        payer_key = Some(*key);
-                    }
-
-                    account
-                };
-
-                accounts.push((*key, account));
-            }
-
-            Ok(accounts)
-        })?;
-
-        if !validated_fee_payer {
-            tracing::error!("Failed to validate fee payer");
-            return Err(ExecutionResult {
-                tx_result: Err(TransactionError::AccountNotFound),
-                compute_units_consumed: accumulated_consume_units,
-                fee,
-                ..Default::default()
-            });
-        }
-        let builtins_start_index = accounts.len();
-        let program_indices = hotpath_block!(
-            "hpsvm::process_transaction::resolve_program_indices",
-            {
-                let mut program_indices = Vec::with_capacity(tx.message().instructions().len());
-
-                for compiled_instruction in tx.message().instructions() {
-                    let program_index = compiled_instruction.program_id_index as usize;
-                    let (program_id, program_account) =
-                        accounts.get(program_index).expect("program account should exist");
-                    if native_loader::check_id(program_id) {
-                        program_indices.push(program_index as IndexOfAccount);
-                        continue;
-                    }
-                    if !program_account.executable() {
-                        tracing::error!("Program account {program_id} is not executable.");
-                        return Err(ExecutionResult {
-                            tx_result: Err(TransactionError::InvalidProgramForExecution),
-                            compute_units_consumed: accumulated_consume_units,
-                            fee,
-                            ..Default::default()
-                        });
-                    }
-
-                    let owner_id = program_account.owner();
-                    if native_loader::check_id(owner_id) {
-                        program_indices.push(program_index as IndexOfAccount);
-                        continue;
-                    }
-
-                    let Some(cached_program_accounts) = accounts.get(builtins_start_index..) else {
-                        return Err(ExecutionResult {
-                            tx_result: Err(TransactionError::ProgramAccountNotFound),
-                            compute_units_consumed: accumulated_consume_units,
-                            fee,
-                            ..Default::default()
-                        });
-                    };
-
-                    if !cached_program_accounts.iter().any(|(key, _)| key == owner_id) {
-                        let owner_account = match self.accounts.try_get_account(owner_id) {
-                            Ok(Some(account)) => account,
-                            Ok(None) => {
-                                return Err(ExecutionResult {
-                                    tx_result: Err(TransactionError::ProgramAccountNotFound),
-                                    compute_units_consumed: accumulated_consume_units,
-                                    fee,
-                                    ..Default::default()
-                                });
-                            }
-                            Err(error) => {
-                                account_source_failures.push(AccountSourceFailure {
-                                    pubkey: *owner_id,
-                                    error: error.to_string(),
-                                });
-                                AccountSharedData::default()
-                            }
-                        };
-                        if !native_loader::check_id(owner_account.owner()) {
-                            tracing::error!(
-                                "Owner account {owner_id} is not owned by the native loader program."
-                            );
-                            return Err(ExecutionResult {
-                                tx_result: Err(TransactionError::InvalidProgramForExecution),
-                                compute_units_consumed: accumulated_consume_units,
-                                fee,
-                                account_source_failures: account_source_failures.clone(),
-                                ..Default::default()
-                            });
-                        }
-                        if !owner_account.executable() {
-                            tracing::error!("Owner account {owner_id} is not executable");
-                            return Err(ExecutionResult {
-                                tx_result: Err(TransactionError::InvalidProgramForExecution),
-                                compute_units_consumed: accumulated_consume_units,
-                                fee,
-                                account_source_failures: account_source_failures.clone(),
-                                ..Default::default()
-                            });
-                        }
-                        accounts.push((*owner_id, owner_account));
-                    }
-
-                    program_indices.push(program_index as IndexOfAccount);
-                }
-
-                Ok(program_indices)
-            }
-        )?;
-
-        let mut context = hotpath_block!(
-            "hpsvm::process_transaction::create_transaction_context",
-            self.create_transaction_context(compute_budget, accounts)
-        );
-
-        let rent_check = hotpath_block!(
-            "hpsvm::process_transaction::check_accounts_rent",
-            self.check_accounts_rent(tx, &context, &rent, &mut account_source_failures)
-        );
-        if let Err(mut error) = rent_check {
-            error.compute_units_consumed = accumulated_consume_units;
-            error.fee = fee;
-            error.account_source_failures = account_source_failures;
-            return Err(error);
-        }
-
-        let feature_set = self.cfg.feature_set.runtime_features();
-        let mut invoke_context =
-            hotpath_block!("hpsvm::process_transaction::build_invoke_context", {
-                InvokeContext::new(
-                    &mut context,
-                    &mut program_cache_for_tx_batch,
-                    EnvironmentConfig::new(
-                        *blockhash,
-                        self.cfg.fee_structure.lamports_per_signature,
-                        self,
-                        &feature_set,
-                        self.accounts.runtime_environments(),
-                        self.accounts.runtime_environments(),
-                        self.accounts.sysvar_cache(),
-                    ),
-                    Some(log_collector),
-                    compute_budget.to_budget(),
-                    compute_budget.to_cost(),
-                )
-            });
-
-        #[cfg(feature = "invocation-inspect-callback")]
-        self.invocation_inspect_callback.before_invocation(
-            self,
-            tx,
-            &program_indices,
-            &invoke_context,
-        );
-
-        self.on_transaction_start(tx);
-
-        let tx_result = hotpath_block!("hpsvm::process_transaction::process_message", {
-            process_message(
-                self,
-                message,
-                &program_indices,
-                &mut invoke_context,
-                &mut ExecuteTimings::default(),
-                &mut accumulated_consume_units,
-            )
-        });
-
-        self.on_transaction_end(&tx_result);
-
-        #[cfg(feature = "invocation-inspect-callback")]
-        self.invocation_inspect_callback.after_invocation(
-            self,
-            &invoke_context,
-            self.enable_register_tracing,
-        );
-
-        Ok(CheckAndProcessTransactionSuccess {
-            core: CheckAndProcessTransactionSuccessCore {
-                result: tx_result,
-                compute_units_consumed: accumulated_consume_units,
-                context: Some(context),
-            },
-            fee,
-            payer_key,
-            account_source_failures,
-        })
-    }
-
-    fn check_accounts_rent(
-        &self,
-        tx: &SanitizedTransaction,
-        context: &TransactionContext<'_>,
-        rent: &Rent,
-        account_source_failures: &mut Vec<AccountSourceFailure>,
-    ) -> Result<(), ExecutionResult> {
-        let message = tx.message();
-        for index in 0..message.account_keys().len() {
-            if message.is_writable(index) {
-                let account =
-                    context.accounts().try_borrow(index as IndexOfAccount).map_err(|err| {
-                        ExecutionResult {
-                            tx_result: Err(TransactionError::InstructionError(index as u8, err)),
-                            ..Default::default()
-                        }
-                    })?;
-
-                let pubkey = context.get_key_of_account_at_index(index as IndexOfAccount).map_err(
-                    |err| ExecutionResult {
-                        tx_result: Err(TransactionError::InstructionError(index as u8, err)),
-                        ..Default::default()
-                    },
-                )?;
-
-                let post_rent_state =
-                    get_account_rent_state(rent, account.lamports(), account.data().len());
-                let pre_rent_state = match self.accounts.try_get_account(pubkey) {
-                    Ok(Some(acc)) => get_account_rent_state(rent, acc.lamports(), acc.data().len()),
-                    Ok(None) => RentState::Uninitialized,
-                    Err(error) => {
-                        account_source_failures.push(AccountSourceFailure {
-                            pubkey: *pubkey,
-                            error: error.to_string(),
-                        });
-                        RentState::Uninitialized
-                    }
-                };
-
-                check_rent_state_with_account(
-                    &pre_rent_state,
-                    &post_rent_state,
-                    pubkey,
-                    index as IndexOfAccount,
-                )
-                .map_err(|error| ExecutionResult { tx_result: Err(error), ..Default::default() })?;
-            }
-        }
-        Ok(())
-    }
-
-    fn execute_transaction_no_verify(
-        &mut self,
-        tx: VersionedTransaction,
-        log_collector: Rc<RefCell<LogCollector>>,
-    ) -> ExecutionResult {
-        map_sanitize_result(self.sanitize_transaction_no_verify(tx), |s_tx| {
-            self.execute_sanitized_transaction(&s_tx, log_collector)
-        })
-    }
-
-    fn execute_transaction(
-        &mut self,
-        tx: VersionedTransaction,
-        log_collector: Rc<RefCell<LogCollector>>,
-    ) -> ExecutionResult {
-        map_sanitize_result(self.sanitize_transaction(tx), |s_tx| {
-            self.execute_sanitized_transaction(&s_tx, log_collector)
-        })
-    }
-
-    fn execute_sanitized_transaction(
-        &mut self,
-        sanitized_tx: &SanitizedTransaction,
-        log_collector: Rc<RefCell<LogCollector>>,
-    ) -> ExecutionResult {
-        let CheckAndProcessTransactionSuccess {
-            core: CheckAndProcessTransactionSuccessCore { result, compute_units_consumed, context },
-            fee,
-            payer_key,
-            account_source_failures,
-        } = match self.check_and_process_transaction(sanitized_tx, log_collector) {
-            Ok(value) => value,
-            Err(value) => return value,
-        };
-        if let Some(ctx) = context {
-            execution_result_if_context(
-                sanitized_tx,
-                ctx,
-                result,
-                compute_units_consumed,
-                fee,
-                payer_key,
-                account_source_failures,
-            )
-        } else {
-            ExecutionResult {
-                tx_result: result,
-                compute_units_consumed,
-                fee,
-                account_source_failures,
-                ..Default::default()
-            }
-        }
-    }
-
-    fn execute_sanitized_transaction_readonly(
-        &self,
-        sanitized_tx: &SanitizedTransaction,
-        log_collector: Rc<RefCell<LogCollector>>,
-    ) -> ExecutionResult {
-        let CheckAndProcessTransactionSuccess {
-            core: CheckAndProcessTransactionSuccessCore { result, compute_units_consumed, context },
-            fee,
-            payer_key,
-            account_source_failures,
-        } = match self.check_and_process_transaction(sanitized_tx, log_collector) {
-            Ok(value) => value,
-            Err(value) => return value,
-        };
-        if let Some(ctx) = context {
-            execution_result_if_context(
-                sanitized_tx,
-                ctx,
-                result,
-                compute_units_consumed,
-                fee,
-                payer_key,
-                account_source_failures,
-            )
-        } else {
-            ExecutionResult {
-                tx_result: result,
-                compute_units_consumed,
-                fee,
-                account_source_failures,
-                ..Default::default()
-            }
-        }
-    }
-
-    fn check_and_process_transaction<'a, 'b>(
-        &'a self,
-        sanitized_tx: &'b SanitizedTransaction,
-        log_collector: Rc<RefCell<LogCollector>>,
-    ) -> Result<CheckAndProcessTransactionSuccess<'b>, ExecutionResult>
-    where
-        'a: 'b,
-    {
-        if self.require_sysvars_loaded().is_err() {
-            return Err(ExecutionResult {
-                tx_result: Err(TransactionError::SanitizeFailure),
-                ..Default::default()
-            });
-        }
-        self.maybe_blockhash_check(sanitized_tx)?;
-        let compute_budget_limits = get_compute_budget_limits(sanitized_tx, &self.cfg.feature_set)?;
-        self.maybe_history_check(sanitized_tx)?;
-        self.process_transaction(sanitized_tx, compute_budget_limits, log_collector)
-    }
-
-    fn maybe_history_check(
-        &self,
-        sanitized_tx: &SanitizedTransaction,
-    ) -> Result<(), ExecutionResult> {
-        if self.cfg.sigverify && self.history.check_transaction(sanitized_tx.signature()) {
-            return Err(ExecutionResult {
-                tx_result: Err(TransactionError::AlreadyProcessed),
-                ..Default::default()
-            });
-        }
-        Ok(())
-    }
-
-    fn maybe_blockhash_check(
-        &self,
-        sanitized_tx: &SanitizedTransaction,
-    ) -> Result<(), ExecutionResult> {
-        if self.cfg.blockhash_check {
-            self.check_transaction_age(sanitized_tx)?;
-        }
-        Ok(())
-    }
-
-    fn execute_transaction_readonly(
-        &self,
-        tx: VersionedTransaction,
-        log_collector: Rc<RefCell<LogCollector>>,
-    ) -> ExecutionResult {
-        map_sanitize_result(self.sanitize_transaction(tx), |s_tx| {
-            self.execute_sanitized_transaction_readonly(&s_tx, log_collector)
-        })
-    }
-
-    fn execute_transaction_no_verify_readonly(
-        &self,
-        tx: VersionedTransaction,
-        log_collector: Rc<RefCell<LogCollector>>,
-    ) -> ExecutionResult {
-        map_sanitize_result(self.sanitize_transaction_no_verify(tx), |s_tx| {
-            self.execute_sanitized_transaction_readonly(&s_tx, log_collector)
-        })
-    }
-
     /// Submits a signed transaction and commits its post-state to this VM instance.
     ///
     /// This updates accounts, transaction history, and other in-memory runtime
@@ -2154,7 +1619,7 @@ impl HPSVM {
         self.runtime_env.compute_budget
     }
 
-    #[expect(missing_docs)]
+    /// Returns whether signature verification is enabled.
     pub const fn get_sigverify(&self) -> bool {
         self.cfg.sigverify
     }
@@ -2250,84 +1715,6 @@ impl HPSVM {
         self.invalidate_execution_outcomes();
 
         Ok(())
-    }
-}
-
-struct CheckAndProcessTransactionSuccessCore<'ix_data> {
-    result: Result<(), TransactionError>,
-    compute_units_consumed: u64,
-    context: Option<TransactionContext<'ix_data>>,
-}
-
-struct CheckAndProcessTransactionSuccess<'ix_data> {
-    core: CheckAndProcessTransactionSuccessCore<'ix_data>,
-    fee: u64,
-    payer_key: Option<Address>,
-    account_source_failures: Vec<AccountSourceFailure>,
-}
-
-fn execution_result_if_context(
-    sanitized_tx: &SanitizedTransaction,
-    ctx: TransactionContext<'_>,
-    result: Result<(), TransactionError>,
-    compute_units_consumed: u64,
-    fee: u64,
-    fee_payer: Option<Address>,
-    account_source_failures: Vec<AccountSourceFailure>,
-) -> ExecutionResult {
-    let (signature, return_data, inner_instructions, execution_trace, post_accounts) =
-        execute_tx_helper(sanitized_tx, ctx);
-    let fee_payer = fee_payer.filter(|_| result.is_err());
-    ExecutionResult {
-        tx_result: result,
-        signature,
-        post_accounts,
-        inner_instructions,
-        compute_units_consumed,
-        return_data,
-        execution_trace,
-        included: true,
-        fee,
-        fee_payer,
-        account_source_failures,
-        fatal_error: None,
-    }
-}
-
-#[cold]
-fn execution_result_with_account_source_error(
-    pubkey: Address,
-    source: AccountSourceError,
-    tx_error: TransactionError,
-    fee: u64,
-    context: &'static str,
-) -> ExecutionResult {
-    tracing::error!(?pubkey, %source, "{context}");
-
-    ExecutionResult {
-        tx_result: Err(tx_error),
-        fee,
-        account_source_failures: vec![AccountSourceFailure { pubkey, error: source.to_string() }],
-        fatal_error: Some(HPSVMError::AccountSource { pubkey, source }),
-        ..Default::default()
-    }
-}
-
-#[cold]
-fn sanitize_error_into_execution_result(
-    loader: &AccountSourceTrackingAddressLoader<'_>,
-    err: TransactionError,
-) -> ExecutionResult {
-    if let Some(failure) = loader.take_failure() {
-        execution_result_with_account_source_error(
-            failure.pubkey,
-            failure.source,
-            err,
-            0,
-            "failed to load address lookup table account from source",
-        )
-    } else {
-        ExecutionResult { tx_result: Err(err), ..Default::default() }
     }
 }
 
@@ -2449,34 +1836,6 @@ fn commit_execution_outcome(vm: &mut HPSVM, outcome: ExecutionOutcome) -> Transa
     result
 }
 
-fn execute_tx_helper(
-    sanitized_tx: &SanitizedTransaction,
-    ctx: TransactionContext<'_>,
-) -> (
-    Signature,
-    solana_transaction_context::TransactionReturnData,
-    InnerInstructionsList,
-    ExecutionTrace,
-    Vec<(Address, AccountSharedData)>,
-) {
-    let signature = sanitized_tx.signature().to_owned();
-    let inner_instructions = inner_instructions_list_from_instruction_trace(&ctx);
-    let execution_trace = execution_trace_from_transaction_context(sanitized_tx, &ctx);
-    let ExecutionRecord {
-        accounts,
-        return_data,
-        touched_account_count: _,
-        accounts_resize_delta: _,
-    } = ctx.into();
-    let msg = sanitized_tx.message();
-    let post_accounts = accounts
-        .into_iter()
-        .enumerate()
-        .filter_map(|(idx, pair)| msg.is_writable(idx).then_some(pair))
-        .collect();
-    (signature, return_data, inner_instructions, execution_trace, post_accounts)
-}
-
 fn execution_diagnostics(
     vm: &HPSVM,
     post_accounts: &[(Address, AccountSharedData)],
@@ -2509,184 +1868,6 @@ fn execution_diagnostics(
         pre_token_balances: token_balances(&pre_accounts, &vm.accounts),
         post_token_balances: token_balances(post_accounts, &vm.accounts),
         execution_trace,
-    }
-}
-
-fn public_account_from_shared(account: &AccountSharedData) -> Option<Account> {
-    (account.lamports() != 0).then(|| account.clone().into())
-}
-
-fn token_balances(
-    accounts: &[(Address, AccountSharedData)],
-    account_db: &AccountsDb,
-) -> Vec<TokenBalance> {
-    accounts
-        .iter()
-        .enumerate()
-        .filter_map(|(account_index, (address, account))| {
-            if account.data().len() != TokenAccount::LEN {
-                return None;
-            }
-
-            let token_account = TokenAccount::unpack(account.data()).ok()?;
-            let decimals = token_mint_decimals(accounts, account_db, &token_account.mint);
-
-            Some(TokenBalance {
-                account_index,
-                address: *address,
-                mint: token_account.mint,
-                owner: token_account.owner,
-                amount: token_account.amount,
-                decimals,
-            })
-        })
-        .collect()
-}
-
-fn token_mint_decimals(
-    accounts: &[(Address, AccountSharedData)],
-    account_db: &AccountsDb,
-    mint: &Address,
-) -> Option<u8> {
-    accounts
-        .iter()
-        .find(|(address, _)| address == mint)
-        .map(|(_, account)| account.clone())
-        .or_else(|| account_db.get_account(mint))
-        .and_then(|account| {
-            (account.data().len() == TokenMint::LEN)
-                .then(|| TokenMint::unpack(account.data()).ok().map(|mint| mint.decimals))
-                .flatten()
-        })
-}
-
-fn execution_trace_from_transaction_context(
-    sanitized_tx: &SanitizedTransaction,
-    transaction_context: &TransactionContext<'_>,
-) -> ExecutionTrace {
-    let account_keys = sanitized_tx.message().account_keys();
-    let instructions = (0..transaction_context.get_instruction_trace_length())
-        .filter_map(|index| {
-            let instruction_context =
-                transaction_context.get_instruction_context_at_index_in_trace(index).ok()?;
-            let program_index = instruction_context
-                .get_index_of_program_account_in_transaction()
-                .unwrap_or_default() as usize;
-            let program_id = account_keys.get(program_index).copied().unwrap_or_default();
-            let stack_height =
-                u8::try_from(instruction_context.get_stack_height()).unwrap_or(u8::MAX);
-            let accounts = (0..instruction_context.get_number_of_instruction_accounts())
-                .filter_map(|instruction_account_index| {
-                    let transaction_index = instruction_context
-                        .get_index_of_instruction_account_in_transaction(instruction_account_index)
-                        .ok()? as usize;
-                    let pubkey = account_keys.get(transaction_index).copied()?;
-                    let is_signer = instruction_context
-                        .is_instruction_account_signer(instruction_account_index)
-                        .unwrap_or(false);
-                    let is_writable = instruction_context
-                        .is_instruction_account_writable(instruction_account_index)
-                        .unwrap_or(false);
-                    Some(AccountMeta { pubkey, is_signer, is_writable })
-                })
-                .collect();
-
-            Some(ExecutedInstruction {
-                stack_height,
-                program_id,
-                accounts,
-                data: instruction_context.get_instruction_data().to_vec(),
-            })
-        })
-        .collect();
-
-    ExecutionTrace { instructions }
-}
-
-fn get_compute_budget_limits(
-    sanitized_tx: &SanitizedTransaction,
-    feature_set: &FeatureSet,
-) -> Result<ComputeBudgetLimits, ExecutionResult> {
-    process_compute_budget_instructions(
-        SVMMessage::program_instructions_iter(sanitized_tx),
-        feature_set,
-    )
-    .map_err(|e| ExecutionResult { tx_result: Err(e), ..Default::default() })
-}
-
-/// Get the max number of accounts that a transaction may lock in this block
-fn get_transaction_account_lock_limit(svm: &HPSVM) -> usize {
-    if svm.cfg.feature_set.is_active(&agave_feature_set::increase_tx_account_lock_limit::id()) {
-        MAX_TX_ACCOUNT_LOCKS
-    } else {
-        64
-    }
-}
-
-/// Lighter version of the one in the solana-svm crate.
-///
-/// Check whether the payer_account is capable of paying the fee. The
-/// side effect is to subtract the fee amount from the payer_account
-/// balance of lamports. If the payer_account is not able to pay the
-/// fee a specific error is returned.
-fn validate_fee_payer(
-    payer_address: &Address,
-    payer_account: &mut AccountSharedData,
-    payer_index: IndexOfAccount,
-    rent: &Rent,
-    fee: u64,
-) -> solana_transaction_error::TransactionResult<()> {
-    if payer_account.lamports() == 0 {
-        tracing::error!("Payer account {payer_address} not found.");
-        return Err(TransactionError::AccountNotFound);
-    }
-    let system_account_kind = get_system_account_kind(payer_account).ok_or_else(|| {
-        tracing::error!("Payer account {payer_address} is not a system account");
-        TransactionError::InvalidAccountForFee
-    })?;
-    let min_balance = match system_account_kind {
-        SystemAccountKind::System => 0,
-        SystemAccountKind::Nonce => {
-            // Should we ever allow a fees charge to zero a nonce account's
-            // balance. The state MUST be set to uninitialized in that case
-            rent.minimum_balance(solana_nonce::state::State::size())
-        }
-    };
-
-    let payer_lamports = payer_account.lamports();
-
-    payer_lamports.checked_sub(min_balance).and_then(|v| v.checked_sub(fee)).ok_or_else(|| {
-        tracing::error!(
-            "Payer account {payer_address} has insufficient lamports for fee. Payer lamports: \
-                {payer_lamports} min_balance: {min_balance} fee: {fee}"
-        );
-        TransactionError::InsufficientFundsForFee
-    })?;
-
-    let payer_len = payer_account.data().len();
-    let payer_pre_rent_state = get_account_rent_state(rent, payer_account.lamports(), payer_len);
-    // we already checked above if we have sufficient balance so this should never error.
-    payer_account.checked_sub_lamports(fee).expect("fee should not exceed account balance");
-
-    let payer_post_rent_state = get_account_rent_state(rent, payer_account.lamports(), payer_len);
-    check_rent_state_with_account(
-        &payer_pre_rent_state,
-        &payer_post_rent_state,
-        payer_address,
-        payer_index,
-    )
-}
-
-fn map_sanitize_result<F>(
-    res: Result<SanitizedTransaction, ExecutionResult>,
-    op: F,
-) -> ExecutionResult
-where
-    F: FnOnce(SanitizedTransaction) -> ExecutionResult,
-{
-    match res {
-        Ok(s_tx) => op(s_tx),
-        Err(e) => e,
     }
 }
 
@@ -2742,21 +1923,6 @@ fn fee_payer_for_instruction_case(case: &instruction::InstructionCase) -> Addres
         .or_else(|| case.accounts.first())
         .map(|account| account.pubkey)
         .unwrap_or_else(Address::new_unique)
-}
-
-fn fee_payer_for_instructions(instructions: &[Instruction], fallback: Address) -> Address {
-    instructions
-        .iter()
-        .flat_map(|instruction| instruction.accounts.iter())
-        .find(|account| account.is_signer)
-        .or_else(|| {
-            instructions
-                .iter()
-                .flat_map(|instruction| instruction.accounts.iter())
-                .find(|account| account.is_writable)
-        })
-        .map(|account| account.pubkey)
-        .unwrap_or(fallback)
 }
 
 #[cfg(feature = "invocation-inspect-callback")]

@@ -79,17 +79,19 @@ fn load_upgradeable_buffer(
     svm.send_transaction(tx)?;
 
     let chunk_size = CHUNK_SIZE;
-    let mut offset = 0;
+    let mut offset: u64 = 0;
     for chunk in program_bytes.chunks(chunk_size) {
+        let offset_u32: u32 =
+            offset.try_into().map_err(|_| loader_instruction_error(InstructionError::Custom(0)))?;
         let tx = Transaction::new_signed_with_payer(
-            &[bpf_loader_upgradeable::write(&buffer_pk, &payer_pk, offset, chunk.to_vec())],
+            &[bpf_loader_upgradeable::write(&buffer_pk, &payer_pk, offset_u32, chunk.to_vec())],
             Some(&payer_pk),
             &[payer_kp],
             svm.latest_blockhash(),
         );
 
         svm.send_transaction(tx)?;
-        offset += chunk_size as u32;
+        offset += chunk_size as u64;
     }
 
     Ok(buffer_pk)

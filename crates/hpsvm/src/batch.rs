@@ -1,4 +1,4 @@
-use std::{collections::HashSet, thread};
+use std::{collections::HashSet, sync::Arc, thread};
 
 use solana_address::Address;
 use solana_message::VersionedMessage;
@@ -83,19 +83,22 @@ impl BatchSanitizeError {
 
 #[derive(Clone, Debug)]
 pub(crate) struct HpsvmRuntimeState {
-    accounts: AccountsDb,
-    history: TransactionHistory,
+    accounts: Arc<AccountsDb>,
+    history: Arc<TransactionHistory>,
 }
 
 impl Default for HpsvmRuntimeState {
     fn default() -> Self {
-        Self { accounts: AccountsDb::default(), history: TransactionHistory::new() }
+        Self {
+            accounts: Arc::new(AccountsDb::default()),
+            history: Arc::new(TransactionHistory::new()),
+        }
     }
 }
 
 impl HpsvmRuntimeState {
     fn from_vm(vm: &HPSVM) -> Self {
-        Self { accounts: vm.accounts.clone(), history: vm.history.clone() }
+        Self { accounts: Arc::new(vm.accounts.clone()), history: Arc::new(vm.history.clone()) }
     }
 }
 
@@ -225,16 +228,27 @@ fn execute_transaction_batch_stage(
             .transaction_indexes
             .chunks(chunk_size)
             .map(|transaction_indexes| {
-                let worker_snapshot = snapshot.clone();
+                let worker_accounts = Arc::clone(&snapshot.runtime.accounts);
+                let worker_history = Arc::clone(&snapshot.runtime.history);
 
                 scope.spawn(move || {
+                    let runtime =
+                        HpsvmRuntimeState { accounts: worker_accounts, history: worker_history };
+                    let local = worker_vm(
+                        vm,
+                        runtime,
+                        TransactionOrigin::Batch {
+                            stage_index,
+                            transaction_index: transaction_indexes[0],
+                        },
+                    );
+
                     transaction_indexes
                         .iter()
                         .map(|&index| {
                             let tx = transactions[index].clone();
-                            let snapshot = worker_snapshot.clone();
-
-                            BatchStageResult::new(stage_index, index, vm, snapshot, tx)
+                            let (result, delta) = outcome_into_result_and_delta(local.transact(tx));
+                            BatchStageResult { index, result, delta }
                         })
                         .collect::<Vec<_>>()
                 })
@@ -258,7 +272,7 @@ fn batch_stage_worker_limit(transaction_count: usize) -> usize {
 
 fn worker_vm(vm: &HPSVM, runtime: HpsvmRuntimeState, origin: TransactionOrigin) -> HPSVM {
     HPSVM {
-        accounts: runtime.accounts,
+        accounts: (*runtime.accounts).clone(),
         airdrop_kp: vm.airdrop_kp,
         builtins_loaded: vm.builtins_loaded,
         default_programs_loaded: vm.default_programs_loaded,
@@ -272,7 +286,7 @@ fn worker_vm(vm: &HPSVM, runtime: HpsvmRuntimeState, origin: TransactionOrigin) 
         instance_id: next_vm_instance_id(),
         state_version: vm.state_version,
         block_env: vm.block_env,
-        history: runtime.history,
+        history: (*runtime.history).clone(),
         runtime_env: vm.runtime_env,
         sysvars_loaded: vm.sysvars_loaded,
         #[cfg(feature = "invocation-inspect-callback")]
@@ -375,10 +389,11 @@ mod tests {
     fn commit_delta_merges_runtime_updates() {
         let address = Address::new_unique();
         let signature = Signature::default();
-        let mut runtime = HpsvmRuntimeState::default();
+        let mut accounts = AccountsDb::default();
+        let mut history = TransactionHistory::new();
         let mut before = AccountSharedData::default();
         before.set_lamports(5);
-        runtime.accounts.add_account_no_checks(address, before);
+        accounts.add_account_no_checks(address, before);
 
         let mut after = AccountSharedData::default();
         after.set_lamports(9);
@@ -392,11 +407,11 @@ mod tests {
             Some((signature, history_entry.clone())),
         );
 
-        apply_commit_delta(&mut runtime.accounts, &mut runtime.history, delta)
+        apply_commit_delta(&mut accounts, &mut history, delta)
             .expect("commit delta merge should apply valid state");
 
-        assert_eq!(runtime.accounts.get_account(&address), Some(after));
-        assert_eq!(runtime.history.get_transaction(&signature), Some(&history_entry));
+        assert_eq!(accounts.get_account(&address), Some(after));
+        assert_eq!(history.get_transaction(&signature), Some(&history_entry));
     }
 
     #[test]
@@ -463,5 +478,59 @@ mod tests {
 
         assert_eq!(batch_stage_worker_limit(transaction_count), available_parallelism);
         assert!(batch_stage_worker_limit(transaction_count) < transaction_count);
+    }
+
+    #[test]
+    fn batch_ten_conflict_free_transactions_produce_correct_balances() {
+        let mut svm = HPSVM::new();
+        let blockhash = svm.latest_blockhash();
+
+        let initial_balance: u64 = 1_000_000_000;
+        let transfer_amount: u64 = 100;
+
+        let mut senders = Vec::new();
+        let mut recipients = Vec::new();
+
+        for _ in 0..10 {
+            let sender = Keypair::new();
+            let recipient = Address::new_unique();
+            svm.airdrop(&sender.pubkey(), initial_balance).unwrap();
+            senders.push(sender);
+            recipients.push(recipient);
+        }
+
+        let transactions: Vec<VersionedTransaction> = senders
+            .iter()
+            .zip(recipients.iter())
+            .map(|(sender, recipient)| {
+                let ix = transfer(&sender.pubkey(), recipient, transfer_amount);
+                let msg = Message::new_with_blockhash(&[ix], Some(&sender.pubkey()), &blockhash);
+                VersionedTransaction::try_new(VersionedMessage::Legacy(msg), &[sender]).unwrap()
+            })
+            .collect();
+
+        let result = svm.send_transaction_batch(transactions).unwrap();
+
+        assert_eq!(result.results.len(), 10);
+
+        for tx_result in &result.results {
+            assert!(tx_result.is_ok(), "all transactions should succeed");
+        }
+
+        let fee = 5000u64;
+        for (sender, recipient) in senders.iter().zip(recipients.iter()) {
+            let sender_balance = svm.get_balance(&sender.pubkey()).unwrap();
+            let recipient_balance = svm.get_balance(recipient).unwrap();
+
+            assert_eq!(
+                sender_balance,
+                initial_balance - transfer_amount - fee,
+                "sender should have initial - transfer - fee"
+            );
+            assert_eq!(
+                recipient_balance, transfer_amount,
+                "recipient should have just the transfer amount"
+            );
+        }
     }
 }

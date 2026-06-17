@@ -213,6 +213,18 @@ impl DefaultRegisterTracingCallback {
 
         let current_dir = std::env::current_dir()?;
         let sbf_trace_dir = current_dir.join(&self.sbf_trace_dir);
+
+        // Reject paths that escape the working directory.
+        if let Ok(canonical) = sbf_trace_dir.canonicalize() {
+            if !canonical.starts_with(&current_dir) {
+                return Err(format!(
+                    "SBF_TRACE_DIR resolves outside working directory: {}",
+                    canonical.display()
+                )
+                .into());
+            }
+        }
+
         std::fs::create_dir_all(&sbf_trace_dir)?;
 
         let trace_digest = compute_hash(as_bytes(register_trace));
@@ -326,10 +338,45 @@ impl InvocationInspectCallback for TraceMetricsCollector {
     }
 }
 
+// SAFETY: T is `Copy` with no padding bytes (e.g. `u64`, `[u64; N]`); the
+// resulting byte slice faithfully represents the original data.
 pub(crate) fn as_bytes<T>(slice: &[T]) -> &[u8] {
     unsafe { std::slice::from_raw_parts(slice.as_ptr() as *const u8, std::mem::size_of_val(slice)) }
 }
 
 fn compute_hash(slice: &[u8]) -> String {
     hex::encode(Sha256::digest(slice).as_slice())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sbf_trace_dir_rejects_paths_outside_cwd() {
+        let callback = DefaultRegisterTracingCallback {
+            sbf_trace_dir: "/etc".to_string(),
+            sbf_trace_disassemble: false,
+        };
+        let current_dir = std::env::current_dir().unwrap();
+        let sbf_trace_dir = current_dir.join(&callback.sbf_trace_dir);
+
+        // /etc canonicalizes to /etc which is NOT under cwd.
+        if let Ok(canonical) = sbf_trace_dir.canonicalize() {
+            assert!(!canonical.starts_with(&current_dir), "path outside cwd should be rejected");
+        }
+    }
+
+    #[test]
+    fn sbf_trace_dir_allows_relative_paths() {
+        let callback = DefaultRegisterTracingCallback {
+            sbf_trace_dir: "target/sbf/trace".to_string(),
+            sbf_trace_disassemble: false,
+        };
+        let current_dir = std::env::current_dir().unwrap();
+        let sbf_trace_dir = current_dir.join(&callback.sbf_trace_dir);
+
+        // Relative paths resolve under cwd.
+        assert!(sbf_trace_dir.starts_with(&current_dir));
+    }
 }

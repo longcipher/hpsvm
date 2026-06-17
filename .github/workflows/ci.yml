@@ -27,7 +27,7 @@ jobs:
 
       - uses: taiki-e/install-action@v2
         with:
-          tool: just,cargo-machete,typos-cli,rumdl,leptosfmt
+          tool: just,cargo-machete,typos-cli,rumdl
 
       - name: Install cargo-sort
         run: cargo install cargo-sort
@@ -40,16 +40,6 @@ jobs:
 
       - name: Build test programs
         run: cd crates/hpsvm/test_programs && cargo build-sbf
-
-      - name: Run tests
-        run: cargo test --features precompiles
-        env:
-          RUST_BACKTRACE: 1
-
-      - name: Run SPL tests
-        run: cd crates/token && cargo test --features token-2022
-        env:
-          RUST_BACKTRACE: 1
 
       - name: CI
         run: just ci

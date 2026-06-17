@@ -114,6 +114,8 @@ setup:
   cargo install cargo-machete
   cargo install cargo-sort
   cargo install typos-cli
+  cargo install rumdl
+  cargo install cargo-tarpaulin
 
 # Generate documentation for the workspace
 docs:

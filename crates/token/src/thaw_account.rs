@@ -3,7 +3,6 @@ use smallvec::{SmallVec, smallvec};
 use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signer::{Signer, signers::Signers};
-use solana_transaction::Transaction;
 
 use super::{TOKEN_ID, get_multisig_signers, spl_token::instruction::thaw_account};
 
@@ -80,13 +79,6 @@ impl<'a> ThawAccount<'a> {
 
         let ix = thaw_account(token_program_id, &account, self.mint, &authority, &signer_keys)?;
 
-        let block_hash = self.svm.latest_blockhash();
-        let mut tx = Transaction::new_with_payer(&[ix], Some(&payer_pk));
-        tx.partial_sign(&[self.payer], block_hash);
-        tx.partial_sign(self.signers.as_ref(), block_hash);
-
-        self.svm.send_transaction(tx)?;
-
-        Ok(())
+        super::sign_and_send(self.svm, self.payer, &self.signers, ix)
     }
 }

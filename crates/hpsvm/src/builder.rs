@@ -43,6 +43,7 @@ struct BuildPlan {
     compute_budget: Option<ComputeBudget>,
     sigverify: Option<bool>,
     blockhash_check: Option<bool>,
+    compute_diagnostics: Option<bool>,
     lamports: Option<u64>,
     include_sysvars: bool,
     include_feature_accounts: bool,
@@ -66,6 +67,7 @@ impl BuildPlan {
             compute_budget: None,
             sigverify: None,
             blockhash_check: None,
+            compute_diagnostics: None,
             lamports: None,
             include_sysvars: false,
             include_feature_accounts: false,
@@ -256,6 +258,16 @@ impl<State: FeatureConfigState> HpsvmBuilder<State> {
         self
     }
 
+    /// Enable or disable execution diagnostics (pre/post diffs, token balances).
+    ///
+    /// Defaults to `true`. When disabled, transaction outcomes return an empty
+    /// [`ExecutionDiagnostics`](hpsvm::types::ExecutionDiagnostics), skipping
+    /// expensive balance and diff computation.
+    pub fn with_compute_diagnostics(mut self, enabled: bool) -> Self {
+        self.plan.compute_diagnostics = Some(enabled);
+        self
+    }
+
     /// Change the initial lamports in the airdrop account.
     pub fn with_lamports(mut self, lamports: u64) -> Self {
         self.plan.lamports = Some(lamports);
@@ -315,6 +327,7 @@ impl<State: FeatureConfigState> HpsvmBuilder<State> {
             compute_budget,
             sigverify,
             blockhash_check,
+            compute_diagnostics,
             lamports,
             include_sysvars,
             include_feature_accounts,
@@ -401,6 +414,9 @@ impl<State: FeatureConfigState> HpsvmBuilder<State> {
         }
         if let Some(blockhash_check) = blockhash_check {
             svm.set_blockhash_check(blockhash_check);
+        }
+        if let Some(compute_diagnostics) = compute_diagnostics {
+            svm.set_compute_diagnostics(compute_diagnostics);
         }
 
         svm.inspector = inspector;

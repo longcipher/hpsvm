@@ -28,7 +28,7 @@ hpsvm-fixture-fd = { workspace = true, default-features = false, optional = true
 ] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-serde_yaml.workspace = true
+serde_yml.workspace = true
 solana-address.workspace = true
 thiserror.workspace = true
 

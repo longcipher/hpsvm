@@ -1,7 +1,5 @@
 use std::fmt::Write;
 
-use ansi_term::Colour;
-
 const PROGRAM_LOG: &str = "Program log:";
 
 #[derive(Debug)]
@@ -36,13 +34,14 @@ fn get_importance(program_source: &str, program_log: &str) -> Importance {
 }
 
 fn colourise(importance: Importance, log: &str) -> String {
-    match importance {
-        Importance::Error => Colour::Fixed(9).bold().paint(log),
-        Importance::VeryHigh => Colour::Green.paint(log),
-        Importance::High => Colour::Fixed(243).bold().paint(log),
-        Importance::Low => Colour::Fixed(239).paint(log),
-    }
-    .to_string()
+    let reset = "\x1b[0m";
+    let open = match importance {
+        Importance::Error => "\x1b[1;38;5;9m",
+        Importance::VeryHigh => "\x1b[32m",
+        Importance::High => "\x1b[1;38;5;243m",
+        Importance::Low => "\x1b[38;5;239m",
+    };
+    format!("{open}{log}{reset}")
 }
 
 fn format_line(line: &str) -> String {

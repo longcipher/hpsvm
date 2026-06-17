@@ -17,7 +17,7 @@ pub(crate) fn load_compares(
     let mut compares = if let Some(path) = path {
         let file = std::fs::read_to_string(path)?;
         match path.extension().and_then(|value| value.to_str()) {
-            Some("yaml" | "yml") => serde_yaml::from_str::<CompareConfigFile>(&file)
+            Some("yaml" | "yml") => serde_yml::from_str::<CompareConfigFile>(&file)
                 .map(|config| config.compares)
                 .map_err(|error| CliError::ConfigParse {
                     path: path.display().to_string(),

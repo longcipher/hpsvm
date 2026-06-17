@@ -269,6 +269,13 @@ impl AccountsDb {
         })
     }
 
+    pub(crate) fn get_accounts_batch(
+        &self,
+        pubkeys: &[Address],
+    ) -> Result<Vec<Option<AccountSharedData>>, AccountSourceError> {
+        self.source.get_accounts(pubkeys)
+    }
+
     pub(crate) fn remove_account(&mut self, pubkey: &Address) {
         self.inner.remove(pubkey);
         self.removed.insert(*pubkey);
@@ -663,5 +670,58 @@ impl AddressLoader for &AccountSourceTrackingAddressLoader<'_> {
                 )
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+    use crate::account_source::{AccountSource, AccountSourceError};
+
+    #[derive(Clone)]
+    struct CountingAccountSource {
+        batch_calls: Arc<AtomicUsize>,
+        single_calls: Arc<AtomicUsize>,
+    }
+
+    impl CountingAccountSource {
+        fn new() -> Self {
+            Self {
+                batch_calls: Arc::new(AtomicUsize::new(0)),
+                single_calls: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+    }
+
+    impl AccountSource for CountingAccountSource {
+        fn get_account(
+            &self,
+            _pubkey: &Address,
+        ) -> Result<Option<AccountSharedData>, AccountSourceError> {
+            self.single_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(None)
+        }
+
+        fn get_accounts(
+            &self,
+            pubkeys: &[Address],
+        ) -> Result<Vec<Option<AccountSharedData>>, AccountSourceError> {
+            self.batch_calls.fetch_add(1, Ordering::SeqCst);
+            pubkeys.iter().map(|pk| self.get_account(pk)).collect()
+        }
+    }
+
+    #[test]
+    fn get_accounts_batch_calls_batch_method_once() {
+        let source = CountingAccountSource::new();
+        let mut db = AccountsDb::default();
+        db.set_account_source(Arc::new(source.clone()));
+        let pubkeys: Vec<Address> = (0..5).map(|i| Address::new_from_array([i; 32])).collect();
+
+        let _ = db.get_accounts_batch(&pubkeys);
+
+        assert_eq!(source.batch_calls.load(Ordering::SeqCst), 1);
     }
 }

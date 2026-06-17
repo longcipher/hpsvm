@@ -3,7 +3,6 @@ use smallvec::{SmallVec, smallvec};
 use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signer::{Signer, signers::Signers};
-use solana_transaction::Transaction;
 
 use super::get_multisig_signers;
 #[cfg_attr(feature = "token-2022", allow(deprecated))]
@@ -106,13 +105,6 @@ impl<'a> Transfer<'a> {
             self.amount,
         )?;
 
-        let block_hash = self.svm.latest_blockhash();
-        let mut tx = Transaction::new_with_payer(&[ix], Some(&payer_pk));
-        tx.partial_sign(&[self.payer], block_hash);
-        tx.partial_sign(self.signers.as_ref(), block_hash);
-
-        self.svm.send_transaction(tx)?;
-
-        Ok(())
+        super::sign_and_send(self.svm, self.payer, &self.signers, ix)
     }
 }

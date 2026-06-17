@@ -17,6 +17,7 @@ pub struct SvmCfg {
     pub sigverify: bool,
     pub blockhash_check: bool,
     pub fee_structure: FeeStructure,
+    pub compute_diagnostics: bool,
 }
 
 /// Runtime knobs that shape execution independently from block state.

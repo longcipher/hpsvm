@@ -39,6 +39,13 @@ pub trait AccountSource: Send + Sync {
         &self,
         pubkey: &Address,
     ) -> Result<Option<AccountSharedData>, AccountSourceError>;
+
+    fn get_accounts(
+        &self,
+        pubkeys: &[Address],
+    ) -> Result<Vec<Option<AccountSharedData>>, AccountSourceError> {
+        pubkeys.iter().map(|pk| self.get_account(pk)).collect()
+    }
 }
 
 #[derive(Clone, Default)]
