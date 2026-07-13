@@ -3,9 +3,7 @@ use std::{marker::PhantomData, sync::Arc};
 use agave_feature_set::FeatureSet;
 use solana_compute_budget::compute_budget::ComputeBudget;
 use solana_native_token::LAMPORTS_PER_SOL;
-use solana_program_runtime::{
-    invoke_context::InvokeContext, solana_sbpf::program::BuiltinFunction,
-};
+use solana_program_runtime::invoke_context::BuiltinFunctionRegisterer;
 
 use crate::{
     AccountSource, CustomSyscallRegistration, HPSVM, Inspector, error::HPSVMError,
@@ -309,11 +307,7 @@ impl<State: FeatureConfigState> HpsvmBuilder<State> {
     /// The builder stores the registration and applies it once, during `build()`,
     /// so callers do not have to reason about whether builtins or cached programs
     /// have already been loaded.
-    pub fn with_custom_syscall(
-        mut self,
-        name: &str,
-        syscall: BuiltinFunction<InvokeContext<'static, 'static>>,
-    ) -> Self {
+    pub fn with_custom_syscall(mut self, name: &str, syscall: BuiltinFunctionRegisterer) -> Self {
         self.plan
             .custom_syscalls
             .push(CustomSyscallRegistration { name: name.to_owned(), function: syscall });

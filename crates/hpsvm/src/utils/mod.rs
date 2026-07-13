@@ -20,7 +20,8 @@ pub(crate) fn create_blockhash(bytes: &[u8]) -> Hash {
 
 pub(crate) fn construct_instructions_account(message: &SanitizedMessage) -> AccountSharedData {
     AccountSharedData::from(Account {
-        data: construct_instructions_data(&message.decompile_instructions()),
+        data: construct_instructions_data(&message.decompile_instructions())
+            .expect("failed to construct instructions data"),
         owner: solana_sdk_ids::sysvar::id(),
         ..Account::default()
     })

@@ -283,7 +283,9 @@ fn parse_sidecar_rows(path: &Path, bytes: &[u8]) -> Result<BTreeMap<String, u64>
                 }
             })?;
         offset += std::mem::size_of::<u32>();
-        let name_len = u32::from_le_bytes(name_len_bytes.try_into().unwrap()) as usize;
+        let name_len = u32::from_le_bytes(
+            name_len_bytes.try_into().expect("name_len_bytes is exactly 4 bytes"),
+        ) as usize;
 
         let name_bytes =
             bytes.get(offset..offset + name_len).ok_or_else(|| BenchError::InvalidBaseline {
@@ -305,7 +307,9 @@ fn parse_sidecar_rows(path: &Path, bytes: &[u8]) -> Result<BTreeMap<String, u64>
                 path: path.to_path_buf(),
                 reason: format!("invalid utf-8 in baseline sidecar row name: {error}"),
             })?;
-        let compute_units = u64::from_le_bytes(compute_units_bytes.try_into().unwrap());
+        let compute_units = u64::from_le_bytes(
+            compute_units_bytes.try_into().expect("compute_units_bytes is exactly 8 bytes"),
+        );
 
         if rows.insert(String::from(name), compute_units).is_some() {
             return Err(BenchError::InvalidBaseline {

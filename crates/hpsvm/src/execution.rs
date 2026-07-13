@@ -1,8 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 
-use agave_feature_set::{
-    FeatureSet, increase_cpi_account_info_limit, raise_cpi_nesting_limit_to_8,
-};
+use agave_feature_set::{FeatureSet, raise_cpi_nesting_limit_to_8};
 use solana_account::{AccountSharedData, ReadableAccount, WritableAccount};
 use solana_address::Address;
 use solana_compute_budget::compute_budget_limits::ComputeBudgetLimits;
@@ -12,12 +10,12 @@ use solana_rent::Rent;
 use solana_sdk_ids::native_loader;
 use solana_svm_log_collector::LogCollector;
 use solana_svm_timings::ExecuteTimings;
-use solana_svm_transaction::svm_message::SVMMessage;
+use solana_svm_transaction::svm_message::SVMStaticMessage;
 use solana_transaction::{
     sanitized::{MessageHash, SanitizedTransaction},
     versioned::VersionedTransaction,
 };
-use solana_transaction_context::{IndexOfAccount, TransactionContext};
+use solana_transaction_context::{IndexOfAccount, transaction::TransactionContext};
 use solana_transaction_error::TransactionError;
 
 use crate::{
@@ -130,7 +128,7 @@ fn get_compute_budget_limits(
     feature_set: &FeatureSet,
 ) -> Result<ComputeBudgetLimits, ExecutionResult> {
     solana_compute_budget_instruction::instructions_processor::process_compute_budget_instructions(
-        SVMMessage::program_instructions_iter(sanitized_tx),
+        sanitized_tx.program_instructions_iter(),
         feature_set,
     )
     .map_err(|e| ExecutionResult { tx_result: Err(e), ..Default::default() })
@@ -150,12 +148,14 @@ impl HPSVM {
         &self,
         compute_budget: solana_compute_budget::compute_budget::ComputeBudget,
         accounts: Vec<(Address, AccountSharedData)>,
+        number_of_top_level_instructions: usize,
     ) -> TransactionContext<'_> {
         TransactionContext::new(
             accounts,
             self.get_sysvar(),
             compute_budget.max_instruction_stack_depth,
             compute_budget.max_instruction_trace_length,
+            number_of_top_level_instructions,
         )
     }
 
@@ -208,7 +208,6 @@ impl HPSVM {
                     heap_size: compute_budget_limits.updated_heap_bytes,
                     ..solana_compute_budget::compute_budget::ComputeBudget::new_with_defaults(
                         self.cfg.feature_set.is_active(&raise_cpi_nesting_limit_to_8::ID),
-                        self.cfg.feature_set.is_active(&increase_cpi_account_info_limit::ID),
                     )
                 }
             })
@@ -229,7 +228,6 @@ impl HPSVM {
         let fee = hotpath_block!("hpsvm::process_transaction::calculate_fee", {
             solana_fee::calculate_fee(
                 message,
-                false,
                 self.cfg.fee_structure.lamports_per_signature,
                 prioritization_fee,
                 FeeFeatures::from(&self.cfg.feature_set),
@@ -401,7 +399,11 @@ impl HPSVM {
 
         let mut context = hotpath_block!(
             "hpsvm::process_transaction::create_transaction_context",
-            self.create_transaction_context(compute_budget, accounts)
+            self.create_transaction_context(
+                compute_budget,
+                accounts,
+                tx.message().instructions().len()
+            )
         );
 
         let rent_check = hotpath_block!(
@@ -415,7 +417,7 @@ impl HPSVM {
             return Err(error);
         }
 
-        let feature_set = self.cfg.feature_set.runtime_features();
+        let svm_feature_set = self.cfg.feature_set.runtime_features();
         let mut invoke_context =
             hotpath_block!("hpsvm::process_transaction::build_invoke_context", {
                 InvokeContext::new(
@@ -424,9 +426,9 @@ impl HPSVM {
                     EnvironmentConfig::new(
                         *blockhash,
                         self.cfg.fee_structure.lamports_per_signature,
+                        false,
                         self,
-                        &feature_set,
-                        self.accounts.runtime_environments(),
+                        &svm_feature_set,
                         self.accounts.runtime_environments(),
                         self.accounts.sysvar_cache(),
                     ),

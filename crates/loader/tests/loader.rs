@@ -58,7 +58,9 @@ fn hello_world_with_store() {
 
 #[test_log::test]
 fn hello_world_with_deploy_upgradeable() {
-    let feature_set = FeatureSet::all_enabled();
+    // ponytail: FeatureSet::all_enabled() includes disable_sbpf_v0_v1_v2_deployment which
+    // blocks deploying SBPF v0 programs like hello_world.so
+    let mut feature_set = FeatureSet::default();
 
     let mut svm = HPSVM::builder()
         .with_feature_set(feature_set)

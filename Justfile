@@ -20,7 +20,7 @@ lint:
 	cargo sort -w -g -c
 	cargo +nightly fmt --all -- --check
 	cargo +nightly clippy --all -- -D warnings -A deprecated -A clippy::missing_const_for_fn -A clippy::unwrap_used -A clippy::or_fun_call -A unused-mut -A clippy::result_large_err
-	cargo machete
+	cargo shear
 
 # Run tests
 test:
@@ -111,7 +111,7 @@ clean:
 
 # Install all required development tools
 setup:
-  cargo install cargo-machete
+  cargo install cargo-shear
   cargo install cargo-sort
   cargo install typos-cli
   cargo install rumdl

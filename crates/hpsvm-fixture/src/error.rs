@@ -11,16 +11,16 @@ pub enum FixtureError {
     Json(#[from] serde_json::Error),
     #[cfg(feature = "bin-codec")]
     #[error("binary codec encode error: {0}")]
-    EncodeFixture(Box<bincode::ErrorKind>),
+    EncodeFixture(#[from] wincode::WriteError),
     #[cfg(feature = "bin-codec")]
     #[error("binary codec decode error: {0}")]
-    DecodeFixture(Box<bincode::ErrorKind>),
+    DecodeFixture(#[from] wincode::ReadError),
     #[cfg(feature = "bin-codec")]
     #[error("failed to encode transaction: {0}")]
-    EncodeTransaction(Box<bincode::ErrorKind>),
+    EncodeTransaction(wincode::WriteError),
     #[cfg(feature = "bin-codec")]
     #[error("failed to decode transaction: {0}")]
-    DecodeTransaction(Box<bincode::ErrorKind>),
+    DecodeTransaction(wincode::ReadError),
     #[error("fixture codec feature `{feature}` is not enabled")]
     CodecDisabled { feature: &'static str },
     #[error("unsupported fixture format for {path}")]

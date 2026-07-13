@@ -4,7 +4,7 @@ use solana_instruction::{Instruction, account_meta::AccountMeta, error::Instruct
 use solana_message::inner_instruction::InnerInstructionsList;
 use solana_program_error::ProgramError;
 use solana_signature::Signature;
-use solana_transaction_context::TransactionReturnData;
+use solana_transaction_context::transaction::TransactionReturnData;
 use solana_transaction_error::{TransactionError, TransactionResult as Result};
 
 use crate::{error::HPSVMError, format_logs::format_logs};

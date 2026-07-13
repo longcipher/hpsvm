@@ -91,7 +91,7 @@ impl FixtureRunner {
                 )?;
             }
 
-            let tx: VersionedTransaction = bincode::deserialize(&fixture.transaction_bytes)
+            let tx: VersionedTransaction = wincode::deserialize(&fixture.transaction_bytes)
                 .map_err(FixtureError::DecodeTransaction)?;
             Ok(ExecutionSnapshot::from_outcome(&vm.transact(tx)))
         }

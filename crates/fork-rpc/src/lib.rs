@@ -13,7 +13,7 @@ use parking_lot::Mutex;
 use solana_account::AccountSharedData;
 use solana_address::Address;
 use solana_rpc_client::rpc_client::RpcClient;
-use solana_rpc_client_api::config::RpcAccountInfoConfig;
+use solana_rpc_client_api::config::CommitmentConfig;
 
 /// Read-through account source backed by a Solana RPC endpoint and a local cache.
 #[derive(Clone)]
@@ -62,15 +62,8 @@ impl RpcForkSource {
         &self,
         pubkey: &Address,
     ) -> Result<Option<AccountSharedData>, AccountSourceError> {
-        #[expect(deprecated)]
         self.client
-            .get_account_with_config(
-                pubkey,
-                RpcAccountInfoConfig {
-                    min_context_slot: Some(self.slot),
-                    ..RpcAccountInfoConfig::default()
-                },
-            )
+            .get_account_with_commitment(pubkey, CommitmentConfig::confirmed())
             .map(|response| response.value.map(Into::into))
             .map_err(|error| AccountSourceError::new(error.to_string()))
     }

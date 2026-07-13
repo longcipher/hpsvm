@@ -9,11 +9,8 @@ use spl_token_interface::state::{Account as TokenAccount, Mint as TokenMint};
 
 use crate::{
     accounts_db::AccountsDb,
-    types::{ExecutedInstruction, ExecutionTrace, TokenBalance},
-    utils::{
-        inner_instructions::inner_instructions_list_from_instruction_trace,
-        rent::{check_rent_state_with_account, get_account_rent_state},
-    },
+    types::{ExecutionTrace, TokenBalance},
+    utils::rent::{check_rent_state_with_account, get_account_rent_state},
 };
 
 /// Lighter version of the one in the solana-svm crate.
@@ -137,66 +134,21 @@ fn token_mint_decimals(
         })
 }
 
-pub(crate) fn execution_trace_from_transaction_context(
-    sanitized_tx: &solana_transaction::sanitized::SanitizedTransaction,
-    transaction_context: &solana_transaction_context::TransactionContext<'_>,
-) -> ExecutionTrace {
-    use solana_instruction::account_meta::AccountMeta;
-
-    let account_keys = sanitized_tx.message().account_keys();
-    let instructions = (0..transaction_context.get_instruction_trace_length())
-        .filter_map(|index| {
-            let instruction_context =
-                transaction_context.get_instruction_context_at_index_in_trace(index).ok()?;
-            let program_index = instruction_context
-                .get_index_of_program_account_in_transaction()
-                .unwrap_or_default() as usize;
-            let program_id = account_keys.get(program_index).copied().unwrap_or_default();
-            let stack_height =
-                u8::try_from(instruction_context.get_stack_height()).unwrap_or(u8::MAX);
-            let accounts = (0..instruction_context.get_number_of_instruction_accounts())
-                .filter_map(|instruction_account_index| {
-                    let transaction_index = instruction_context
-                        .get_index_of_instruction_account_in_transaction(instruction_account_index)
-                        .ok()? as usize;
-                    let pubkey = account_keys.get(transaction_index).copied()?;
-                    let is_signer = instruction_context
-                        .is_instruction_account_signer(instruction_account_index)
-                        .unwrap_or(false);
-                    let is_writable = instruction_context
-                        .is_instruction_account_writable(instruction_account_index)
-                        .unwrap_or(false);
-                    Some(AccountMeta { pubkey, is_signer, is_writable })
-                })
-                .collect();
-
-            Some(ExecutedInstruction {
-                stack_height,
-                program_id,
-                accounts,
-                data: instruction_context.get_instruction_data().to_vec(),
-            })
-        })
-        .collect();
-
-    ExecutionTrace { instructions }
-}
-
 pub(crate) fn execute_tx_helper(
     sanitized_tx: &solana_transaction::sanitized::SanitizedTransaction,
-    ctx: solana_transaction_context::TransactionContext<'_>,
+    mut ctx: solana_transaction_context::transaction::TransactionContext<'_>,
 ) -> (
     solana_signature::Signature,
-    solana_transaction_context::TransactionReturnData,
+    solana_transaction_context::transaction::TransactionReturnData,
     solana_message::inner_instruction::InnerInstructionsList,
     ExecutionTrace,
     Vec<(Address, AccountSharedData)>,
 ) {
-    use solana_transaction_context::ExecutionRecord;
+    use solana_transaction_context::transaction::ExecutionRecord;
 
     let signature = sanitized_tx.signature().to_owned();
-    let inner_instructions = inner_instructions_list_from_instruction_trace(&ctx);
-    let execution_trace = execution_trace_from_transaction_context(sanitized_tx, &ctx);
+    let (inner_instructions, execution_trace) =
+        crate::utils::inner_instructions::extract_instruction_trace_data(&mut ctx);
     let ExecutionRecord {
         accounts,
         return_data,

@@ -116,6 +116,7 @@ pub fn deploy_upgradeable_program(
         &payer_pk,
         lamports,
         program_bytes.len() * 2,
+        false,
     )
     .map_err(loader_instruction_error)?;
     let tx = Transaction::new_signed_with_payer(

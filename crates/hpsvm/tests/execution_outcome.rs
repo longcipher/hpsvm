@@ -19,7 +19,7 @@ struct SwapInspector;
 impl Inspector for SwapInspector {}
 
 fn with_reduced_compute_budget(svm: &mut HPSVM) {
-    let mut compute_budget = ComputeBudget::new_with_defaults(false, false);
+    let mut compute_budget = ComputeBudget::new_with_defaults(false);
     compute_budget.compute_unit_limit = 10;
     svm.set_compute_budget(compute_budget);
 }

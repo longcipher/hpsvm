@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use solana_address::Address;
 use solana_program_runtime::invoke_context::{Executable, InvokeContext, RegisterTrace};
 use solana_transaction::sanitized::SanitizedTransaction;
-use solana_transaction_context::{IndexOfAccount, InstructionContext};
+use solana_transaction_context::{IndexOfAccount, instruction::InstructionContext};
 
 use crate::{HPSVM, InvocationInspectCallback};
 

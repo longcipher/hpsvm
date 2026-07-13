@@ -74,7 +74,7 @@ impl CaptureBuilder {
 
     #[cfg(feature = "bin-codec")]
     pub fn capture_transaction(self, tx: &VersionedTransaction) -> Result<Fixture, FixtureError> {
-        let transaction_bytes = bincode::serialize(tx).map_err(FixtureError::EncodeTransaction)?;
+        let transaction_bytes = wincode::serialize(tx).map_err(FixtureError::EncodeTransaction)?;
         let header = self.header.ok_or(FixtureError::MissingField { field: "header" })?;
         let runtime = self.runtime.ok_or(FixtureError::MissingField { field: "runtime" })?;
         let baseline = self.baseline.ok_or(FixtureError::MissingField { field: "baseline" })?;

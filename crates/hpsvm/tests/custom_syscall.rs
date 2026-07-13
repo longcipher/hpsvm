@@ -7,16 +7,13 @@ use solana_clock::Clock;
 use solana_keypair::Keypair;
 use solana_message::{Instruction, Message};
 use solana_native_token::LAMPORTS_PER_SOL;
-use solana_program_runtime::{
-    invoke_context::InvokeContext,
-    solana_sbpf::{declare_builtin_function, memory_region::MemoryMapping},
-};
+use solana_program_runtime::invoke_context::InvokeContext;
 use solana_signer::Signer;
 use solana_transaction::Transaction;
 
 const CUS_TO_BURN: u64 = 1234;
 
-declare_builtin_function!(
+solana_program_runtime::solana_sbpf::declare_builtin_function!(
     /// A custom syscall to burn CUs.
     SyscallBurnCus,
     fn rust(
@@ -26,13 +23,21 @@ declare_builtin_function!(
         _arg3: u64,
         _arg4: u64,
         _arg5: u64,
-        _memory_mapping: &mut MemoryMapping<'_>,
     ) -> Result<u64, Box<dyn std::error::Error>> {
         assert_eq!(to_burn, CUS_TO_BURN);
-        invoke_context.consume_checked(to_burn)?;
+        invoke_context.compute_meter.consume_checked(to_burn)?;
         Ok(0)
     }
 );
+
+fn register_burn_cus(
+    loader: &mut solana_program_runtime::solana_sbpf::program::BuiltinProgram<
+        InvokeContext<'static, 'static>,
+    >,
+    name: &str,
+) -> Result<(), solana_program_runtime::solana_sbpf::elf::ElfError> {
+    loader.register_definition::<SyscallBurnCus>(name)
+}
 
 fn read_custom_syscall_program() -> Vec<u8> {
     let mut so_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -44,7 +49,7 @@ fn hpsvm_ctor() -> HPSVM {
     HPSVM::builder()
         .with_feature_set(FeatureSet::all_enabled())
         .with_builtins()
-        .with_custom_syscall("sol_burn_cus", SyscallBurnCus::vm)
+        .with_custom_syscall("sol_burn_cus", register_burn_cus)
         .with_lamports(1_000_000u64.wrapping_mul(LAMPORTS_PER_SOL))
         .with_sysvars()
         .with_default_programs()
@@ -56,7 +61,7 @@ fn hpsvm_ctor() -> HPSVM {
 
 fn hpsvm_ctor_from_new_with_custom_syscall() -> HPSVM {
     let mut svm = HPSVM::new();
-    svm.register_custom_syscall("sol_burn_cus", SyscallBurnCus::vm)
+    svm.register_custom_syscall("sol_burn_cus", register_burn_cus)
         .expect("custom syscall registration should succeed");
     svm
 }
@@ -64,7 +69,7 @@ fn hpsvm_ctor_from_new_with_custom_syscall() -> HPSVM {
 fn hpsvm_builder_ctor() -> HPSVM {
     HPSVM::builder()
         .with_program_test_defaults()
-        .with_custom_syscall("sol_burn_cus", SyscallBurnCus::vm)
+        .with_custom_syscall("sol_burn_cus", register_burn_cus)
         .build()
         .expect("builder should apply custom syscalls during build")
 }
@@ -72,7 +77,7 @@ fn hpsvm_builder_ctor() -> HPSVM {
 #[test]
 pub fn public_extension_points_are_fallible() {
     let mut svm = HPSVM::new();
-    svm.register_custom_syscall("sol_burn_cus", SyscallBurnCus::vm)
+    svm.register_custom_syscall("sol_burn_cus", register_burn_cus)
         .expect("custom syscall registration should succeed");
 
     let mut clock = svm.get_sysvar::<Clock>();

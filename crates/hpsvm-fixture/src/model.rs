@@ -10,6 +10,7 @@ use crate::{AccountSnapshot, Compare, ExecutionSnapshot};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "bin-codec", derive(wincode::SchemaWrite, wincode::SchemaRead))]
 #[non_exhaustive]
 pub struct Fixture {
     pub header: FixtureHeader,
@@ -29,6 +30,7 @@ impl Fixture {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "bin-codec", derive(wincode::SchemaWrite, wincode::SchemaRead))]
 #[non_exhaustive]
 pub struct FixtureHeader {
     pub schema_version: u16,
@@ -56,6 +58,7 @@ impl FixtureHeader {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "bin-codec", derive(wincode::SchemaWrite, wincode::SchemaRead))]
 #[non_exhaustive]
 pub enum FixtureKind {
     Transaction,
@@ -65,6 +68,7 @@ pub enum FixtureKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "bin-codec", derive(wincode::SchemaWrite, wincode::SchemaRead))]
 #[non_exhaustive]
 pub enum FixtureInput {
     Transaction(TransactionFixture),
@@ -74,6 +78,7 @@ pub enum FixtureInput {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "bin-codec", derive(wincode::SchemaWrite, wincode::SchemaRead))]
 #[non_exhaustive]
 pub struct TransactionFixture {
     pub runtime: RuntimeFixtureConfig,
@@ -96,6 +101,7 @@ impl TransactionFixture {
 #[cfg(feature = "instruction-fixture")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "bin-codec", derive(wincode::SchemaWrite, wincode::SchemaRead))]
 #[non_exhaustive]
 pub struct InstructionFixture {
     pub runtime: RuntimeFixtureConfig,
@@ -148,6 +154,7 @@ impl InstructionFixture {
 #[cfg(feature = "instruction-fixture")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "bin-codec", derive(wincode::SchemaWrite, wincode::SchemaRead))]
 #[non_exhaustive]
 pub struct InstructionAccountMeta {
     pub pubkey: Address,
@@ -173,6 +180,7 @@ impl InstructionAccountMeta {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "bin-codec", derive(wincode::SchemaWrite, wincode::SchemaRead))]
 #[non_exhaustive]
 pub struct RuntimeFixtureConfig {
     pub slot: u64,
@@ -201,6 +209,7 @@ impl RuntimeFixtureConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "bin-codec", derive(wincode::SchemaWrite, wincode::SchemaRead))]
 #[non_exhaustive]
 pub struct ProgramBinding {
     pub program_id: Address,
@@ -216,6 +225,7 @@ impl ProgramBinding {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "bin-codec", derive(wincode::SchemaWrite, wincode::SchemaRead))]
 #[non_exhaustive]
 pub struct FixtureExpectations {
     pub baseline: ExecutionSnapshot,

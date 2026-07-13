@@ -42,7 +42,7 @@ fn test_invalid_blockhash() {
     let tx = Transaction::new(
         &[&from_keypair],
         Message::new(&[instruction], Some(&from)),
-        solana_hash::Hash::new_unique(),
+        solana_hash::Hash::new_from_array([42u8; 32]),
     );
     let tx_res = svm.send_transaction(tx);
 

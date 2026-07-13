@@ -2,11 +2,12 @@ use hpsvm::types::{ExecutionOutcome, FailedTransactionMetadata, SimulatedTransac
 use solana_account::ReadableAccount;
 use solana_address::Address;
 use solana_message::inner_instruction::InnerInstructionsList;
-use solana_transaction_context::TransactionReturnData;
+use solana_transaction_context::transaction::TransactionReturnData;
 use solana_transaction_error::{TransactionError, TransactionResult};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "bin-codec", derive(wincode::SchemaWrite, wincode::SchemaRead))]
 #[non_exhaustive]
 pub struct ExecutionSnapshot {
     pub status: ExecutionStatus,
@@ -33,6 +34,7 @@ pub struct ExecutionSnapshotFields {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "bin-codec", derive(wincode::SchemaWrite, wincode::SchemaRead))]
 #[non_exhaustive]
 pub enum ExecutionStatus {
     Success,
@@ -41,6 +43,7 @@ pub enum ExecutionStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "bin-codec", derive(wincode::SchemaWrite, wincode::SchemaRead))]
 #[non_exhaustive]
 pub struct AccountSnapshot {
     pub address: Address,
@@ -53,6 +56,7 @@ pub struct AccountSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "bin-codec", derive(wincode::SchemaWrite, wincode::SchemaRead))]
 #[non_exhaustive]
 pub struct ReturnDataSnapshot {
     pub program_id: Address,
@@ -61,6 +65,7 @@ pub struct ReturnDataSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "bin-codec", derive(wincode::SchemaWrite, wincode::SchemaRead))]
 #[non_exhaustive]
 pub struct InnerInstructionSnapshot {
     pub stack_height: u8,

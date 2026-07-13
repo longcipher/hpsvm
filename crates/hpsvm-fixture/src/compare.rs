@@ -6,6 +6,7 @@ use crate::{ExecutionSnapshot, ResultConfig};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "bin-codec", derive(wincode::SchemaWrite, wincode::SchemaRead))]
 #[non_exhaustive]
 pub enum Compare {
     Status,
@@ -20,6 +21,7 @@ pub enum Compare {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "bin-codec", derive(wincode::SchemaWrite, wincode::SchemaRead))]
 #[non_exhaustive]
 pub enum AccountCompareScope {
     All,

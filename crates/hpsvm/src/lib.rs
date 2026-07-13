@@ -268,13 +268,8 @@ use std::{
     },
 };
 
-use agave_feature_set::{
-    FeatureSet, increase_cpi_account_info_limit, raise_cpi_nesting_limit_to_8,
-};
+use agave_feature_set::{FeatureSet, raise_cpi_nesting_limit_to_8};
 use agave_reserved_account_keys::ReservedAccountKeys;
-use agave_syscalls::{
-    create_program_runtime_environment_v1, create_program_runtime_environment_v2,
-};
 #[cfg(feature = "precompiles")]
 use precompiles::load_precompiles;
 #[cfg(feature = "nodejs-internal")]
@@ -299,9 +294,10 @@ use solana_loader_v3_interface::{get_program_data_address, state::UpgradeableLoa
 use solana_message::{Message, SanitizedMessage, VersionedMessage};
 use solana_nonce::{NONCED_TX_MARKER_IX_INDEX, state::DurableNonce};
 use solana_program_runtime::{
-    invoke_context::{BuiltinFunctionWithContext, InvokeContext},
-    loaded_programs::{LoadProgramMetrics, ProgramCacheEntry},
-    solana_sbpf::program::BuiltinFunction,
+    invoke_context::{BuiltinFunctionRegisterer, InvokeContext},
+    loaded_programs::{ProgramRuntimeEnvironment, ProgramRuntimeEnvironments},
+    program_cache_entry::ProgramCacheEntry,
+    program_metrics::LoadProgramMetrics,
 };
 use solana_rent::Rent;
 use solana_sdk_ids::{bpf_loader, bpf_loader_deprecated, bpf_loader_upgradeable, system_program};
@@ -311,6 +307,7 @@ use solana_slot_hashes::SlotHashes;
 use solana_slot_history::SlotHistory;
 use solana_stake_interface::stake_history::StakeHistory;
 use solana_svm_log_collector::LogCollector;
+use solana_syscalls::create_program_runtime_environment;
 #[expect(deprecated)]
 use solana_sysvar::recent_blockhashes::IterItem;
 use solana_sysvar::{Sysvar, SysvarSerialize};
@@ -343,7 +340,7 @@ use crate::{
 #[derive(Clone)]
 pub(crate) struct CustomSyscallRegistration {
     name: String,
-    function: BuiltinFunction<InvokeContext<'static, 'static>>,
+    function: BuiltinFunctionRegisterer,
 }
 
 macro_rules! hotpath_block {
@@ -693,10 +690,9 @@ impl HPSVM {
         let compute_budget = self.runtime_env.compute_budget.unwrap_or_else(|| {
             ComputeBudget::new_with_defaults(
                 self.cfg.feature_set.is_active(&raise_cpi_nesting_limit_to_8::ID),
-                self.cfg.feature_set.is_active(&increase_cpi_account_info_limit::ID),
             )
         });
-        let mut program_runtime_v1 = create_program_runtime_environment_v1(
+        let program_runtime = create_program_runtime_environment(
             &self.cfg.feature_set.runtime_features(),
             &compute_budget.to_budget(),
             false,
@@ -707,31 +703,37 @@ impl HPSVM {
             reason: error.to_string(),
         })?;
 
-        let mut program_runtime_v2 = create_program_runtime_environment_v2(
-            &compute_budget.to_budget(),
-            enable_register_tracing,
-        );
-
+        let mut current_runtime = program_runtime;
         for syscall in self.runtime_registry.custom_syscalls() {
-            program_runtime_v1.register_function(&syscall.name, syscall.function).map_err(
-                |error| HPSVMError::CustomSyscallRegistration {
+            // ponytail: BuiltinProgram is not Clone, reconstruct like mollusk does
+            let config = current_runtime.get_config().clone();
+            let mut loader: solana_program_runtime::solana_sbpf::program::BuiltinProgram<
+                InvokeContext<'static, 'static>,
+            > = solana_program_runtime::solana_sbpf::program::BuiltinProgram::new_loader(config);
+            for (_key, (name, value)) in current_runtime.get_function_registry().iter() {
+                let name = std::str::from_utf8(name).unwrap();
+                loader.register_function(name, value).map_err(|error| {
+                    HPSVMError::CustomSyscallRegistration {
+                        name: name.to_owned(),
+                        runtime: "runtime",
+                        reason: error.to_string(),
+                    }
+                })?;
+            }
+            (syscall.function)(&mut loader, &syscall.name).map_err(|error| {
+                HPSVMError::CustomSyscallRegistration {
                     name: syscall.name.clone(),
-                    runtime: "runtime_v1",
+                    runtime: "runtime",
                     reason: error.to_string(),
-                },
-            )?;
-            program_runtime_v2.register_function(&syscall.name, syscall.function).map_err(
-                |error| HPSVMError::CustomSyscallRegistration {
-                    name: syscall.name.clone(),
-                    runtime: "runtime_v2",
-                    reason: error.to_string(),
-                },
-            )?;
+                }
+            })?;
+            current_runtime = ProgramRuntimeEnvironment::from(loader);
         }
+        let program_runtime = current_runtime;
 
-        let environments = self.accounts.runtime_environments_mut();
-        environments.program_runtime_v1 = Arc::new(program_runtime_v1);
-        environments.program_runtime_v2 = Arc::new(program_runtime_v2);
+        let environments =
+            ProgramRuntimeEnvironments::new(program_runtime.clone(), program_runtime);
+        self.accounts.set_runtime_environments(environments);
 
         Ok(())
     }
@@ -795,7 +797,6 @@ impl HPSVM {
         let mut compute_budget = self.runtime_env.compute_budget.unwrap_or_else(|| {
             ComputeBudget::new_with_defaults(
                 self.cfg.feature_set.is_active(&raise_cpi_nesting_limit_to_8::ID),
-                self.cfg.feature_set.is_active(&increase_cpi_account_info_limit::ID),
             )
         });
         compute_budget.compute_unit_limit = compute_unit_limit;
@@ -857,8 +858,8 @@ impl HPSVM {
                 .feature_set
                 .is_active(&agave_feature_set::deprecate_rent_exemption_threshold::id())
             {
-                rent_account.exemption_threshold = 1.0;
-                rent_account.lamports_per_byte_year = solana_rent::DEFAULT_LAMPORTS_PER_BYTE;
+                rent_account.exemption_threshold = 1.0f64.to_le_bytes();
+                rent_account.lamports_per_byte = solana_rent::DEFAULT_LAMPORTS_PER_BYTE;
             }
             self.set_sysvar_internal(&rent_account);
         }
@@ -867,7 +868,19 @@ impl HPSVM {
             latest_blockhash,
         )]));
         self.set_sysvar_internal(&SlotHistory::default());
-        self.set_sysvar_internal(&StakeHistory::default());
+        // ponytail: StakeHistory doesn't impl Sysvar+SysvarSerialize (version conflict).
+        // Set account directly via serde using the standard Solana API.
+        {
+            let account = AccountSharedData::new_data(
+                1,
+                &StakeHistory::default(),
+                &solana_sdk_ids::sysvar::id(),
+            )
+            .expect("StakeHistory account creation");
+            self.accounts
+                .add_account(StakeHistory::id(), account)
+                .expect("add StakeHistory account");
+        }
         self.invalidate_execution_outcomes();
     }
 
@@ -923,7 +936,7 @@ impl HPSVM {
         for builtint in BUILTINS {
             if builtint.enable_feature_id.is_none_or(|x| self.cfg.feature_set.is_active(&x)) {
                 let loaded_program =
-                    ProgramCacheEntry::new_builtin(0, builtint.name.len(), builtint.entrypoint);
+                    ProgramCacheEntry::new_builtin(0, builtint.name.len(), builtint.register_fn);
                 self.accounts
                     .replenish_program_cache(builtint.program_id, Arc::new(loaded_program));
                 self.accounts.add_builtin_account(
@@ -1196,7 +1209,7 @@ impl HPSVM {
     }
 
     /// Adds a builtin program to the test environment.
-    pub fn add_builtin(&mut self, program_id: Address, entrypoint: BuiltinFunctionWithContext) {
+    pub fn add_builtin(&mut self, program_id: Address, entrypoint: BuiltinFunctionRegisterer) {
         let builtin = ProgramCacheEntry::new_builtin(self.accounts.current_slot(), 1, entrypoint);
 
         self.accounts.replenish_program_cache(program_id, Arc::new(builtin));
@@ -1274,15 +1287,14 @@ impl HPSVM {
             return Err(HPSVMError::InvalidLoader { program_id, loader_id: *loader_id });
         };
 
-        let mut loaded_program = solana_bpf_loader_program::load_program_from_bytes(
-            None,
-            &mut LoadProgramMetrics::default(),
-            program_bytes,
+        let mut loaded_program = ProgramCacheEntry::new(
             loader_id,
-            program_size,
+            self.accounts.runtime_environments().get_env_for_execution().clone(),
             current_slot,
-            self.accounts.runtime_environments().program_runtime_v1.clone(),
-            PREVERIFIED,
+            current_slot,
+            program_bytes,
+            program_size,
+            &mut LoadProgramMetrics::default(),
         )
         .map_err(HPSVMError::from)?;
         loaded_program.effective_slot = current_slot;
@@ -1703,7 +1715,7 @@ impl HPSVM {
     pub fn register_custom_syscall(
         &mut self,
         name: &str,
-        syscall: BuiltinFunction<InvokeContext<'static, 'static>>,
+        syscall: BuiltinFunctionRegisterer,
     ) -> Result<(), HPSVMError> {
         self.runtime_registry.register_custom_syscall(CustomSyscallRegistration {
             name: name.to_owned(),

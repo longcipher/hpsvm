@@ -153,7 +153,7 @@ fn test_register_tracing_handler() {
     use hpsvm::InvocationInspectCallback;
     use solana_program_runtime::invoke_context::{Executable, InvokeContext, RegisterTrace};
     use solana_transaction::{Address, sanitized::SanitizedTransaction};
-    use solana_transaction_context::{IndexOfAccount, InstructionContext};
+    use solana_transaction_context::{IndexOfAccount, instruction::InstructionContext};
 
     let enable_register_tracing = true;
 
@@ -191,7 +191,7 @@ fn test_register_tracing_handler() {
                     )
                 })
                 .filter(|(_registers, insn)| {
-                    insn.opc & 7 == solana_program_runtime::solana_sbpf::ebpf::BPF_JMP &&
+                    insn.opc & 7 == solana_program_runtime::solana_sbpf::ebpf::BPF_JMP64 &&
                         insn.opc != solana_program_runtime::solana_sbpf::ebpf::BPF_JA
                 })
                 .count();

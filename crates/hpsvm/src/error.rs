@@ -73,4 +73,13 @@ pub enum HPSVMError {
         /// Underlying account source error.
         source: AccountSourceError,
     },
+    /// Program load failure.
+    #[error("failed to load program: {0}")]
+    ProgramLoad(String),
+}
+
+impl From<Box<dyn std::error::Error>> for HPSVMError {
+    fn from(err: Box<dyn std::error::Error>) -> Self {
+        Self::ProgramLoad(err.to_string())
+    }
 }

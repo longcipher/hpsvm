@@ -118,7 +118,7 @@ fn close_upgradeable_program_keeps_vm_usable() {
     {
         let close_ix = Instruction::new_with_bincode(
             bpf_loader_upgradeable::id(),
-            &UpgradeableLoaderInstruction::Close,
+            &UpgradeableLoaderInstruction::Close { tombstone: false },
             vec![
                 AccountMeta::new(programdata_address, false),
                 AccountMeta::new(authority, false),

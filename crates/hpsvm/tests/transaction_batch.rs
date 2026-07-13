@@ -27,10 +27,7 @@ use solana_loader_v3_interface::{
 use solana_message::{
     AddressLookupTableAccount, Message, VersionedMessage, v0::Message as MessageV0,
 };
-use solana_program_runtime::{
-    invoke_context::InvokeContext,
-    solana_sbpf::{declare_builtin_function, memory_region::MemoryMapping},
-};
+use solana_program_runtime::invoke_context::InvokeContext;
 use solana_sdk_ids::bpf_loader_upgradeable;
 use solana_signer::Signer;
 use solana_system_interface::instruction::transfer;
@@ -126,7 +123,7 @@ fn invoke_counter_result(
     svm.send_transaction(tx)
 }
 
-declare_builtin_function!(
+solana_program_runtime::solana_sbpf::declare_builtin_function!(
     InvalidateLookupTableSyscall,
     fn rust(
         invoke_context: &mut InvokeContext<'_, '_>,
@@ -135,7 +132,6 @@ declare_builtin_function!(
         _arg2: u64,
         _arg3: u64,
         _arg4: u64,
-        _memory_mapping: &mut MemoryMapping<'_>,
     ) -> Result<u64, Box<dyn std::error::Error>> {
         let transaction_context = &invoke_context.transaction_context;
         let instruction_context = transaction_context.get_current_instruction_context()?;
@@ -143,6 +139,15 @@ declare_builtin_function!(
         Ok(0)
     }
 );
+
+fn register_invalidate_lookup_table(
+    loader: &mut solana_program_runtime::solana_sbpf::program::BuiltinProgram<
+        InvokeContext<'static, 'static>,
+    >,
+    name: &str,
+) -> Result<(), solana_program_runtime::solana_sbpf::elf::ElfError> {
+    loader.register_definition::<InvalidateLookupTableSyscall>(name)
+}
 
 #[test]
 fn transaction_batch_plan_groups_non_conflicting_transactions() {
@@ -232,7 +237,7 @@ fn sequential_commit_matches_batch_commit() {
     let blockhash = serial_vm.latest_blockhash();
     let close_ix = Instruction::new_with_bincode(
         bpf_loader_upgradeable::id(),
-        &UpgradeableLoaderInstruction::Close,
+        &UpgradeableLoaderInstruction::Close { tombstone: false },
         vec![
             AccountMeta::new(programdata_address, false),
             AccountMeta::new(authority_address, false),
@@ -460,7 +465,7 @@ fn send_transaction_batch_returns_transaction_error_when_later_stage_lookup_user
     );
     svm.send_transaction(setup_lookup_tx).unwrap();
     svm.warp_to_slot(1);
-    svm.register_custom_syscall("sol_burn_cus", InvalidateLookupTableSyscall::vm)
+    svm.register_custom_syscall("sol_burn_cus", register_invalidate_lookup_table)
         .expect("lookup-table invalidation syscall should register");
     svm.add_program(solana_sdk_ids::address_lookup_table::id(), &read_custom_syscall_program())
         .expect("lookup-table program override should load");
