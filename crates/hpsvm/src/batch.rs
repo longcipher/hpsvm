@@ -270,6 +270,16 @@ fn batch_stage_worker_limit(transaction_count: usize) -> usize {
     transaction_count.min(default_batch_stage_worker_limit())
 }
 
+/// Construct a per-worker VM snapshot for parallel batch execution.
+///
+/// # Performance note
+///
+/// This performs a full clone of `AccountsDb` and `TransactionHistory` from the
+/// `Arc`-wrapped runtime state. For workloads with large account sets this can
+/// dominate batch setup time. A future optimization would introduce COW
+/// (copy-on-write) semantics so that read-only workers share backing storage and
+/// only fork on mutation.
+#[inline]
 fn worker_vm(vm: &HPSVM, runtime: HpsvmRuntimeState, origin: TransactionOrigin) -> HPSVM {
     HPSVM {
         accounts: (*runtime.accounts).clone(),

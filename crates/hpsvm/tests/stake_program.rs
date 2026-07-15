@@ -480,10 +480,9 @@ fn test_stake_initialize() {
     // check that we see what we expect
     let account = get_account(&mut svm, &stake);
     let stake_state: StakeStateV2 = account.state().unwrap();
-    assert_eq!(
-        stake_state,
-        StakeStateV2::Initialized(Meta { authorized, rent_exempt_reserve, lockup }),
-    );
+    #[allow(deprecated)]
+    let expected = StakeStateV2::Initialized(Meta { authorized, rent_exempt_reserve, lockup });
+    assert_eq!(stake_state, expected);
 
     // 2nd time fails, can't move it from anything other than uninit->init
     refresh_blockhash(&mut svm);

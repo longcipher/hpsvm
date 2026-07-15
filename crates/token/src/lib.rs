@@ -3,6 +3,9 @@
 
 /// Account snapshot factories for fast fixture and test setup.
 pub mod accounts;
+pub mod error;
+
+pub use error::TokenError;
 mod approve;
 mod approve_checked;
 mod burn;
@@ -51,7 +54,6 @@ use solana_keypair::Keypair;
 use solana_program_pack::{IsInitialized, Pack};
 use solana_signer::Signer;
 use solana_transaction::Transaction;
-use solana_transaction_error::TransactionError;
 #[cfg(feature = "token-2022")]
 pub use spl_token_2022_interface as spl_token;
 #[cfg(not(feature = "token-2022"))]
@@ -68,18 +70,12 @@ pub const TOKEN_ID: Address = spl_token::ID;
 pub fn get_spl_account<T: Pack + IsInitialized>(
     svm: &HPSVM,
     account: &Address,
-) -> Result<T, FailedTransactionMetadata> {
-    let account = svm.get_account(account).ok_or(FailedTransactionMetadata {
-        err: TransactionError::AccountNotFound,
-        meta: Default::default(),
-    })?;
-    let data = account.data.get(..T::LEN).ok_or(FailedTransactionMetadata {
-        err: TransactionError::InstructionError(
-            0,
-            solana_instruction::error::InstructionError::AccountDataTooSmall,
-        ),
-        meta: Default::default(),
-    })?;
+) -> Result<T, TokenError> {
+    let account = svm.get_account(account).ok_or(TokenError::AccountNotFound(*account))?;
+    let data = account
+        .data
+        .get(..T::LEN)
+        .ok_or(TokenError::AccountDataTooSmall { expected: T::LEN, actual: account.data.len() })?;
     let account = T::unpack(data)?;
 
     Ok(account)

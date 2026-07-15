@@ -3,16 +3,16 @@ resolver = "3"
 members = ["bin/*", "crates/*"]
 
 [workspace.package]
-version = "0.1.7"
+version = "0.1.8"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/longcipher/hpsvm"
 
 [workspace.dependencies]
 # local crates
-hpsvm = { path = "crates/hpsvm", version = "0.1.7" }
-hpsvm-fixture = { path = "crates/hpsvm-fixture", version = "0.1.7", default-features = false }
-hpsvm-fixture-fd = { path = "crates/hpsvm-fixture-fd", version = "0.1.7", default-features = false }
+hpsvm = { path = "crates/hpsvm", version = "0.1.8" }
+hpsvm-fixture = { path = "crates/hpsvm-fixture", version = "0.1.8", default-features = false }
+hpsvm-fixture-fd = { path = "crates/hpsvm-fixture-fd", version = "0.1.8", default-features = false }
 
 # external crates
 agave-feature-set = "4.1.2"

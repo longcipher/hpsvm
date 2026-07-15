@@ -37,14 +37,14 @@ pub(crate) fn load_spl_programs(svm: &mut HPSVM) {
             include_bytes!("../../elf/pinocchio_token_program.so"),
             &bpf_loader_upgradeable::id(),
         )
-        .expect("failed to load built-in program");
+        .expect("failed to load pinocchio token program (p-token feature active)");
     } else {
         svm.add_program_preverified(
             address!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
             include_bytes!("../../elf/spl_token-3.5.0.so"),
             &bpf_loader::id(),
         )
-        .expect("failed to load built-in program");
+        .expect("failed to load spl-token 3.5.0");
     }
 
     svm.add_program_preverified(
@@ -52,13 +52,13 @@ pub(crate) fn load_spl_programs(svm: &mut HPSVM) {
         include_bytes!("../../elf/spl_token_2022-10.0.0.so"),
         &bpf_loader_upgradeable::id(),
     )
-    .expect("failed to load built-in program");
+    .expect("failed to load spl-token-2022 10.0.0");
     svm.add_program_preverified(
         address!("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"),
         include_bytes!("../../elf/spl_associated_token_account-1.1.1.so"),
         &bpf_loader::id(),
     )
-    .expect("failed to load built-in program");
+    .expect("failed to load spl-associated-token-account 1.1.1");
 }
 
 fn load_non_spl_default_programs(svm: &mut HPSVM) {
@@ -67,29 +67,29 @@ fn load_non_spl_default_programs(svm: &mut HPSVM) {
         include_bytes!("../../elf/spl_memo-1.0.0.so"),
         &bpf_loader_deprecated::id(),
     )
-    .expect("failed to load built-in program");
+    .expect("failed to load spl-memo 1.0.0");
     svm.add_program_preverified(
         address!("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"),
         include_bytes!("../../elf/spl_memo-3.0.0.so"),
         &bpf_loader::id(),
     )
-    .expect("failed to load built-in program");
+    .expect("failed to load spl-memo 3.0.0");
     svm.add_program_preverified(
         config::ID,
         include_bytes!("../../elf/config.so"),
         &bpf_loader_upgradeable::id(),
     )
-    .expect("failed to load built-in program");
+    .expect("failed to load config program");
     svm.add_program_preverified(
         address_lookup_table::ID,
         include_bytes!("../../elf/address_lookup_table.so"),
         &bpf_loader_upgradeable::id(),
     )
-    .expect("failed to load built-in program");
+    .expect("failed to load address-lookup-table program");
     svm.add_program_preverified(
         stake::ID,
         include_bytes!("../../elf/core_bpf_stake-1.0.1.so"),
         &bpf_loader_upgradeable::id(),
     )
-    .expect("failed to load built-in program");
+    .expect("failed to load core-bpf-stake 1.0.1");
 }

@@ -3,9 +3,11 @@ use std::{
     fs::File,
     io::{self, Write},
     path::Path,
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 
+use parking_lot::Mutex;
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use solana_address::Address;
 use solana_program_runtime::invoke_context::{Executable, InvokeContext, RegisterTrace};
@@ -16,7 +18,7 @@ use crate::{HPSVM, InvocationInspectCallback};
 
 const DEFAULT_PATH: &str = "target/sbf/trace";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ProgramTraceMetrics {
     pub program_id: Address,
     pub invocations: usize,
@@ -66,13 +68,7 @@ pub struct TraceMetricsCollector {
 
 impl TraceMetricsCollector {
     pub fn snapshot(&self) -> Vec<ProgramTraceMetrics> {
-        let mut metrics = self
-            .metrics
-            .lock()
-            .expect("trace metrics mutex should not be poisoned")
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
+        let mut metrics = self.metrics.lock().values().cloned().collect::<Vec<_>>();
         metrics.sort_by(|left, right| {
             right
                 .total_register_frames
@@ -103,7 +99,7 @@ impl TraceMetricsCollector {
             usize::from(instruction_context.get_number_of_instruction_accounts());
         let register_frames = register_trace.len();
 
-        let mut metrics = self.metrics.lock().expect("trace metrics mutex should not be poisoned");
+        let mut metrics = self.metrics.lock();
         let entry =
             metrics.entry(program_id).or_insert_with(|| ProgramTraceMetrics::new(program_id));
         entry.invocations = entry.invocations.saturating_add(1);
@@ -120,45 +116,19 @@ impl TraceMetricsCollector {
     }
 }
 
+/// Serializable wrapper for the JSON output format.
+#[derive(Serialize)]
+struct TraceMetricsJson<'a> {
+    programs: &'a [ProgramTraceMetrics],
+}
+
 pub fn write_trace_metrics_json(
     writer: &mut impl Write,
     metrics: &[ProgramTraceMetrics],
 ) -> io::Result<()> {
-    writeln!(writer, "{{")?;
-    writeln!(writer, "  \"programs\": [")?;
-    for (index, metric) in metrics.iter().enumerate() {
-        let suffix = if index + 1 == metrics.len() { "" } else { "," };
-        writeln!(writer, "    {{")?;
-        writeln!(writer, "      \"program_id\": \"{}\",", metric.program_id)?;
-        writeln!(writer, "      \"invocations\": {},", metric.invocations)?;
-        writeln!(writer, "      \"cpi_invocations\": {},", metric.cpi_invocations)?;
-        writeln!(writer, "      \"total_register_frames\": {},", metric.total_register_frames)?;
-        writeln!(
-            writer,
-            "      \"avg_register_frames\": {:.2},",
-            metric.average_register_frames()
-        )?;
-        writeln!(writer, "      \"max_register_frames\": {},", metric.max_register_frames)?;
-        writeln!(writer, "      \"max_stack_height\": {},", metric.max_stack_height)?;
-        writeln!(
-            writer,
-            "      \"total_instruction_accounts\": {},",
-            metric.total_instruction_accounts
-        )?;
-        writeln!(
-            writer,
-            "      \"avg_instruction_accounts\": {:.2},",
-            metric.average_instruction_accounts()
-        )?;
-        writeln!(
-            writer,
-            "      \"max_instruction_accounts\": {}",
-            metric.max_instruction_accounts
-        )?;
-        writeln!(writer, "    }}{suffix}")?;
-    }
-    writeln!(writer, "  ]")?;
-    writeln!(writer, "}}")
+    let output = TraceMetricsJson { programs: metrics };
+    serde_json::to_writer_pretty(writer, &output)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
 }
 
 #[derive(Debug)]
@@ -338,9 +308,13 @@ impl InvocationInspectCallback for TraceMetricsCollector {
     }
 }
 
-// SAFETY: T is `Copy` with no padding bytes (e.g. `u64`, `[u64; N]`); the
-// resulting byte slice faithfully represents the original data.
-pub(crate) fn as_bytes<T>(slice: &[T]) -> &[u8] {
+// SAFETY: T must be `Copy` (no drop glue) and must not contain padding bytes
+// (e.g. `u64`, `[u64; N]`). The resulting byte slice faithfully represents the
+// original data. The `Copy` bound is enforced at compile time to prevent
+// accidental use with types that have non-trivial drop or internal pointers.
+pub(crate) fn as_bytes<T: Copy>(slice: &[T]) -> &[u8] {
+    // SAFETY: `T: Copy` guarantees no drop glue; the pointer cast is valid for
+    // POD types without internal padding. Callers must ensure `T` has no padding.
     unsafe { std::slice::from_raw_parts(slice.as_ptr() as *const u8, std::mem::size_of_val(slice)) }
 }
 

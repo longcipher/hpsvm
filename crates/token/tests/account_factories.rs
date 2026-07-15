@@ -2,7 +2,7 @@
 
 use hpsvm::HPSVM;
 use hpsvm_token::{
-    TOKEN_ID,
+    TOKEN_ID, TokenError,
     accounts::{
         keyed_associated_token_account, keyed_mint_account, keyed_system_account,
         keyed_token_account,
@@ -14,7 +14,6 @@ use solana_account::Account;
 use solana_address::Address;
 use solana_program_pack::Pack;
 use solana_system_interface::program as system_program;
-use solana_transaction_error::TransactionError;
 use spl_associated_token_account_interface::address::get_associated_token_address_with_program_id;
 
 #[test]
@@ -83,13 +82,10 @@ fn get_spl_account_reports_short_account_data_without_panicking() {
     .expect("short token account should be inserted");
 
     let err = get_spl_account::<TokenAccount>(&svm, &account)
-        .expect_err("short account data should be reported as a transaction failure");
+        .expect_err("short account data should be reported as a token error");
 
-    assert_eq!(
-        err.err,
-        TransactionError::InstructionError(
-            0,
-            solana_instruction::error::InstructionError::AccountDataTooSmall,
-        )
+    assert!(
+        matches!(err, TokenError::AccountDataTooSmall { expected: 165, actual: 1 }),
+        "expected AccountDataTooSmall, got: {err:?}"
     );
 }

@@ -27,10 +27,10 @@ jobs:
 
       - uses: taiki-e/install-action@v2
         with:
-          tool: just,cargo-machete,cargo-shear,typos-cli,rumdl
+          tool: just,cargo-machete,typos-cli,rumdl
 
-      - name: Install cargo-sort
-        run: cargo install cargo-sort
+      - name: Install cargo-sort and cargo-shear
+        run: cargo install cargo-sort cargo-shear
 
       - name: Install Solana CLI
         run: |

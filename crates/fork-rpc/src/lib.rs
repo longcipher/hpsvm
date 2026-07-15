@@ -74,14 +74,20 @@ impl AccountSource for RpcForkSource {
         &self,
         pubkey: &Address,
     ) -> Result<Option<AccountSharedData>, AccountSourceError> {
-        if let Some(account) = self.cache.lock().get(pubkey).cloned() {
+        // Single lock acquisition eliminates TOCTOU race between cache check and insert.
+        let cache = self.cache.lock();
+        if let Some(account) = cache.get(pubkey).cloned() {
             self.cache_hits.fetch_add(1, Ordering::Relaxed);
             return Ok(Some(account));
         }
+        // Drop the lock before the blocking RPC call to avoid holding it during I/O.
+        drop(cache);
 
         self.cache_misses.fetch_add(1, Ordering::Relaxed);
         let account = self.fetch_account(pubkey)?;
         if let Some(account) = &account {
+            // Re-acquire and insert. A concurrent insert for the same key is harmless
+            // (idempotent data), so we don't need compare-and-swap semantics.
             self.cache.lock().insert(*pubkey, account.clone());
         }
         Ok(account)

@@ -69,7 +69,6 @@ fn execution_result_if_context(
 ) -> ExecutionResult {
     let (signature, return_data, inner_instructions, execution_trace, post_accounts) =
         execute_tx_helper(sanitized_tx, ctx);
-    let fee_payer = fee_payer.filter(|_| result.is_err());
     ExecutionResult {
         tx_result: result,
         signature,
@@ -310,91 +309,14 @@ impl HPSVM {
         let builtins_start_index = accounts.len();
         let program_indices = hotpath_block!(
             "hpsvm::process_transaction::resolve_program_indices",
-            {
-                let mut program_indices = Vec::with_capacity(tx.message().instructions().len());
-
-                for compiled_instruction in tx.message().instructions() {
-                    let program_index = compiled_instruction.program_id_index as usize;
-                    let (program_id, program_account) =
-                        accounts.get(program_index).expect("program account should exist");
-                    if native_loader::check_id(program_id) {
-                        program_indices.push(program_index as IndexOfAccount);
-                        continue;
-                    }
-                    if !program_account.executable() {
-                        tracing::error!("Program account {program_id} is not executable.");
-                        return Err(ExecutionResult {
-                            tx_result: Err(TransactionError::InvalidProgramForExecution),
-                            compute_units_consumed: accumulated_consume_units,
-                            fee,
-                            ..Default::default()
-                        });
-                    }
-
-                    let owner_id = program_account.owner();
-                    if native_loader::check_id(owner_id) {
-                        program_indices.push(program_index as IndexOfAccount);
-                        continue;
-                    }
-
-                    let Some(cached_program_accounts) = accounts.get(builtins_start_index..) else {
-                        return Err(ExecutionResult {
-                            tx_result: Err(TransactionError::ProgramAccountNotFound),
-                            compute_units_consumed: accumulated_consume_units,
-                            fee,
-                            ..Default::default()
-                        });
-                    };
-
-                    if !cached_program_accounts.iter().any(|(key, _)| key == owner_id) {
-                        let owner_account = match self.accounts.try_get_account(owner_id) {
-                            Ok(Some(account)) => account,
-                            Ok(None) => {
-                                return Err(ExecutionResult {
-                                    tx_result: Err(TransactionError::ProgramAccountNotFound),
-                                    compute_units_consumed: accumulated_consume_units,
-                                    fee,
-                                    ..Default::default()
-                                });
-                            }
-                            Err(error) => {
-                                account_source_failures.push(AccountSourceFailure {
-                                    pubkey: *owner_id,
-                                    error: error.to_string(),
-                                });
-                                AccountSharedData::default()
-                            }
-                        };
-                        if !native_loader::check_id(owner_account.owner()) {
-                            tracing::error!(
-                                "Owner account {owner_id} is not owned by the native loader program."
-                            );
-                            return Err(ExecutionResult {
-                                tx_result: Err(TransactionError::InvalidProgramForExecution),
-                                compute_units_consumed: accumulated_consume_units,
-                                fee,
-                                account_source_failures: account_source_failures.clone(),
-                                ..Default::default()
-                            });
-                        }
-                        if !owner_account.executable() {
-                            tracing::error!("Owner account {owner_id} is not executable");
-                            return Err(ExecutionResult {
-                                tx_result: Err(TransactionError::InvalidProgramForExecution),
-                                compute_units_consumed: accumulated_consume_units,
-                                fee,
-                                account_source_failures: account_source_failures.clone(),
-                                ..Default::default()
-                            });
-                        }
-                        accounts.push((*owner_id, owner_account));
-                    }
-
-                    program_indices.push(program_index as IndexOfAccount);
-                }
-
-                Ok(program_indices)
-            }
+            self.resolve_program_indices(
+                tx,
+                &mut accounts,
+                builtins_start_index,
+                fee,
+                accumulated_consume_units,
+                &mut account_source_failures,
+            )
         )?;
 
         let mut context = hotpath_block!(
@@ -478,6 +400,105 @@ impl HPSVM {
             payer_key,
             account_source_failures,
         })
+    }
+
+    /// Resolve the program account indices for each instruction in the transaction.
+    ///
+    /// For each top-level instruction, verifies that the referenced program is
+    /// executable and owned by the native loader (directly or transitively).
+    /// Loads missing owner accounts from the account source on demand.
+    fn resolve_program_indices(
+        &self,
+        tx: &SanitizedTransaction,
+        accounts: &mut Vec<(Address, AccountSharedData)>,
+        builtins_start_index: usize,
+        fee: u64,
+        accumulated_consume_units: u64,
+        account_source_failures: &mut Vec<AccountSourceFailure>,
+    ) -> Result<Vec<IndexOfAccount>, ExecutionResult> {
+        let mut program_indices = Vec::with_capacity(tx.message().instructions().len());
+
+        for compiled_instruction in tx.message().instructions() {
+            let program_index = compiled_instruction.program_id_index as usize;
+            let (program_id, program_account) =
+                accounts.get(program_index).expect("program account should exist");
+            if native_loader::check_id(program_id) {
+                program_indices.push(program_index as IndexOfAccount);
+                continue;
+            }
+            if !program_account.executable() {
+                tracing::error!("Program account {program_id} is not executable.");
+                return Err(ExecutionResult {
+                    tx_result: Err(TransactionError::InvalidProgramForExecution),
+                    compute_units_consumed: accumulated_consume_units,
+                    fee,
+                    ..Default::default()
+                });
+            }
+
+            let owner_id = program_account.owner();
+            if native_loader::check_id(owner_id) {
+                program_indices.push(program_index as IndexOfAccount);
+                continue;
+            }
+
+            let Some(cached_program_accounts) = accounts.get(builtins_start_index..) else {
+                return Err(ExecutionResult {
+                    tx_result: Err(TransactionError::ProgramAccountNotFound),
+                    compute_units_consumed: accumulated_consume_units,
+                    fee,
+                    ..Default::default()
+                });
+            };
+
+            if !cached_program_accounts.iter().any(|(key, _)| key == owner_id) {
+                let owner_account = match self.accounts.try_get_account(owner_id) {
+                    Ok(Some(account)) => account,
+                    Ok(None) => {
+                        return Err(ExecutionResult {
+                            tx_result: Err(TransactionError::ProgramAccountNotFound),
+                            compute_units_consumed: accumulated_consume_units,
+                            fee,
+                            ..Default::default()
+                        });
+                    }
+                    Err(error) => {
+                        account_source_failures.push(AccountSourceFailure {
+                            pubkey: *owner_id,
+                            error: error.to_string(),
+                        });
+                        AccountSharedData::default()
+                    }
+                };
+                if !native_loader::check_id(owner_account.owner()) {
+                    tracing::error!(
+                        "Owner account {owner_id} is not owned by the native loader program."
+                    );
+                    return Err(ExecutionResult {
+                        tx_result: Err(TransactionError::InvalidProgramForExecution),
+                        compute_units_consumed: accumulated_consume_units,
+                        fee,
+                        account_source_failures: account_source_failures.clone(),
+                        ..Default::default()
+                    });
+                }
+                if !owner_account.executable() {
+                    tracing::error!("Owner account {owner_id} is not executable");
+                    return Err(ExecutionResult {
+                        tx_result: Err(TransactionError::InvalidProgramForExecution),
+                        compute_units_consumed: accumulated_consume_units,
+                        fee,
+                        account_source_failures: account_source_failures.clone(),
+                        ..Default::default()
+                    });
+                }
+                accounts.push((*owner_id, owner_account));
+            }
+
+            program_indices.push(program_index as IndexOfAccount);
+        }
+
+        Ok(program_indices)
     }
 
     fn check_accounts_rent(

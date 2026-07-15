@@ -371,6 +371,7 @@ mod account_source;
 mod accounts_db;
 mod builder;
 mod callback;
+mod commit;
 mod env;
 mod execution;
 mod format_logs;
@@ -1779,74 +1780,10 @@ fn execution_into_outcome(
     }
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct CommitDelta {
-    post_accounts: Vec<(Address, AccountSharedData)>,
-    history_entry: Option<(Signature, TransactionResult)>,
-}
-
-impl CommitDelta {
-    pub(crate) const fn new(
-        post_accounts: Vec<(Address, AccountSharedData)>,
-        history_entry: Option<(Signature, TransactionResult)>,
-    ) -> Self {
-        Self { post_accounts, history_entry }
-    }
-
-    pub(crate) const fn mutates_state(&self) -> bool {
-        !self.post_accounts.is_empty() || self.history_entry.is_some()
-    }
-}
-
-pub(crate) fn apply_commit_delta(
-    accounts: &mut AccountsDb,
-    history: &mut TransactionHistory,
-    delta: CommitDelta,
-) -> Result<(), HPSVMError> {
-    accounts.sync_accounts(delta.post_accounts)?;
-    if let Some((signature, entry)) = delta.history_entry {
-        history.add_new_transaction(signature, entry);
-    }
-    Ok(())
-}
-
-pub(crate) fn outcome_into_result_and_delta(
-    outcome: ExecutionOutcome,
-) -> (TransactionResult, CommitDelta) {
-    let ExecutionOutcome { meta, post_accounts, status, included, .. } = outcome;
-    let result = match status {
-        Ok(()) => TransactionResult::Ok(meta.clone()),
-        Err(err) => TransactionResult::Err(FailedTransactionMetadata { err, meta: meta.clone() }),
-    };
-    let delta = if included {
-        CommitDelta::new(post_accounts, Some((meta.signature, result.clone())))
-    } else {
-        CommitDelta::new(Vec::new(), None)
-    };
-    (result, delta)
-}
-
-fn commit_execution_outcome(vm: &mut HPSVM, outcome: ExecutionOutcome) -> TransactionResult {
-    let origin_vm_instance_id = outcome.origin_vm_instance_id;
-    let origin_state_version = outcome.origin_state_version;
-
-    if origin_vm_instance_id != vm.instance_id || origin_state_version != vm.state_version {
-        return TransactionResult::Err(FailedTransactionMetadata {
-            err: TransactionError::ResanitizationNeeded,
-            meta: outcome.meta,
-        });
-    }
-
-    let (result, delta) = outcome_into_result_and_delta(outcome);
-    let mutates_state = delta.mutates_state();
-
-    apply_commit_delta(&mut vm.accounts, &mut vm.history, delta)
-        .expect("It shouldn't be possible to write invalid sysvars in send_transaction.");
-    if mutates_state {
-        vm.invalidate_execution_outcomes();
-    }
-    result
-}
+// CommitDelta and commit logic are in the `commit` module.
+use commit::{
+    CommitDelta, apply_commit_delta, commit_execution_outcome, outcome_into_result_and_delta,
+};
 
 fn execution_diagnostics(
     vm: &HPSVM,
