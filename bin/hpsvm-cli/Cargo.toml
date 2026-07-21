@@ -12,7 +12,7 @@ path = "src/main.rs"
 
 [features]
 default = []
-fd-compat = ["dep:hpsvm-fixture-fd", "hpsvm-fixture-fd/json-codec"]
+fd-compat = ["hpsvm-fixture/fd-json"]
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
@@ -23,12 +23,9 @@ hpsvm-fixture = { workspace = true, default-features = false, features = [
     "json-codec",
     "markdown",
 ] }
-hpsvm-fixture-fd = { workspace = true, default-features = false, optional = true, features = [
-    "prost-codec",
-] }
+noyalib.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-serde_yml.workspace = true
 solana-address.workspace = true
 thiserror.workspace = true
 

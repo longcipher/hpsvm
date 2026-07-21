@@ -14,7 +14,6 @@ use crate::{error::HPSVMError, format_logs::format_logs};
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TransactionMetadata {
     /// The transaction signature.
-    #[cfg_attr(feature = "serde", serde(with = "crate::utils::serde_with_str"))]
     pub signature: Signature,
     /// Transaction log messages.
     pub logs: Vec<String>,

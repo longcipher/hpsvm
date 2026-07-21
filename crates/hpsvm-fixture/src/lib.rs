@@ -9,6 +9,8 @@ mod check;
 mod compare;
 mod config;
 mod error;
+#[cfg(feature = "fd-codec")]
+mod fd;
 #[cfg(feature = "json-codec")]
 mod json;
 mod matrix;
@@ -18,6 +20,8 @@ mod runner;
 mod single;
 mod snapshot;
 
+#[cfg(feature = "fd-codec")]
+pub use crate::fd::{AdapterError, FiredancerFixture};
 #[cfg(feature = "instruction-fixture")]
 pub use crate::model::{InstructionAccountMeta, InstructionFixture};
 pub use crate::{

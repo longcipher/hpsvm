@@ -1,0 +1,38 @@
+use solana_address::Address;
+use solana_keypair::Keypair;
+use solana_signer::Signer;
+use spl_token_2022_interface::instruction::create_native_mint;
+
+use crate::{HPSVM, types::FailedTransactionMetadata};
+
+/// ### Description
+/// Builder for the [`create_native_mint`] instruction.
+#[derive(Debug)]
+pub struct CreateNativeMint<'a> {
+    svm: &'a mut HPSVM,
+    payer: &'a Keypair,
+    token_program_id: Option<&'a Address>,
+}
+
+impl<'a> CreateNativeMint<'a> {
+    /// Creates a new instance of [`create_native_mint`] instruction.
+    pub fn new(svm: &'a mut HPSVM, payer: &'a Keypair) -> Self {
+        CreateNativeMint { svm, payer, token_program_id: None }
+    }
+
+    /// Sets the token program id for the instruction.
+    pub fn token_program_id(mut self, program_id: &'a Address) -> Self {
+        self.token_program_id = Some(program_id);
+        self
+    }
+
+    /// Sends the transaction.
+    pub fn send(self) -> Result<(), FailedTransactionMetadata> {
+        let token_program_id = self.token_program_id.unwrap_or(&spl_token_2022_interface::ID);
+        let payer_pk = self.payer.pubkey();
+
+        let ix = create_native_mint(token_program_id, &payer_pk)?;
+
+        super::sign_and_send(self.svm, self.payer, &[], ix)
+    }
+}

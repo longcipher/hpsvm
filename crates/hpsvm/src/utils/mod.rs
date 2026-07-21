@@ -8,8 +8,6 @@ use solana_sha256_hasher::Hasher;
 
 pub(crate) mod inner_instructions;
 pub(crate) mod rent;
-#[cfg(feature = "serde")]
-pub(crate) mod serde_with_str;
 
 /// Create a blockhash from the given bytes
 pub(crate) fn create_blockhash(bytes: &[u8]) -> Hash {

@@ -4,8 +4,7 @@
 use std::{path::PathBuf, process::Command};
 
 use hpsvm::{HPSVM, instruction::InstructionCase};
-use hpsvm_fixture::{AccountSnapshot, ExecutionSnapshot};
-use hpsvm_fixture_fd::FiredancerFixture;
+use hpsvm_fixture::{AccountSnapshot, ExecutionSnapshot, FiredancerFixture};
 use mollusk_svm_fuzz_fixture_firedancer as fd_codec;
 use solana_account::Account;
 use solana_address::Address;

@@ -1,15 +1,15 @@
 //! RPC-backed account source support for `hpsvm`.
 
 use std::{
-    collections::HashMap,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     },
+    time::Duration,
 };
 
 use hpsvm::{AccountSource, AccountSourceError};
-use parking_lot::Mutex;
+use moka::sync::Cache;
 use solana_account::AccountSharedData;
 use solana_address::Address;
 use solana_rpc_client::rpc_client::RpcClient;
@@ -20,7 +20,7 @@ use solana_rpc_client_api::config::CommitmentConfig;
 pub struct RpcForkSource {
     client: Arc<RpcClient>,
     slot: u64,
-    cache: Arc<Mutex<HashMap<Address, AccountSharedData>>>,
+    cache: Cache<Address, AccountSharedData>,
     cache_hits: Arc<AtomicUsize>,
     cache_misses: Arc<AtomicUsize>,
 }
@@ -30,7 +30,7 @@ impl std::fmt::Debug for RpcForkSource {
         f.debug_struct("RpcForkSource")
             .field("client", &"RpcClient")
             .field("slot", &self.slot)
-            .field("cache_len", &self.cache.lock().len())
+            .field("cache_len", &self.cache.entry_count())
             .field("cache_hits", &self.cache_hits())
             .field("cache_misses", &self.cache_misses())
             .finish()
@@ -74,21 +74,15 @@ impl AccountSource for RpcForkSource {
         &self,
         pubkey: &Address,
     ) -> Result<Option<AccountSharedData>, AccountSourceError> {
-        // Single lock acquisition eliminates TOCTOU race between cache check and insert.
-        let cache = self.cache.lock();
-        if let Some(account) = cache.get(pubkey).cloned() {
+        if let Some(account) = self.cache.get(pubkey) {
             self.cache_hits.fetch_add(1, Ordering::Relaxed);
             return Ok(Some(account));
         }
-        // Drop the lock before the blocking RPC call to avoid holding it during I/O.
-        drop(cache);
 
         self.cache_misses.fetch_add(1, Ordering::Relaxed);
         let account = self.fetch_account(pubkey)?;
         if let Some(account) = &account {
-            // Re-acquire and insert. A concurrent insert for the same key is harmless
-            // (idempotent data), so we don't need compare-and-swap semantics.
-            self.cache.lock().insert(*pubkey, account.clone());
+            self.cache.insert(*pubkey, account.clone());
         }
         Ok(account)
     }
@@ -100,6 +94,8 @@ pub struct RpcForkSourceBuilder {
     rpc_url: Option<String>,
     client: Option<Arc<RpcClient>>,
     slot: Option<u64>,
+    max_capacity: Option<u64>,
+    ttl: Option<Duration>,
 }
 
 impl std::fmt::Debug for RpcForkSourceBuilder {
@@ -108,6 +104,8 @@ impl std::fmt::Debug for RpcForkSourceBuilder {
             .field("rpc_url", &self.rpc_url)
             .field("client", &self.client.as_ref().map(|_| "RpcClient"))
             .field("slot", &self.slot)
+            .field("max_capacity", &self.max_capacity)
+            .field("ttl", &self.ttl)
             .finish()
     }
 }
@@ -131,6 +129,18 @@ impl RpcForkSourceBuilder {
         self
     }
 
+    /// Sets the maximum number of entries in the cache. Defaults to 10,000.
+    pub fn with_max_capacity(mut self, max_capacity: Option<u64>) -> Self {
+        self.max_capacity = max_capacity;
+        self
+    }
+
+    /// Sets the time-to-live for cache entries. Defaults to one hour.
+    pub fn with_ttl(mut self, ttl: Option<Duration>) -> Self {
+        self.ttl = ttl;
+        self
+    }
+
     /// Builds the configured RPC-backed account source.
     pub fn build(self) -> RpcForkSource {
         let client = self.client.unwrap_or_else(|| {
@@ -139,10 +149,15 @@ impl RpcForkSourceBuilder {
             ))
         });
 
+        let cache = Cache::builder()
+            .max_capacity(self.max_capacity.unwrap_or(10_000))
+            .time_to_live(self.ttl.unwrap_or_else(|| Duration::from_secs(3600)))
+            .build();
+
         RpcForkSource {
             client,
             slot: self.slot.unwrap_or_default(),
-            cache: Arc::new(Mutex::new(HashMap::new())),
+            cache,
             cache_hits: Arc::new(AtomicUsize::new(0)),
             cache_misses: Arc::new(AtomicUsize::new(0)),
         }

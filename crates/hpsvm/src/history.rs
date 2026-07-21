@@ -1,41 +1,76 @@
-use indexmap::IndexMap;
+use std::num::NonZeroUsize;
+
+use lru::LruCache;
 use solana_signature::Signature;
 
 use crate::types::TransactionResult;
 
+/// Transaction history with bounded LRU eviction.
+///
+/// Wraps [`lru::LruCache`] so inserts beyond `max_entries` evict the
+/// least-recently-used entry in O(1) instead of the previous O(n) shift.
+/// When `max_entries == 0` the history is disabled and all inserts are
+/// silently dropped.
 #[derive(Clone, Debug)]
 pub(crate) struct TransactionHistory {
-    entries: IndexMap<Signature, TransactionResult>,
+    /// Bounded LRU cache. When `max_entries == 0` this stays empty.
+    entries: LruCache<Signature, TransactionResult>,
+    /// Configured capacity. `0` disables history.
     max_entries: usize,
 }
 
 impl TransactionHistory {
+    /// Creates a new transaction history with the default capacity of 32.
     pub(crate) fn new() -> Self {
-        Self { entries: IndexMap::with_capacity(32), max_entries: 32 }
+        Self::with_capacity(32)
     }
 
+    /// Creates a new transaction history with the given capacity.
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            entries: LruCache::new(NonZeroUsize::new(capacity.max(1)).expect("max(1) is non-zero")),
+            max_entries: capacity,
+        }
+    }
+
+    /// Updates the capacity. When `new_cap == 0`, history is disabled
+    /// and existing entries are cleared. Otherwise, the cache is resized
+    /// to the new capacity, evicting LRU entries as needed.
     pub(crate) fn set_capacity(&mut self, new_cap: usize) {
+        if new_cap == 0 {
+            self.entries.clear();
+            self.max_entries = 0;
+            return;
+        }
+        let new_size = NonZeroUsize::new(new_cap).expect("new_cap is non-zero here");
+        self.entries.resize(new_size);
         self.max_entries = new_cap;
-        while self.entries.len() > self.max_entries {
-            self.entries.shift_remove_index(0);
-        }
     }
 
+    /// Returns the result of a previously processed transaction, if any.
+    /// Uses `peek` so lookups do not affect LRU ordering.
     pub(crate) fn get_transaction(&self, signature: &Signature) -> Option<&TransactionResult> {
-        self.entries.get(signature)
-    }
-
-    pub(crate) fn add_new_transaction(&mut self, signature: Signature, result: TransactionResult) {
-        if self.max_entries != 0 {
-            if self.entries.len() == self.max_entries {
-                self.entries.shift_remove_index(0);
-            }
-            self.entries.insert(signature, result);
+        if self.max_entries == 0 {
+            return None;
         }
+        self.entries.peek(signature)
     }
 
+    /// Records a processed transaction. No-op when history is disabled.
+    pub(crate) fn add_new_transaction(&mut self, signature: Signature, result: TransactionResult) {
+        if self.max_entries == 0 {
+            return;
+        }
+        // `put` evicts the LRU entry if at capacity, keeping the cache bounded.
+        self.entries.put(signature, result);
+    }
+
+    /// Returns whether the signature is present in history.
     pub(crate) fn check_transaction(&self, signature: &Signature) -> bool {
-        self.entries.contains_key(signature)
+        if self.max_entries == 0 {
+            return false;
+        }
+        self.entries.peek(signature).is_some()
     }
 }
 

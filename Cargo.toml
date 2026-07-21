@@ -3,38 +3,39 @@ resolver = "3"
 members = ["bin/*", "crates/*"]
 
 [workspace.package]
-version = "0.1.8"
+version = "0.1.9"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/longcipher/hpsvm"
 
 [workspace.dependencies]
 # local crates
-hpsvm = { path = "crates/hpsvm", version = "0.1.8" }
-hpsvm-fixture = { path = "crates/hpsvm-fixture", version = "0.1.8", default-features = false }
-hpsvm-fixture-fd = { path = "crates/hpsvm-fixture-fd", version = "0.1.8", default-features = false }
+hpsvm = { path = "crates/hpsvm", version = "0.1.9" }
+hpsvm-fixture = { path = "crates/hpsvm-fixture", version = "0.1.9", default-features = false }
 
 # external crates
 agave-feature-set = "4.1.2"
 agave-precompiles = "4.1.2"
 agave-reserved-account-keys = "4.1.2"
-clap = "4.6.1"
+clap = "4.6.3"
 criterion = "0.8.2"
 cucumber = "0.23.0"
 ed25519-dalek = "3.0.0"
 hashbrown = "0.17.1"
 hex = "0.4.3"
-hotpath = "0.21.2"
-indexmap = "2.14.0"
+hotpath = "0.21.5"
 itertools = "0.15.0"
-libsecp256k1 = "0.7.2"
+k256 = { version = "0.13.4", features = ["arithmetic"] }
+lru = "0.18.1"
+moka = { version = "0.12.10", default-features = false, features = ["sync"] }
 mollusk-svm-fuzz-fixture-firedancer = "0.14.0"
+noyalib = "0.0.15"
+nu-ansi-term = "0.50.1"
 parking_lot = "0.12.5"
 prost = "0.14.4"
 qualifier_attr = "0.2.2"
-serde = "1.0.228"
-serde_json = "1.0.150"
-serde_yml = "0.0.13"
+serde = "1.0.229"
+serde_json = "1.0.151"
 sha2 = "0.11.0"
 smallvec = "1.15.2"
 solana-account = "4.3.1"
@@ -61,8 +62,8 @@ solana-loader-v3-interface = "8.0.1"
 solana-loader-v4-interface = "3.1.0"
 solana-message = "4.3.0"
 solana-native-token = "3.0.0"
-solana-nonce = "3.2.0"
-solana-nonce-account = "4.1.0"
+solana-nonce = "3.2.1"
+solana-nonce-account = "4.1.1"
 solana-precompile-error = "3.0.0"
 solana-program-error = "3.0.1"
 solana-program-option = "3.1.0"
@@ -96,8 +97,8 @@ spl-associated-token-account-interface = "2.0.0"
 spl-token-2022-interface = "3.1.1"
 spl-token-interface = "3.0.0"
 test-log = "0.2.21"
-thiserror = "2.0.18"
-tokio = "1.52.3"
+thiserror = "2.0.19"
+tokio = "1.53.1"
 tracing = "0.1.44"
 wincode = "0.5.5"
 

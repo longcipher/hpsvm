@@ -1,0 +1,136 @@
+//! Loader operations for the HPSVM.
+//!
+//! This module provides helpers for working with the BPF loader v3 (upgradeable loader)
+//! when constructing tests with [`crate::HPSVM`]. Enable via the `loader` feature.
+
+use solana_address::Address;
+use solana_instruction::error::InstructionError;
+use solana_keypair::Keypair;
+use solana_loader_v3_interface::{
+    instruction as bpf_loader_upgradeable, state::UpgradeableLoaderState,
+};
+use solana_signer::Signer;
+use solana_transaction::Transaction;
+use solana_transaction_error::TransactionError;
+
+use crate::{HPSVM, types::FailedTransactionMetadata};
+
+const CHUNK_SIZE: usize = 512;
+
+fn loader_instruction_error(source: InstructionError) -> FailedTransactionMetadata {
+    FailedTransactionMetadata {
+        err: TransactionError::InstructionError(0, source),
+        meta: Default::default(),
+    }
+}
+
+/// Set the upgrade authority for an upgradeable program
+pub fn set_upgrade_authority(
+    svm: &mut HPSVM,
+    from_keypair: &Keypair,
+    program_address: &Address,
+    current_authority_keypair: &Keypair,
+    new_authority_address: Option<&Address>,
+) -> Result<(), FailedTransactionMetadata> {
+    let mut signers: Vec<&dyn Signer> = vec![from_keypair];
+    if from_keypair.pubkey() != current_authority_keypair.pubkey() {
+        signers.push(current_authority_keypair);
+    }
+
+    let tx = Transaction::new_signed_with_payer(
+        &[bpf_loader_upgradeable::set_upgrade_authority(
+            program_address,
+            &current_authority_keypair.pubkey(),
+            new_authority_address,
+        )],
+        Some(&from_keypair.pubkey()),
+        &signers,
+        svm.latest_blockhash(),
+    );
+
+    svm.send_transaction(tx)?;
+
+    Ok(())
+}
+
+fn load_upgradeable_buffer(
+    svm: &mut HPSVM,
+    payer_kp: &Keypair,
+    program_bytes: &[u8],
+) -> Result<Address, FailedTransactionMetadata> {
+    let payer_pk = payer_kp.pubkey();
+    let buffer_kp = Keypair::new();
+    let buffer_pk = buffer_kp.pubkey();
+    // loader
+    let buffer_len = UpgradeableLoaderState::size_of_buffer(program_bytes.len());
+    let lamports = svm.minimum_balance_for_rent_exemption(buffer_len);
+
+    let create_buffer_ixs = bpf_loader_upgradeable::create_buffer(
+        &payer_pk,
+        &buffer_pk,
+        &payer_pk,
+        lamports,
+        program_bytes.len(),
+    )
+    .map_err(loader_instruction_error)?;
+    let tx = Transaction::new_signed_with_payer(
+        &create_buffer_ixs,
+        Some(&payer_pk),
+        &[payer_kp, &buffer_kp],
+        svm.latest_blockhash(),
+    );
+
+    svm.send_transaction(tx)?;
+
+    let chunk_size = CHUNK_SIZE;
+    let mut offset: u64 = 0;
+    for chunk in program_bytes.chunks(chunk_size) {
+        let offset_u32: u32 =
+            offset.try_into().map_err(|_| loader_instruction_error(InstructionError::Custom(0)))?;
+        let tx = Transaction::new_signed_with_payer(
+            &[bpf_loader_upgradeable::write(&buffer_pk, &payer_pk, offset_u32, chunk.to_vec())],
+            Some(&payer_pk),
+            &[payer_kp],
+            svm.latest_blockhash(),
+        );
+
+        svm.send_transaction(tx)?;
+        offset += chunk_size as u64;
+    }
+
+    Ok(buffer_pk)
+}
+
+/// Deploy an upgradeable program
+pub fn deploy_upgradeable_program(
+    svm: &mut HPSVM,
+    payer_kp: &Keypair,
+    program_kp: &Keypair,
+    program_bytes: &[u8],
+) -> Result<(), FailedTransactionMetadata> {
+    let program_pk = program_kp.pubkey();
+    let payer_pk = payer_kp.pubkey();
+    let buffer_pk = load_upgradeable_buffer(svm, payer_kp, program_bytes)?;
+
+    let lamports = svm.minimum_balance_for_rent_exemption(program_bytes.len());
+    let deploy_ixs = bpf_loader_upgradeable::deploy_with_max_program_len(
+        &payer_pk,
+        &program_pk,
+        &buffer_pk,
+        &payer_pk,
+        lamports,
+        program_bytes.len() * 2,
+        false,
+    )
+    .map_err(loader_instruction_error)?;
+    let tx = Transaction::new_signed_with_payer(
+        &deploy_ixs,
+        Some(&payer_pk),
+        &[&payer_kp, &program_kp],
+        svm.latest_blockhash(),
+    );
+
+    svm.send_transaction(tx)?;
+
+    Ok(())
+}

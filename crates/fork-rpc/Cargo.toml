@@ -8,7 +8,7 @@ repository.workspace = true
 
 [dependencies]
 hpsvm.workspace = true
-parking_lot.workspace = true
+moka = { workspace = true, features = ["sync"] }
 solana-account.workspace = true
 solana-address.workspace = true
 solana-rpc-client.workspace = true

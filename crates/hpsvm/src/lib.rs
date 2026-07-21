@@ -364,6 +364,12 @@ pub mod batch;
 pub mod error;
 /// Solana instruction types and helpers.
 pub mod instruction;
+/// Loader v3 helpers (set_upgrade_authority, deploy_upgradeable_program).
+#[cfg(feature = "loader")]
+pub mod loader;
+/// SPL token operation helpers (transfer, mint, ATA, freeze, etc.).
+#[cfg(feature = "token")]
+pub mod token;
 /// Public return types and execution metadata.
 pub mod types;
 

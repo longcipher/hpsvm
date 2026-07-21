@@ -122,7 +122,7 @@ pub(crate) fn load_fixture(path: &Path, format: FixtureFormatArg) -> Result<Fixt
 
 #[cfg(feature = "fd-compat")]
 fn load_firedancer_fixture(path: &Path) -> Result<Fixture, CliError> {
-    Ok(hpsvm_fixture_fd::FiredancerFixture::load(path)?.try_into()?)
+    Ok(hpsvm_fixture::FiredancerFixture::load(path)?.try_into()?)
 }
 
 #[cfg(not(feature = "fd-compat"))]

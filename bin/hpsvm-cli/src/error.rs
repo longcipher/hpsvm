@@ -13,7 +13,7 @@ pub(crate) enum CliError {
     Fixture(#[from] hpsvm_fixture::FixtureError),
     #[cfg(feature = "fd-compat")]
     #[error(transparent)]
-    Firedancer(#[from] hpsvm_fixture_fd::AdapterError),
+    Firedancer(#[from] hpsvm_fixture::AdapterError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]

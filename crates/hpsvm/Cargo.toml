@@ -21,6 +21,18 @@ serde = []
 precompiles = ["dep:agave-precompiles"]
 register-tracing = ["invocation-inspect-callback", "dep:hex", "dep:sha2"]
 hotpath = ["dep:hotpath"]
+# Loader v3 helpers (set_upgrade_authority, deploy_upgradeable_program).
+loader = []
+# SPL token operation helpers (transfer, mint, ATA, freeze, etc.).
+# `spl-token-interface` is always available because helpers.rs relies on it
+# for token balance diagnostics.
+token = [
+    "dep:smallvec",
+    "dep:spl-associated-token-account-interface",
+    "dep:solana-program-option",
+]
+# SPL token-2022 extensions; implies `token`.
+token-2022 = ["token", "dep:spl-token-2022-interface"]
 
 [dependencies]
 agave-feature-set.workspace = true
@@ -33,13 +45,15 @@ agave-reserved-account-keys = { workspace = true, features = [
 hashbrown = { workspace = true, optional = true }
 hex = { workspace = true, optional = true }
 hotpath = { workspace = true, optional = true, features = ["hotpath"] }
-indexmap.workspace = true
 itertools.workspace = true
+lru.workspace = true
+nu-ansi-term.workspace = true
 parking_lot.workspace = true
 qualifier_attr = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2 = { workspace = true, optional = true }
+smallvec = { workspace = true, optional = true }
 solana-account.workspace = true
 solana-address.workspace = true
 solana-address-lookup-table-interface = { workspace = true, features = ["wincode", "bytemuck"] }
@@ -67,12 +81,13 @@ solana-nonce.workspace = true
 solana-nonce-account.workspace = true
 solana-precompile-error.workspace = true
 solana-program-error.workspace = true
+solana-program-option = { workspace = true, optional = true }
 solana-program-pack.workspace = true
 solana-program-runtime.workspace = true
 solana-rent.workspace = true
 solana-sdk-ids.workspace = true
 solana-sha256-hasher.workspace = true
-solana-signature.workspace = true
+solana-signature = { workspace = true, features = ["serde"] }
 solana-signer.workspace = true
 solana-slot-hashes.workspace = true
 solana-slot-history.workspace = true
@@ -89,6 +104,8 @@ solana-sysvar-id.workspace = true
 solana-transaction = { workspace = true, features = ["verify", "wincode"] }
 solana-transaction-context = { workspace = true, features = ["wincode"] }
 solana-transaction-error.workspace = true
+spl-associated-token-account-interface = { workspace = true, optional = true }
+spl-token-2022-interface = { workspace = true, optional = true }
 spl-token-interface.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
@@ -97,7 +114,7 @@ tracing.workspace = true
 criterion.workspace = true
 cucumber.workspace = true
 ed25519-dalek.workspace = true
-libsecp256k1.workspace = true
+k256.workspace = true
 serde.workspace = true
 solana-clock.workspace = true
 solana-compute-budget-interface.workspace = true
@@ -122,6 +139,30 @@ clippy.allow_attributes = "warn"
 [[test]]
 name = "precompiles"
 required-features = ["precompiles"]
+
+[[test]]
+name = "loader"
+required-features = ["loader"]
+
+[[test]]
+name = "token_account_factories"
+required-features = ["token"]
+
+[[test]]
+name = "token_freeze"
+required-features = ["token"]
+
+[[test]]
+name = "token_multisig"
+required-features = ["token"]
+
+[[test]]
+name = "token_native_mint"
+required-features = ["token", "token-2022"]
+
+[[test]]
+name = "token_one_owner"
+required-features = ["token"]
 
 [[bench]]
 name = "simple_bench"
