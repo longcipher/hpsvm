@@ -19,15 +19,17 @@ nodejs-internal = ["dep:qualifier_attr"]
 hashbrown = ["dep:hashbrown"]
 serde = []
 precompiles = ["dep:agave-precompiles"]
-register-tracing = ["invocation-inspect-callback", "dep:hex", "dep:sha2"]
+register-tracing = ["invocation-inspect-callback", "dep:hex", "dep:sha2", "dep:serde_json"]
 hotpath = ["dep:hotpath"]
+# Allocation profiling on top of `hotpath`; attributes every allocation to the
+# calling instrumented function. Implies `hotpath`.
+hotpath-alloc = ["hotpath", "hotpath/hotpath-alloc"]
 # Loader v3 helpers (set_upgrade_authority, deploy_upgradeable_program).
 loader = []
 # SPL token operation helpers (transfer, mint, ATA, freeze, etc.).
 # `spl-token-interface` is always available because helpers.rs relies on it
 # for token balance diagnostics.
 token = [
-    "dep:smallvec",
     "dep:spl-associated-token-account-interface",
     "dep:solana-program-option",
 ]
@@ -45,15 +47,14 @@ agave-reserved-account-keys = { workspace = true, features = [
 hashbrown = { workspace = true, optional = true }
 hex = { workspace = true, optional = true }
 hotpath = { workspace = true, optional = true, features = ["hotpath"] }
-itertools.workspace = true
 lru.workspace = true
 nu-ansi-term.workspace = true
 parking_lot.workspace = true
 qualifier_attr = { workspace = true, optional = true }
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
-smallvec = { workspace = true, optional = true }
+smallvec.workspace = true
 solana-account.workspace = true
 solana-address.workspace = true
 solana-address-lookup-table-interface = { workspace = true, features = ["wincode", "bytemuck"] }

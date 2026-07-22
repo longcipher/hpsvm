@@ -1,6 +1,6 @@
 use ed25519_dalek::Signer;
 use hpsvm::HPSVM;
-use k256::{SecretKey, elliptic_curve::sec1::ToEncodedPoint};
+use k256::{SecretKey, elliptic_curve::sec1::ToSec1Point};
 use solana_ed25519_program::{self as ed25519_instruction, new_ed25519_instruction_with_signature};
 use solana_instruction::error::InstructionError;
 use solana_keypair::Keypair;
@@ -79,8 +79,8 @@ fn secp256k1_precompile_ok() {
     let msg = b"hello world";
     let secp_pubkey = kp_secp256k1.public_key();
     // libsecp256k1's PublicKey::serialize() returns 65 bytes uncompressed (0x04 || X || Y).
-    // k256's to_encoded_point(false) also produces uncompressed format (0x04 || X || Y).
-    let pub_bytes = secp_pubkey.to_encoded_point(false);
+    // k256's to_sec1_point(false) also produces uncompressed format (0x04 || X || Y).
+    let pub_bytes = secp_pubkey.to_sec1_point(false);
     let eth_address = eth_address_from_pubkey(&pub_bytes.as_bytes()[1..].try_into().unwrap());
     let secret_bytes: [u8; 32] = kp_secp256k1.to_bytes().into();
     let (signature, recovery_id) = sign_message(&secret_bytes, msg).unwrap();
@@ -105,7 +105,7 @@ fn secp256k1_precompile_err() {
     // Act - Produce an invalid secp256k1 instruction.
     let msg = b"hello world";
     let secp_pubkey = kp_secp256k1.public_key();
-    let pub_bytes = secp_pubkey.to_encoded_point(false);
+    let pub_bytes = secp_pubkey.to_sec1_point(false);
     let eth_address = eth_address_from_pubkey(&pub_bytes.as_bytes()[1..].try_into().unwrap());
     let secret_bytes: [u8; 32] = kp_secp256k1.to_bytes().into();
     let (signature, recovery_id) = sign_message(&secret_bytes, msg).unwrap();

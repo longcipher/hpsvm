@@ -60,16 +60,27 @@ pub(crate) fn apply_commit_delta(
 
 /// Decompose an [`ExecutionOutcome`] into its transaction result and the
 /// corresponding commit delta.
+///
+/// When `history_enabled` is `false`, no transaction-history entry is built,
+/// which lets the metadata move into the returned result instead of being
+/// cloned. This keeps the steady-state hot path (history disabled) free of the
+/// two `TransactionMetadata` clones the previous implementation performed per
+/// transaction.
 pub(crate) fn outcome_into_result_and_delta(
     outcome: ExecutionOutcome,
+    history_enabled: bool,
 ) -> (TransactionResult, CommitDelta) {
     let ExecutionOutcome { meta, post_accounts, status, included, .. } = outcome;
+    let signature = meta.signature;
+    // Move `meta` into the result instead of cloning it.
     let result = match status {
-        Ok(()) => TransactionResult::Ok(meta.clone()),
-        Err(err) => TransactionResult::Err(FailedTransactionMetadata { err, meta: meta.clone() }),
+        Ok(()) => TransactionResult::Ok(meta),
+        Err(err) => TransactionResult::Err(FailedTransactionMetadata { err, meta }),
     };
     let delta = if included {
-        CommitDelta::new(post_accounts, Some((meta.signature, result.clone())))
+        // Only clone the full result when history is actually going to store it.
+        let history_entry = history_enabled.then(|| (signature, result.clone()));
+        CommitDelta::new(post_accounts, history_entry)
     } else {
         CommitDelta::new(Vec::new(), None)
     };
@@ -95,11 +106,17 @@ pub(crate) fn commit_execution_outcome(
         });
     }
 
-    let (result, delta) = outcome_into_result_and_delta(outcome);
+    let history_enabled = vm.history.is_enabled();
+    let (result, delta) = crate::hotpath_block!(
+        "hpsvm::commit::outcome_into_result_and_delta",
+        outcome_into_result_and_delta(outcome, history_enabled)
+    );
     let mutates_state = delta.mutates_state();
 
-    apply_commit_delta(&mut vm.accounts, &mut vm.history, delta)
-        .expect("It shouldn't be possible to write invalid sysvars in send_transaction.");
+    crate::hotpath_block!("hpsvm::commit::apply_commit_delta", {
+        apply_commit_delta(&mut vm.accounts, &mut vm.history, delta)
+            .expect("It shouldn't be possible to write invalid sysvars in send_transaction.");
+    });
     if mutates_state {
         vm.invalidate_execution_outcomes();
     }

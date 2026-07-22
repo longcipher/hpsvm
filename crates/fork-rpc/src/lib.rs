@@ -70,6 +70,7 @@ impl RpcForkSource {
 }
 
 impl AccountSource for RpcForkSource {
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     fn get_account(
         &self,
         pubkey: &Address,

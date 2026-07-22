@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use solana_account::{Account, AccountSharedData, ReadableAccount, WritableAccount};
 use solana_address::Address;
 use solana_instruction::Instruction;
@@ -90,10 +92,34 @@ pub(crate) fn public_account_from_shared(account: &AccountSharedData) -> Option<
     (account.lamports() != 0).then(|| account.clone().into())
 }
 
+/// Compare two `AccountSharedData` references without cloning.
+/// Returns `true` if they differ. Checks lamports first (cheapest, most common diff).
+pub(crate) fn accounts_differ(pre: &AccountSharedData, post: &AccountSharedData) -> bool {
+    // ponytail: lamports is a single u64 load and the most common mutation;
+    // short-circuit before touching the data slice.
+    pre.lamports() != post.lamports() ||
+        pre.owner() != post.owner() ||
+        pre.executable() != post.executable() ||
+        pre.rent_epoch() != post.rent_epoch() ||
+        pre.data() != post.data()
+}
+
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(crate) fn token_balances(
     accounts: &[(Address, AccountSharedData)],
     account_db: &AccountsDb,
 ) -> Vec<TokenBalance> {
+    // ponytail: pre-scan mints to O(1) lookup instead of O(n) per token account.
+    // Use `entry` API so first-match wins, matching the old `.find()` semantics.
+    let mut mint_decimals: HashMap<Address, Option<u8>> = HashMap::new();
+    for (address, account) in accounts {
+        if account.data().len() == TokenMint::LEN &&
+            let Ok(mint) = TokenMint::unpack(account.data())
+        {
+            mint_decimals.entry(*address).or_insert(Some(mint.decimals));
+        }
+    }
+
     accounts
         .iter()
         .enumerate()
@@ -103,7 +129,13 @@ pub(crate) fn token_balances(
             }
 
             let token_account = TokenAccount::unpack(account.data()).ok()?;
-            let decimals = token_mint_decimals(accounts, account_db, &token_account.mint);
+            let decimals = mint_decimals.get(&token_account.mint).copied().unwrap_or_else(|| {
+                account_db.get_account(&token_account.mint).and_then(|account| {
+                    (account.data().len() == TokenMint::LEN)
+                        .then(|| TokenMint::unpack(account.data()).ok().map(|m| m.decimals))
+                        .flatten()
+                })
+            });
 
             Some(TokenBalance {
                 account_index,
@@ -115,23 +147,6 @@ pub(crate) fn token_balances(
             })
         })
         .collect()
-}
-
-fn token_mint_decimals(
-    accounts: &[(Address, AccountSharedData)],
-    account_db: &AccountsDb,
-    mint: &Address,
-) -> Option<u8> {
-    accounts
-        .iter()
-        .find(|(address, _)| address == mint)
-        .map(|(_, account)| account.clone())
-        .or_else(|| account_db.get_account(mint))
-        .and_then(|account| {
-            (account.data().len() == TokenMint::LEN)
-                .then(|| TokenMint::unpack(account.data()).ok().map(|mint| mint.decimals))
-                .flatten()
-        })
 }
 
 pub(crate) fn execute_tx_helper(

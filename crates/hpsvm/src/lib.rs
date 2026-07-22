@@ -260,16 +260,18 @@
 
 use std::{
     cell::RefCell,
+    collections::HashMap,
     path::Path,
     rc::Rc,
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
 };
 
 use agave_feature_set::{FeatureSet, raise_cpi_nesting_limit_to_8};
 use agave_reserved_account_keys::ReservedAccountKeys;
+use parking_lot::RwLock;
 #[cfg(feature = "precompiles")]
 use precompiles::load_precompiles;
 #[cfg(feature = "nodejs-internal")]
@@ -357,6 +359,55 @@ macro_rules! hotpath_block {
 }
 
 pub(crate) use hotpath_block;
+
+// ---------------------------------------------------------------------------
+// Process-wide caches for default-constructed VMs
+// ---------------------------------------------------------------------------
+//
+// `HPSVM::new()` (and the `with_program_test_defaults` builder path) repeatedly
+// rebuilds an identical default runtime environment and re-verifies the same
+// built-in / SPL ELF executables on every construction. For test suites that
+// spin up many VMs this dominates wall-clock time (>80% of `core_interfaces`).
+//
+// When the configuration matches the exact default (`FeatureSet::all_enabled`,
+// default compute budget, no register tracing, no custom syscalls) the runtime
+// environment is immutable and identical across VMs, so a single
+// `Arc<ProgramRuntimeEnvironments>` is shared process-wide. Verified default
+// executables (`Arc<ProgramCacheEntry>`) are then memoized keyed by the shared
+// environment pointer plus the ELF slice identity, letting every VM after the
+// first skip ELF parsing, verification, and JIT compilation for the default
+// programs.
+//
+// Safety: the shared environment is never mutated after creation. Custom
+// syscall registration and feature-set changes rebuild a fresh environment and
+// reload programs from account data, leaving the shared cache untouched. The
+// executable cache is keyed by `Arc` pointer identity of the environment, so
+// only VMs sharing the exact same environment can observe a cached entry. The
+// ELF slice pointer in the key is stable because the only producer is
+// `add_program_preverified`, invoked exclusively with `include_bytes!` statics.
+
+/// Shared default runtime environment, built once per process.
+static DEFAULT_RUNTIME_ENV: OnceLock<Arc<ProgramRuntimeEnvironments>> = OnceLock::new();
+
+/// Cache key for a memoized default-program executable:
+/// `(env_ptr, elf_ptr, elf_len, loader_id)`.
+type DefaultProgramKey = (usize, usize, usize, Address);
+
+/// Memoized verified executables for default programs.
+static DEFAULT_PROGRAM_CACHE: OnceLock<RwLock<HashMap<DefaultProgramKey, Arc<ProgramCacheEntry>>>> =
+    OnceLock::new();
+
+fn default_program_cache() -> &'static RwLock<HashMap<DefaultProgramKey, Arc<ProgramCacheEntry>>> {
+    DEFAULT_PROGRAM_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+/// Returns the shared default environment pointer iff `envs` *is* the shared
+/// default environment (pointer identity), so only VMs running under it can
+/// reuse memoized executables.
+fn shared_default_env_ptr(envs: &Arc<ProgramRuntimeEnvironments>) -> Option<usize> {
+    let shared = DEFAULT_RUNTIME_ENV.get()?;
+    Arc::ptr_eq(envs, shared).then_some(Arc::as_ptr(shared) as usize)
+}
 
 /// Transaction batch planning and parallel execution.
 pub mod batch;
@@ -694,6 +745,25 @@ impl HPSVM {
         #[cfg(not(feature = "register-tracing"))]
         let enable_register_tracing = false;
 
+        // The exact default configuration produces a runtime environment that
+        // is identical across VMs. Reuse the process-wide shared `Arc` so the
+        // first default VM pays the build cost once and every subsequent
+        // `HPSVM::new()` skips `create_program_runtime_environment` entirely,
+        // and so default-program executables can be memoized (see
+        // `resolve_program_entry`).
+        let is_default_config = !enable_register_tracing &&
+            self.runtime_env.compute_budget.is_none() &&
+            self.runtime_registry.custom_syscalls().is_empty() &&
+            self.cfg.feature_set == FeatureSet::all_enabled();
+
+        if is_default_config {
+            let shared = DEFAULT_RUNTIME_ENV.get();
+            if let Some(env) = shared {
+                self.accounts.set_runtime_environments_arc(Arc::clone(env));
+                return Ok(());
+            }
+        }
+
         let compute_budget = self.runtime_env.compute_budget.unwrap_or_else(|| {
             ComputeBudget::new_with_defaults(
                 self.cfg.feature_set.is_active(&raise_cpi_nesting_limit_to_8::ID),
@@ -738,9 +808,14 @@ impl HPSVM {
         }
         let program_runtime = current_runtime;
 
-        let environments =
-            ProgramRuntimeEnvironments::new(program_runtime.clone(), program_runtime);
-        self.accounts.set_runtime_environments(environments);
+        let env =
+            Arc::new(ProgramRuntimeEnvironments::new(program_runtime.clone(), program_runtime));
+        if is_default_config {
+            // First default VM: publish so later VMs reuse it. A concurrent
+            // builder may have raced; either arc is equivalent, so ignore.
+            let _ = DEFAULT_RUNTIME_ENV.set(Arc::clone(&env));
+        }
+        self.accounts.set_runtime_environments_arc(env);
 
         Ok(())
     }
@@ -1240,7 +1315,7 @@ impl HPSVM {
     }
 
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    fn add_program_internal<const PREVERIFIED: bool>(
+    fn add_program_internal<const PREVERIFIED: bool, const CACHED: bool>(
         &mut self,
         program_id: impl Into<Address>,
         program_bytes: &[u8],
@@ -1294,9 +1369,62 @@ impl HPSVM {
             return Err(HPSVMError::InvalidLoader { program_id, loader_id: *loader_id });
         };
 
+        // Resolve (and optionally memoize) the verified executable. Passing the
+        // environment by reference avoids the per-load `ProgramRuntimeEnvironment`
+        // clone the previous implementation performed.
+        let env = self.accounts.runtime_environments().get_env_for_execution();
+        let loaded_program_arc = self.resolve_program_entry::<CACHED>(
+            loader_id,
+            env,
+            current_slot,
+            program_bytes,
+            program_size,
+        )?;
+
+        self.accounts.replenish_program_cache(program_id, loaded_program_arc);
+
+        Ok(())
+    }
+
+    /// Resolve the [`ProgramCacheEntry`] for a program being loaded, consulting
+    /// the process-wide default-program cache when eligible.
+    ///
+    /// Cache eligibility requires all of:
+    /// - the caller opted in via `CACHED` (only [`HPSVM::add_program_preverified`], invoked
+    ///   exclusively with `include_bytes!` statics);
+    /// - the VM is running under the shared default runtime environment (pointer identity), so the
+    ///   memoized executable is valid here;
+    /// - loading at slot 0, so the entry's baked-in slot fields match.
+    ///
+    /// On a cache hit the expensive `ProgramCacheEntry::new` (ELF parse +
+    /// verify + JIT) is skipped entirely. Misses populate the cache so the next
+    /// default VM reuses the entry.
+    fn resolve_program_entry<const CACHED: bool>(
+        &self,
+        loader_id: &Address,
+        env: &ProgramRuntimeEnvironment,
+        current_slot: u64,
+        program_bytes: &[u8],
+        program_size: usize,
+    ) -> Result<Arc<ProgramCacheEntry>, HPSVMError> {
+        let cache_key = if CACHED && current_slot == 0 {
+            shared_default_env_ptr(self.accounts.runtime_environments_arc()).map(|env_ptr| {
+                (env_ptr, program_bytes.as_ptr() as usize, program_bytes.len(), *loader_id)
+            })
+        } else {
+            None
+        };
+
+        if let Some(key) = cache_key {
+            let cached = default_program_cache().read().get(&key).cloned();
+            if let Some(entry) = cached {
+                return Ok(entry);
+            }
+        }
+
         let mut loaded_program = ProgramCacheEntry::new(
             loader_id,
-            self.accounts.runtime_environments().get_env_for_execution().clone(),
+            env.clone(),
             current_slot,
             current_slot,
             program_bytes,
@@ -1305,10 +1433,13 @@ impl HPSVM {
         )
         .map_err(HPSVMError::from)?;
         loaded_program.effective_slot = current_slot;
+        let arc = Arc::new(loaded_program);
 
-        self.accounts.replenish_program_cache(program_id, Arc::new(loaded_program));
+        if let Some(key) = cache_key {
+            default_program_cache().write().entry(key).or_insert_with(|| Arc::clone(&arc));
+        }
 
-        Ok(())
+        Ok(arc)
     }
 
     /// Adds an SBF program to the test environment.
@@ -1320,7 +1451,7 @@ impl HPSVM {
         program_id: impl Into<Address>,
         program_bytes: &[u8],
     ) -> Result<(), HPSVMError> {
-        self.add_program_internal::<false>(
+        self.add_program_internal::<false, false>(
             program_id,
             program_bytes,
             &bpf_loader_upgradeable::id(),
@@ -1339,19 +1470,24 @@ impl HPSVM {
         program_bytes: &[u8],
         loader_id: Address,
     ) -> Result<(), HPSVMError> {
-        self.add_program_internal::<false>(program_id, program_bytes, &loader_id)?;
+        self.add_program_internal::<false, false>(program_id, program_bytes, &loader_id)?;
         self.invalidate_execution_outcomes();
         Ok(())
     }
 
     /// Adds an SBF program that is known-good and already verified.
+    ///
+    /// This is the only caller that opts into the default-program executable
+    /// cache (`CACHED = true`). It is invoked exclusively with `include_bytes!`
+    /// statics, so the ELF slice pointer used as part of the cache key is
+    /// stable for the lifetime of the process.
     pub(crate) fn add_program_preverified(
         &mut self,
         program_id: impl Into<Address>,
         program_bytes: &[u8],
         loader_id: &Address,
     ) -> Result<(), HPSVMError> {
-        self.add_program_internal::<true>(program_id, program_bytes, loader_id)
+        self.add_program_internal::<true, true>(program_id, program_bytes, loader_id)
     }
 
     /// Submits a signed transaction and commits its post-state to this VM instance.
@@ -1770,12 +1906,25 @@ fn execution_into_outcome(
             compute_units_consumed,
             return_data,
             fee,
-            diagnostics: execution_diagnostics(
-                vm,
-                &post_accounts,
-                execution_trace,
-                account_source_failures,
-            ),
+            diagnostics: if vm.cfg.compute_diagnostics {
+                hotpath_block!("hpsvm::execution_into_outcome::diagnostics", {
+                    execution_diagnostics(
+                        vm,
+                        &post_accounts,
+                        execution_trace,
+                        account_source_failures,
+                    )
+                })
+            } else {
+                // Diagnostics disabled: carry over the cheap trace and any
+                // account-source failures, but skip the expensive pre/post
+                // balance, account-diff, and token-balance computation.
+                ExecutionDiagnostics {
+                    execution_trace,
+                    account_source_failures,
+                    ..Default::default()
+                }
+            },
         },
         post_accounts,
         status: tx_result,
@@ -1797,31 +1946,38 @@ fn execution_diagnostics(
     execution_trace: ExecutionTrace,
     account_source_failures: Vec<AccountSourceFailure>,
 ) -> ExecutionDiagnostics {
-    let pre_accounts = post_accounts
-        .iter()
-        .map(|(address, _)| (*address, vm.accounts.get_account(address).unwrap_or_default()))
-        .collect::<Vec<_>>();
+    // ponytail: single pass over post_accounts — load pre-state once, compute
+    // balances and diffs without redundant clones.
+    let mut pre_balances = Vec::with_capacity(post_accounts.len());
+    let mut post_balances = Vec::with_capacity(post_accounts.len());
+    let mut account_diffs = Vec::new();
+    let mut pre_accounts = Vec::with_capacity(post_accounts.len());
 
-    let pre_balances = pre_accounts.iter().map(|(_, account)| account.lamports()).collect();
-    let post_balances = post_accounts.iter().map(|(_, account)| account.lamports()).collect();
-
-    let account_diffs = pre_accounts
-        .iter()
-        .zip(post_accounts.iter())
-        .filter_map(|((address, pre), (_, post))| {
-            let pre = public_account_from_shared(pre);
-            let post = public_account_from_shared(post);
-            (pre != post).then_some(AccountDiff { address: *address, pre, post })
-        })
-        .collect();
+    for (address, post) in post_accounts {
+        let pre = vm.accounts.get_account(address).unwrap_or_default();
+        pre_balances.push(pre.lamports());
+        post_balances.push(post.lamports());
+        if accounts_differ(&pre, post) {
+            account_diffs.push(AccountDiff {
+                address: *address,
+                pre: public_account_from_shared(&pre),
+                post: public_account_from_shared(post),
+            });
+        }
+        pre_accounts.push((*address, pre));
+    }
 
     ExecutionDiagnostics {
         pre_balances,
         post_balances,
         account_diffs,
         account_source_failures,
-        pre_token_balances: token_balances(&pre_accounts, &vm.accounts),
-        post_token_balances: token_balances(post_accounts, &vm.accounts),
+        pre_token_balances: hotpath_block!("hpsvm::diagnostics::pre_token_balances", {
+            token_balances(&pre_accounts, &vm.accounts)
+        }),
+        post_token_balances: hotpath_block!("hpsvm::diagnostics::post_token_balances", {
+            token_balances(post_accounts, &vm.accounts)
+        }),
         execution_trace,
     }
 }

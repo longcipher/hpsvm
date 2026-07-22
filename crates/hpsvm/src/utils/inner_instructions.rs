@@ -1,3 +1,4 @@
+use smallvec::SmallVec;
 use solana_address::Address;
 use solana_instruction::account_meta::AccountMeta;
 use solana_message::{
@@ -11,9 +12,8 @@ use crate::types::{ExecutedInstruction, ExecutionTrace};
 pub(crate) fn extract_instruction_trace_data(
     transaction_context: &mut TransactionContext<'_>,
 ) -> (InnerInstructionsList, ExecutionTrace) {
-    // Collect account keys before consuming the trace
     let num_accounts = transaction_context.get_number_of_accounts();
-    let account_keys: Vec<Address> = (0..num_accounts)
+    let account_keys: SmallVec<[Address; 16]> = (0..num_accounts)
         .map(|i| {
             transaction_context.get_key_of_account_at_index(i).ok().copied().unwrap_or_default()
         })
@@ -27,7 +27,7 @@ pub(crate) fn extract_instruction_trace_data(
     let mut all_inner_instructions: Vec<Vec<InnerInstruction>> =
         (0..num_top_level).map(|_| Vec::new()).collect();
 
-    let mut execution_instructions: Vec<ExecutedInstruction> = Vec::new();
+    let mut execution_instructions: Vec<ExecutedInstruction> = Vec::with_capacity(frames.len());
 
     for (i, frame) in frames.iter().enumerate() {
         let stack_height = frame.nesting_level.saturating_add(1);
@@ -35,7 +35,8 @@ pub(crate) fn extract_instruction_trace_data(
         let program_account_index = frame.program_account_index_in_tx as usize;
         let program_id = account_keys.get(program_account_index).copied().unwrap_or_default();
 
-        let ix_accounts: Vec<AccountMeta> = accounts[i]
+        // ponytail: SmallVec for typical 2-8 accounts per instruction, avoids heap alloc
+        let ix_accounts: SmallVec<[AccountMeta; 8]> = accounts[i]
             .iter()
             .filter_map(|acc| {
                 let pubkey = account_keys.get(acc.index_in_transaction as usize).copied()?;
@@ -50,7 +51,7 @@ pub(crate) fn extract_instruction_trace_data(
         execution_instructions.push(ExecutedInstruction {
             stack_height: stack_height as u8,
             program_id,
-            accounts: ix_accounts,
+            accounts: ix_accounts.into_vec(),
             data: data[i].to_vec(),
         });
 
@@ -60,6 +61,7 @@ pub(crate) fn extract_instruction_trace_data(
                 ancestor = frames[ancestor].index_of_caller_instruction as usize;
             }
 
+            // ponytail: reuse program_account_index already computed
             let inner_instruction = InnerInstruction {
                 instruction: CompiledInstruction::new_from_raw_parts(
                     frame.program_account_index_in_tx as u8,

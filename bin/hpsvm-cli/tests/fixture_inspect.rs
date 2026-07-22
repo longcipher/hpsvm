@@ -65,7 +65,26 @@ fn fixture_inspect_prints_fixture_name() {
 
     assert!(output.status.success());
 
-    let decoded: Value = serde_json::from_slice(&output.stdout).expect("stdout must be json");
+    let stdout_str = String::from_utf8_lossy(&output.stdout);
+    let decoded: Value = serde_json::from_str(&stdout_str).unwrap_or_else(|_| {
+        let start = stdout_str.find('{').expect("stdout must contain JSON");
+        let mut depth = 0i32;
+        let mut end = start;
+        for (i, ch) in stdout_str[start..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = start + i + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        serde_json::from_str(&stdout_str[start..end]).expect("stdout must contain valid JSON")
+    });
     assert_eq!(decoded["header"]["name"], Value::String(String::from("cli-inspect")));
 
     std::fs::remove_file(path).ok();

@@ -247,7 +247,10 @@ fn execute_transaction_batch_stage(
                         .iter()
                         .map(|&index| {
                             let tx = transactions[index].clone();
-                            let (result, delta) = outcome_into_result_and_delta(local.transact(tx));
+                            let (result, delta) = outcome_into_result_and_delta(
+                                local.transact(tx),
+                                local.history.is_enabled(),
+                            );
                             BatchStageResult { index, result, delta }
                         })
                         .collect::<Vec<_>>()
@@ -332,7 +335,8 @@ impl BatchStageResult {
             snapshot.runtime,
             TransactionOrigin::Batch { stage_index, transaction_index: index },
         );
-        let (result, delta) = outcome_into_result_and_delta(local.transact(tx));
+        let (result, delta) =
+            outcome_into_result_and_delta(local.transact(tx), local.history.is_enabled());
 
         Self { index, result, delta }
     }

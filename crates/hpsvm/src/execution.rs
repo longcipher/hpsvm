@@ -148,16 +148,18 @@ impl HPSVM {
         compute_budget: solana_compute_budget::compute_budget::ComputeBudget,
         accounts: Vec<(Address, AccountSharedData)>,
         number_of_top_level_instructions: usize,
+        rent: solana_rent::Rent,
     ) -> TransactionContext<'_> {
         TransactionContext::new(
             accounts,
-            self.get_sysvar(),
+            rent,
             compute_budget.max_instruction_stack_depth,
             compute_budget.max_instruction_trace_length,
             number_of_top_level_instructions,
         )
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub(crate) fn sanitize_transaction_no_verify(
         &self,
         tx: VersionedTransaction,
@@ -324,7 +326,8 @@ impl HPSVM {
             self.create_transaction_context(
                 compute_budget,
                 accounts,
-                tx.message().instructions().len()
+                tx.message().instructions().len(),
+                rent.as_ref().clone(),
             )
         );
 

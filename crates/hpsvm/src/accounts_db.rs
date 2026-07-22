@@ -312,8 +312,26 @@ impl AccountsDb {
         &self.environments
     }
 
+    /// Returns a handle to the shared runtime-environments `Arc`.
+    ///
+    /// Used by the default-program cache to verify that the current VM is
+    /// running under the process-wide shared default environment (pointer
+    /// identity) before reusing a memoized executable.
+    pub(crate) fn runtime_environments_arc(&self) -> &Arc<ProgramRuntimeEnvironments> {
+        &self.environments
+    }
+
     pub(crate) fn set_runtime_environments(&mut self, envs: ProgramRuntimeEnvironments) {
         self.environments = Arc::new(envs);
+    }
+
+    /// Install an already-shared runtime-environments `Arc` without re-wrapping.
+    ///
+    /// Default-constructed VMs share a single immutable environment across the
+    /// process so that default-program executables can be memoized once and
+    /// reused by every subsequent `HPSVM::new()`.
+    pub(crate) fn set_runtime_environments_arc(&mut self, envs: Arc<ProgramRuntimeEnvironments>) {
+        self.environments = envs;
     }
 
     pub(crate) const fn sysvar_cache(&self) -> &SysvarCache {
@@ -337,6 +355,11 @@ impl AccountsDb {
             .get(&pubkey)
             .is_some_and(|existing| is_cached_program_account(&pubkey, existing));
 
+        // Compute the post-insert cached-program classification up front so the
+        // owned `account` can be moved into the store without cloning it.
+        let has_cached_program =
+            account.lamports() != 0 && is_cached_program_account(&pubkey, &account);
+
         if is_managed_sysvar_account(&pubkey) && account.lamports() != 0 {
             validate_sysvar_account(pubkey, &account)?;
         }
@@ -345,15 +368,13 @@ impl AccountsDb {
             self.inner.remove(&pubkey);
             self.removed.insert(pubkey);
         } else {
-            self.add_account_no_checks(pubkey, account.clone());
+            self.add_account_no_checks(pubkey, account);
         }
 
         if is_managed_sysvar_account(&pubkey) {
             self.rebuild_sysvar_cache();
         }
 
-        let has_cached_program =
-            account.lamports() != 0 && is_cached_program_account(&pubkey, &account);
         if has_cached_program {
             let loaded_program = self.load_program(
                 self.get_account_ref(&pubkey)
@@ -419,11 +440,22 @@ impl AccountsDb {
         &mut self,
         mut accounts: Vec<(Address, AccountSharedData)>,
     ) -> Result<(), HPSVMError> {
-        // need to add programdata accounts first if there are any
-        itertools::partition(&mut accounts, |x| {
-            x.1.owner() == &bpf_loader_upgradeable::id() &&
-                x.1.data().first().is_some_and(|byte| *byte == 3)
-        });
+        // Programdata accounts (UpgradeableLoaderState::ProgramData, first byte
+        // == 3) must be inserted before the program accounts that reference
+        // them. In-place unstable partition via two-pointer swap, matching the
+        // previous `itertools::partition` semantics without pulling in the
+        // `itertools` dependency for this single call site.
+        let mut write = 0usize;
+        for read in 0..accounts.len() {
+            let is_programdata = accounts[read].1.owner() == &bpf_loader_upgradeable::id() &&
+                accounts[read].1.data().first().is_some_and(|byte| *byte == 3);
+            if is_programdata {
+                if write != read {
+                    accounts.swap(write, read);
+                }
+                write += 1;
+            }
+        }
         for (address, acc) in accounts {
             self.add_account(address, acc)?;
         }

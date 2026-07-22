@@ -3,15 +3,15 @@ resolver = "3"
 members = ["bin/*", "crates/*"]
 
 [workspace.package]
-version = "0.1.9"
+version = "0.1.10"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/longcipher/hpsvm"
 
 [workspace.dependencies]
 # local crates
-hpsvm = { path = "crates/hpsvm", version = "0.1.9" }
-hpsvm-fixture = { path = "crates/hpsvm-fixture", version = "0.1.9", default-features = false }
+hpsvm = { path = "crates/hpsvm", version = "0.1.10" }
+hpsvm-fixture = { path = "crates/hpsvm-fixture", version = "0.1.10", default-features = false }
 
 # external crates
 agave-feature-set = "4.1.2"
@@ -24,7 +24,6 @@ ed25519-dalek = "3.0.0"
 hashbrown = "0.17.1"
 hex = "0.4.3"
 hotpath = "0.21.5"
-itertools = "0.15.0"
 k256 = { version = "0.14.0", features = ["arithmetic"] }
 lru = "0.18.1"
 moka = { version = "0.12.10", default-features = false, features = ["sync"] }

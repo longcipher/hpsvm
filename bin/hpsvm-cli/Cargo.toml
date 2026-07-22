@@ -13,9 +13,11 @@ path = "src/main.rs"
 [features]
 default = []
 fd-compat = ["hpsvm-fixture/fd-json"]
+hotpath = ["dep:hotpath"]
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
+hotpath = { workspace = true, optional = true }
 hpsvm.workspace = true
 hpsvm-fixture = { workspace = true, default-features = false, features = [
     "bin-codec",

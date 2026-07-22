@@ -93,6 +93,7 @@ enum FixtureCommand {
     },
 }
 
+#[cfg_attr(feature = "hotpath", hotpath::main)]
 fn main() {
     if let Err(error) = run() {
         eprintln!("{error}");
@@ -100,6 +101,7 @@ fn main() {
     }
 }
 
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn run() -> Result<(), error::CliError> {
     match Cli::parse().command {
         Command::Cu(args) => match args.command {

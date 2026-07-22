@@ -72,6 +72,15 @@ impl TransactionHistory {
         }
         self.entries.peek(signature).is_some()
     }
+
+    /// Returns whether history recording is active (capacity > 0).
+    ///
+    /// Used by the commit path to skip building a history entry (and the
+    /// associated `TransactionResult` clone) entirely when history is disabled.
+    #[inline]
+    pub(crate) const fn is_enabled(&self) -> bool {
+        self.max_entries != 0
+    }
 }
 
 #[cfg(test)]
