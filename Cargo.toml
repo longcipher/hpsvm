@@ -103,8 +103,8 @@ wincode = "=0.5.5"
 
 # Pinned transitive deps — prevent crates.io drift to wincode 0.6.0
 # (agave 4.x still requires wincode 0.5.x; newer crate releases pull 0.6.0)
-solana-short-vec = "=3.2.2"
 solana-reward-info = "=6.2.0"
+solana-short-vec = "=3.2.2"
 solana-wincode-varint = "=1.0.0"
 
 [workspace.lints.clippy]

@@ -29,10 +29,7 @@ loader = []
 # SPL token operation helpers (transfer, mint, ATA, freeze, etc.).
 # `spl-token-interface` is always available because helpers.rs relies on it
 # for token balance diagnostics.
-token = [
-    "dep:spl-associated-token-account-interface",
-    "dep:solana-program-option",
-]
+token = ["dep:spl-associated-token-account-interface", "dep:solana-program-option"]
 # SPL token-2022 extensions; implies `token`.
 token-2022 = ["token", "dep:spl-token-2022-interface"]
 
@@ -86,8 +83,11 @@ solana-program-option = { workspace = true, optional = true }
 solana-program-pack.workspace = true
 solana-program-runtime.workspace = true
 solana-rent.workspace = true
+solana-reward-info.workspace = true
 solana-sdk-ids.workspace = true
 solana-sha256-hasher.workspace = true
+# Version-pinning deps to prevent wincode 0.6.0 drift (transitive)
+solana-short-vec.workspace = true
 solana-signature = { workspace = true, features = ["serde"] }
 solana-signer.workspace = true
 solana-slot-hashes.workspace = true
@@ -105,15 +105,12 @@ solana-sysvar-id.workspace = true
 solana-transaction = { workspace = true, features = ["verify", "wincode"] }
 solana-transaction-context = { workspace = true, features = ["wincode"] }
 solana-transaction-error.workspace = true
+solana-wincode-varint.workspace = true
 spl-associated-token-account-interface = { workspace = true, optional = true }
 spl-token-2022-interface = { workspace = true, optional = true }
 spl-token-interface.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-# Version-pinning deps to prevent wincode 0.6.0 drift (transitive)
-solana-short-vec.workspace = true
-solana-reward-info.workspace = true
-solana-wincode-varint.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
