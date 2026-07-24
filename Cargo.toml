@@ -3,15 +3,15 @@ resolver = "3"
 members = ["bin/*", "crates/*"]
 
 [workspace.package]
-version = "0.1.10"
+version = "0.1.11"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/longcipher/hpsvm"
 
 [workspace.dependencies]
 # local crates
-hpsvm = { path = "crates/hpsvm", version = "0.1.10" }
-hpsvm-fixture = { path = "crates/hpsvm-fixture", version = "0.1.10", default-features = false }
+hpsvm = { path = "crates/hpsvm", version = "0.1.11" }
+hpsvm-fixture = { path = "crates/hpsvm-fixture", version = "0.1.11", default-features = false }
 
 # external crates
 agave-feature-set = "4.1.2"
@@ -28,7 +28,7 @@ k256 = { version = "0.14.0", features = ["arithmetic"] }
 lru = "0.18.1"
 moka = { version = "0.12.10", default-features = false, features = ["sync"] }
 mollusk-svm-fuzz-fixture-firedancer = "0.14.0"
-noyalib = "0.0.15"
+noyalib = "0.0.16"
 nu-ansi-term = "0.50.1"
 parking_lot = "0.12.5"
 prost = "0.14.4"
@@ -38,7 +38,7 @@ serde_json = "1.0.151"
 sha2 = "0.11.0"
 smallvec = "1.15.2"
 solana-account = "4.3.1"
-solana-address = "2.6.1"
+solana-address = "=2.6.1"
 solana-address-lookup-table-interface = "3.1.0"
 solana-builtins = "4.1.2"
 solana-clock = "3.1.1"
@@ -52,7 +52,7 @@ solana-epoch-schedule = "3.2.0"
 solana-feature-gate-interface = "4.0.0"
 solana-fee = "4.1.2"
 solana-fee-structure = "3.0.0"
-solana-hash = "4.5.0"
+solana-hash = "=4.5.0"
 solana-instruction = "3.4.0"
 solana-instructions-sysvar = "4.0.0"
 solana-keypair = "3.1.2"
@@ -99,7 +99,7 @@ test-log = "0.2.21"
 thiserror = "2.0.19"
 tokio = "1.53.1"
 tracing = "0.1.44"
-wincode = "0.5.5"
+wincode = "=0.5.5"
 
 [workspace.lints.clippy]
 # Enable pedantic lints for stricter code quality
