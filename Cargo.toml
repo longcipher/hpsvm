@@ -107,6 +107,9 @@ solana-reward-info = "=6.2.0"
 solana-short-vec = "=3.2.2"
 solana-wincode-varint = "=1.0.0"
 
+[workspace.metadata.cargo-shear]
+ignored = ["solana-short-vec", "solana-reward-info", "solana-wincode-varint"]
+
 [workspace.lints.clippy]
 # Enable pedantic lints for stricter code quality
 # Priority -1 so individual lint settings override

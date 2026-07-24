@@ -12,6 +12,9 @@ include = ["src/**/*", "elf/**/*"]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
+[package.metadata.cargo-shear]
+ignored = ["solana-short-vec", "solana-reward-info", "solana-wincode-varint"]
+
 [features]
 internal-test = []
 invocation-inspect-callback = []
