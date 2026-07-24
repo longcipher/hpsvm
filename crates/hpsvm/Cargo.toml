@@ -110,6 +110,10 @@ spl-token-2022-interface = { workspace = true, optional = true }
 spl-token-interface.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+# Version-pinning deps to prevent wincode 0.6.0 drift (transitive)
+solana-short-vec.workspace = true
+solana-reward-info.workspace = true
+solana-wincode-varint.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
