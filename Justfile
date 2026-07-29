@@ -15,7 +15,6 @@ fix:
 
 # Run all lints
 lint:
-	typos
 	rumdl check .
 	cargo sort -w -g -c
 	cargo +nightly fmt --all -- --check

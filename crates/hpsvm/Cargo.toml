@@ -95,7 +95,7 @@ solana-signature = { workspace = true, features = ["serde"] }
 solana-signer.workspace = true
 solana-slot-hashes.workspace = true
 solana-slot-history.workspace = true
-solana-stake-interface = { workspace = true, features = ["sysvar", "wincode"] }
+solana-stake-interface = { workspace = true, features = ["sysvar"] }
 solana-svm-callback.workspace = true
 solana-svm-log-collector.workspace = true
 solana-svm-timings.workspace = true
@@ -106,7 +106,7 @@ solana-system-program.workspace = true
 solana-sysvar.workspace = true
 solana-sysvar-id.workspace = true
 solana-transaction = { workspace = true, features = ["verify", "wincode"] }
-solana-transaction-context = { workspace = true, features = ["wincode"] }
+solana-transaction-context.workspace = true
 solana-transaction-error.workspace = true
 solana-wincode-varint.workspace = true
 spl-associated-token-account-interface = { workspace = true, optional = true }

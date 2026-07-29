@@ -3,15 +3,15 @@ resolver = "3"
 members = ["bin/*", "crates/*"]
 
 [workspace.package]
-version = "0.1.11"
+version = "0.1.12"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/longcipher/hpsvm"
 
 [workspace.dependencies]
 # local crates
-hpsvm = { path = "crates/hpsvm", version = "0.1.11" }
-hpsvm-fixture = { path = "crates/hpsvm-fixture", version = "0.1.11", default-features = false }
+hpsvm = { path = "crates/hpsvm", version = "0.1.12" }
+hpsvm-fixture = { path = "crates/hpsvm-fixture", version = "0.1.12", default-features = false }
 
 # external crates
 agave-feature-set = "4.1.2"
@@ -23,12 +23,12 @@ cucumber = "0.23.0"
 ed25519-dalek = "3.0.0"
 hashbrown = "0.17.1"
 hex = "0.4.3"
-hotpath = "0.21.5"
+hotpath = "0.22.0"
 k256 = { version = "0.14.0", features = ["arithmetic"] }
 lru = "0.18.1"
 moka = { version = "0.12.10", default-features = false, features = ["sync"] }
 mollusk-svm-fuzz-fixture-firedancer = "0.14.0"
-noyalib = "0.0.16"
+noyalib = "0.0.17"
 nu-ansi-term = "0.50.1"
 parking_lot = "0.12.5"
 prost = "0.14.4"
@@ -37,8 +37,8 @@ serde = "1.0.229"
 serde_json = "1.0.151"
 sha2 = "0.11.0"
 smallvec = "1.15.2"
-solana-account = "4.3.1"
-solana-address = "=2.6.1"
+solana-account = "4.4.0"
+solana-address = "2.7.0"
 solana-address-lookup-table-interface = "3.1.0"
 solana-builtins = "4.1.2"
 solana-clock = "3.1.1"
@@ -51,13 +51,13 @@ solana-epoch-rewards = "3.1.0"
 solana-epoch-schedule = "3.2.0"
 solana-feature-gate-interface = "4.0.0"
 solana-fee = "4.1.2"
-solana-fee-structure = "3.0.0"
-solana-hash = "=4.5.0"
+solana-fee-structure = "4.1.0"
+solana-hash = "4.6.0"
 solana-instruction = "3.4.0"
 solana-instructions-sysvar = "4.0.0"
 solana-keypair = "3.1.2"
 solana-last-restart-slot = "3.1.0"
-solana-loader-v3-interface = "8.0.1"
+solana-loader-v3-interface = "8.1.0"
 solana-loader-v4-interface = "3.1.0"
 solana-message = "4.3.0"
 solana-native-token = "3.0.0"
@@ -84,7 +84,7 @@ solana-svm-log-collector = "4.1.2"
 solana-svm-timings = "4.1.2"
 solana-svm-transaction = "4.1.2"
 solana-syscalls = "4.1.2"
-solana-system-interface = "3.2.0"
+solana-system-interface = "3.3.0"
 solana-system-program = "4.1.2"
 solana-sysvar = "4.1.0"
 solana-sysvar-id = "3.1.0"
@@ -99,13 +99,13 @@ test-log = "0.2.21"
 thiserror = "2.0.19"
 tokio = "1.53.1"
 tracing = "0.1.44"
-wincode = "=0.5.5"
+wincode = "0.6.0"
 
 # Pinned transitive deps — prevent crates.io drift to wincode 0.6.0
 # (agave 4.x still requires wincode 0.5.x; newer crate releases pull 0.6.0)
-solana-reward-info = "=6.2.0"
-solana-short-vec = "=3.2.2"
-solana-wincode-varint = "=1.0.0"
+solana-reward-info = "6.3.0"
+solana-short-vec = "3.3.0"
+solana-wincode-varint = "1.1.0"
 
 [workspace.metadata.cargo-shear]
 ignored = ["solana-short-vec", "solana-reward-info", "solana-wincode-varint"]
@@ -287,3 +287,6 @@ strip = "symbols"
 opt-level = 3
 incremental = false
 codegen-units = 1
+
+[patch.crates-io]
+solana-transaction-status-client-types = { path = "patches/solana-transaction-status-client-types" }
