@@ -2223,7 +2223,7 @@ dependencies = [
 
 [[package]]
 name = "hpsvm"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "agave-feature-set",
  "agave-precompiles",
@@ -2310,7 +2310,7 @@ dependencies = [
 
 [[package]]
 name = "hpsvm-cli"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "clap",
  "hotpath",
@@ -2333,7 +2333,7 @@ dependencies = [
 
 [[package]]
 name = "hpsvm-fixture"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "hpsvm",
  "mollusk-svm-fuzz-fixture-firedancer",
@@ -2357,7 +2357,7 @@ dependencies = [
 
 [[package]]
 name = "hpsvm-fork-rpc"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "hotpath",
  "hpsvm",

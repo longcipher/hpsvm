@@ -74,7 +74,7 @@ impl TraceMetricsCollector {
                 .total_register_frames
                 .cmp(&left.total_register_frames)
                 .then_with(|| right.invocations.cmp(&left.invocations))
-                .then_with(|| left.program_id.to_string().cmp(&right.program_id.to_string()))
+                .then_with(|| left.program_id.cmp(&right.program_id))
         });
         metrics
     }

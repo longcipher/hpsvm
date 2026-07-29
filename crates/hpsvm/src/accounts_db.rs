@@ -350,13 +350,15 @@ impl AccountsDb {
         pubkey: Address,
         account: AccountSharedData,
     ) -> Result<(), HPSVMError> {
+        // Single lookup: classify the existing entry before we mutate the map.
+        // Under Polonius (NLL next-gen) the borrow from `get` ends naturally
+        // before the mutable operations below, avoiding the old borrow-checker
+        // limitation that forced the triple-lookup pattern.
         let had_cached_program = self
             .inner
             .get(&pubkey)
             .is_some_and(|existing| is_cached_program_account(&pubkey, existing));
 
-        // Compute the post-insert cached-program classification up front so the
-        // owned `account` can be moved into the store without cloning it.
         let has_cached_program =
             account.lamports() != 0 && is_cached_program_account(&pubkey, &account);
 
@@ -364,23 +366,30 @@ impl AccountsDb {
             validate_sysvar_account(pubkey, &account)?;
         }
 
+        // Load the program *before* moving `account` into the HashMap.
+        // `load_program` only needs `&AccountSharedData` and `&self` (for the
+        // programdata account lookup), so passing a reference to the local
+        // `account` avoids the post-insert `get_account_ref` lookup entirely.
+        let program_entry = if has_cached_program {
+            Some(Arc::new(self.load_program(&account)?))
+        } else {
+            None
+        };
+
         if account.lamports() == 0 {
             self.inner.remove(&pubkey);
             self.removed.insert(pubkey);
         } else {
-            self.add_account_no_checks(pubkey, account);
+            self.removed.remove(&pubkey);
+            self.inner.insert(pubkey, account);
         }
 
         if is_managed_sysvar_account(&pubkey) {
             self.rebuild_sysvar_cache();
         }
 
-        if has_cached_program {
-            let loaded_program = self.load_program(
-                self.get_account_ref(&pubkey)
-                    .expect("program account just inserted - this should never fail"),
-            )?;
-            self.programs_cache.replenish(pubkey, Arc::new(loaded_program));
+        if let Some(loaded_program) = program_entry {
+            self.programs_cache.replenish(pubkey, loaded_program);
         } else if had_cached_program {
             self.rebuild_program_cache()?;
         }
@@ -403,26 +412,29 @@ impl AccountsDb {
         let slot = self.sysvar_cache.get_clock().unwrap_or_default().slot;
         let mut cache = ProgramCacheForTxBatch::new(slot);
 
-        BUILTINS.iter().filter(|builtin| self.inner.contains_key(&builtin.program_id)).for_each(
-            |builtin| {
+        // Single lookup per builtin: `get` avoids the `contains_key` + implicit
+        // second lookup inside `replenish` that the old pattern incurred.
+        for builtin in BUILTINS {
+            if self.inner.get(&builtin.program_id).is_some() {
                 let loaded_program =
                     ProgramCacheEntry::new_builtin(0, builtin.name.len(), builtin.register_fn);
                 cache.replenish(builtin.program_id, Arc::new(loaded_program));
-            },
-        );
+            }
+        }
 
-        let program_keys = self
+        // Collect program keys *and* account references in a single iteration,
+        // eliminating the second `get_account_ref` lookup that the old
+        // collect-keys-then-lookup pattern required.
+        let program_entries: Vec<(Address, &AccountSharedData)> = self
             .inner
             .iter()
             .filter_map(|(pubkey, account)| {
-                is_cached_program_account(pubkey, account).then_some(*pubkey)
+                is_cached_program_account(pubkey, account).then_some((*pubkey, account))
             })
-            .collect::<Vec<_>>();
+            .collect();
 
-        for pubkey in program_keys {
-            let loaded_program = self.load_program(
-                self.get_account_ref(&pubkey).expect("program account should exist during rebuild - this indicates an internal inconsistency"),
-            )?;
+        for (pubkey, account) in program_entries {
+            let loaded_program = self.load_program(account)?;
             cache.replenish(pubkey, Arc::new(loaded_program));
         }
 
