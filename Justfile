@@ -86,12 +86,24 @@ check:
   cargo check --all-targets --all-features
 
 # Verify all workspace crates package and compile from their published layout
+# hpsvm-fork-rpc is excluded due to upstream wincode conflict (see publish recipe)
 publish-check:
-  cargo package --workspace --allow-dirty
+  cargo package --workspace --allow-dirty --exclude hpsvm-fork-rpc
+  cargo package -p hpsvm-fork-rpc --allow-dirty --no-verify
 
 # Publish all crates to crates.io
+#
+# hpsvm-fork-rpc is published with --no-verify because its transitive dep
+# solana-transaction-status-client-types 4.1.2 on crates.io requires wincode
+# ^0.5.3 while its dep solana-message (resolved to 4.5.0) requires wincode
+# 0.6.0, causing a version conflict during verification. The local
+# [patch.crates-io] fixes this for development but is not applied during
+# `cargo publish` verification. This is an upstream bug that will be resolved
+# when a new stable version of solana-transaction-status-client-types is
+# released.
 publish:
-  cargo publish --workspace
+  cargo publish --workspace --exclude hpsvm-fork-rpc
+  cargo publish -p hpsvm-fork-rpc --no-verify
 
 # Check for Chinese characters
 check-cn:
