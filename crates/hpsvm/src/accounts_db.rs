@@ -370,11 +370,8 @@ impl AccountsDb {
         // `load_program` only needs `&AccountSharedData` and `&self` (for the
         // programdata account lookup), so passing a reference to the local
         // `account` avoids the post-insert `get_account_ref` lookup entirely.
-        let program_entry = if has_cached_program {
-            Some(Arc::new(self.load_program(&account)?))
-        } else {
-            None
-        };
+        let program_entry =
+            if has_cached_program { Some(Arc::new(self.load_program(&account)?)) } else { None };
 
         if account.lamports() == 0 {
             self.inner.remove(&pubkey);
@@ -412,10 +409,10 @@ impl AccountsDb {
         let slot = self.sysvar_cache.get_clock().unwrap_or_default().slot;
         let mut cache = ProgramCacheForTxBatch::new(slot);
 
-        // Single lookup per builtin: `get` avoids the `contains_key` + implicit
+        // Single lookup per builtin: `contains_key` avoids the implicit
         // second lookup inside `replenish` that the old pattern incurred.
         for builtin in BUILTINS {
-            if self.inner.get(&builtin.program_id).is_some() {
+            if self.inner.contains_key(&builtin.program_id) {
                 let loaded_program =
                     ProgramCacheEntry::new_builtin(0, builtin.name.len(), builtin.register_fn);
                 cache.replenish(builtin.program_id, Arc::new(loaded_program));
