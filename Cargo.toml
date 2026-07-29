@@ -275,6 +275,14 @@ deprecated = "allow"
 [workspace.lints.rustdoc]
 all = "warn"
 
+# Dev profile tuned for faster compilation while Polonius is enabled.
+# `line-tables-only` keeps panic backtraces without the cost of full debug info,
+# and explicit `incremental = true` ensures incremental reuse across edits.
+# Polonius is enabled via `.cargo/config.toml` → `build.rustflags = ["-Zpolonius=next"]`.
+[profile.dev]
+debug = "line-tables-only"
+incremental = true
+
 [profile.bench]
 debug = true
 

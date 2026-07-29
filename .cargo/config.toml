@@ -1,0 +1,10 @@
+[build]
+# Pin rustc to the rustup nightly proxy so the correct toolchain is always
+# used regardless of PATH ordering (the IDE may prepend /usr/bin which
+# contains the system stable rustc).
+#rustc = "$HOME/.cargo/bin/rustc"
+
+# Enable Polonius next-generation borrow checker for all crates.
+# `polonius=next` is the newer, more compatible Polonius implementation that
+# does not ICE on third-party code (e.g. hashbrown 0.17.x).
+rustflags = ["-Zpolonius=next"]
