@@ -25,7 +25,6 @@ hpsvm-fixture = { workspace = true, default-features = false, features = [
     "json-codec",
     "markdown",
 ] }
-noyalib.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 solana-address.workspace = true

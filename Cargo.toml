@@ -3,7 +3,7 @@ resolver = "3"
 members = ["bin/*", "crates/*"]
 
 [workspace.package]
-version = "0.1.13"
+version = "0.1.14"
 edition = "2024"
 authors = ["Akagi201 <akagi201@gmail.com>"]
 license = "Apache-2.0"
@@ -11,29 +11,27 @@ repository = "https://github.com/longcipher/hpsvm"
 
 [workspace.dependencies]
 # local crates
-hpsvm = { path = "crates/hpsvm", version = "0.1.13" }
-hpsvm-fixture = { path = "crates/hpsvm-fixture", version = "0.1.13", default-features = false }
+hpsvm = { path = "crates/hpsvm", version = "0.1.14" }
+hpsvm-fixture = { path = "crates/hpsvm-fixture", version = "0.1.14", default-features = false }
 
 # external crates
 agave-feature-set = "4.1.2"
 agave-precompiles = "4.1.2"
 agave-reserved-account-keys = "4.1.2"
-clap = "4.6.3"
+clap = "4.6.5"
 criterion = "0.8.2"
 cucumber = "0.23.0"
 ed25519-dalek = "3.0.0"
 hashbrown = "0.17.1"
 hex = "0.4.3"
-hotpath = "0.22.0"
+hotpath = "0.23.0"
 k256 = { version = "0.14.0", features = ["arithmetic"] }
-lru = "0.18.1"
-moka = { version = "0.12.10", default-features = false, features = ["sync"] }
+lru = "0.18.2"
 mollusk-svm-fuzz-fixture-firedancer = "0.14.0"
-noyalib = "0.0.17"
 nu-ansi-term = "0.50.1"
 parking_lot = "0.12.5"
 prost = "0.14.4"
-qualifier_attr = "0.2.2"
+rayon = "1.12.0"
 serde = "1.0.229"
 serde_json = "1.0.151"
 sha2 = "0.11.0"
@@ -79,7 +77,7 @@ solana-signature = "3.4.1"
 solana-signer = "3.0.1"
 solana-slot-hashes = "3.1.0"
 solana-slot-history = "3.1.0"
-solana-stake-interface = "4.3.1"
+solana-stake-interface = "4.4.0"
 solana-svm-callback = "4.1.2"
 solana-svm-log-collector = "4.1.2"
 solana-svm-timings = "4.1.2"
@@ -283,6 +281,14 @@ all = "warn"
 [profile.dev]
 debug = "line-tables-only"
 incremental = true
+
+# Dependencies are compiled once and reused across every incremental rebuild,
+# so optimizing them costs nothing in the edit loop while making `cargo test`
+# and `cargo bench` dramatically faster: SBF program execution runs through
+# `solana-program-runtime`, which is unusably slow at `opt-level = 0`.
+[profile.dev.package."*"]
+debug = false
+opt-level = 2
 
 [profile.bench]
 debug = true

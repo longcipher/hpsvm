@@ -5,7 +5,7 @@
 ### Added
 
 - Add explicit `ExecutionOutcome` flow through `HPSVM::transact` and `HPSVM::commit_transaction`.
-- Add `AccountSource` integration plus the `hpsvm-fork-rpc::RpcForkSource` companion crate for cached RPC-backed reads.
+- Add `AccountSource` integration plus the `fork`-feature `RpcForkSource` for cached RPC-backed reads.
 - Add extracted execution environment surfaces, including `HPSVM::block_env` and the public `Inspector` hook via `HPSVM::with_inspector`.
 
 ### Changed

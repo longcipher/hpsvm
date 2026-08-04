@@ -6,7 +6,7 @@
 
 **Architecture:** Keep `HPSVM` as the public facade. First, lift transaction execution onto a single `transact -> commit` core so `send_transaction`, `simulate_transaction`, and batch execution share one result model. Second, split `AccountsDb` into a local mutable overlay plus a read-through `AccountSource` boundary. Third, extract internal environment/config structs, then add inspector and runtime-registry adapters incrementally so existing APIs remain source-compatible.
 
-**Tech Stack:** Rust 2024 workspace, `hpsvm` core crate, a new `hpsvm-fork-rpc` companion crate under `crates/`, existing Solana runtime crates, `cargo test`, and repo-wide `just` validation commands.
+**Tech Stack:** Rust 2024 workspace, `hpsvm` core crate (with a feature-gated `fork` module), existing Solana runtime crates, `cargo test`, and repo-wide `just` validation commands.
 
 **Status:** The phased refactor described here is now implemented in-tree. `ExecutionOutcome`, `AccountSource`, `RpcForkSource`, `BlockEnv`, `Inspector`, and `RuntimeExtensionRegistry` all landed behind the existing `HPSVM` facade; treat Task 7's validation sequence as the release gate before shipping.
 
@@ -321,20 +321,22 @@ git add crates/hpsvm/src/account_source.rs crates/hpsvm/src/accounts_db.rs crate
 git commit -m "feat: add read-through account source boundary"
 ```
 
-### Task 4: Add a Feature-Gated RPC Fork Companion Crate
+### Task 4: Add a Feature-Gated RPC Fork Module to `hpsvm`
+
+> **Implemented note:** The fork feature was ultimately merged directly into the `hpsvm` crate behind the `fork` feature flag (no separate companion crate). The materialized types live in `crates/hpsvm/src/fork.rs` as `hpsvm::fork::RpcForkSource` and `hpsvm::fork::RpcForkSourceBuilder`, with its integration test at `crates/hpsvm/tests/fork.rs`.
 
 **Files:**
 
-- Create: `crates/fork-rpc/Cargo.toml`
-- Create: `crates/fork-rpc/src/lib.rs`
-- Create: `crates/fork-rpc/tests/rpc_fork.rs`
-- Modify: `Cargo.toml`
+- Create: `crates/hpsvm/src/fork.rs`
+- Create: `crates/hpsvm/tests/fork.rs`
+- Modify: `crates/hpsvm/Cargo.toml` (add `fork` feature)
+- Modify: `crates/hpsvm/src/lib.rs` (add `#[cfg(feature = "fork")] pub mod fork;`)
 - Modify: `README.md`
 - [ ] **Step 1: Write the failing test**
 
 ```rust
 use hpsvm::HPSVM;
-use hpsvm_fork_rpc::RpcForkSource;
+use hpsvm::fork::RpcForkSource;
 use solana_address::Address;
 
 #[test]
@@ -357,14 +359,14 @@ fn rpc_fork_source_serves_cached_accounts_without_refetching() {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p hpsvm-fork-rpc --test rpc_fork rpc_fork_source_serves_cached_accounts_without_refetching -- --exact`
+Run: `cargo test -p hpsvm --features fork --test fork rpc_fork_source_serves_cached_accounts_without_refetching -- --exact`
 
-Expected: FAIL because the new crate and builder do not exist.
+Expected: FAIL because the module and builder do not exist.
 
 - [ ] **Step 3: Write minimal implementation**
 
 ```rust
-// crates/fork-rpc/src/lib.rs
+// crates/hpsvm/src/fork.rs
 #[derive(Clone)]
 pub struct RpcForkSource {
     client: solana_rpc_client::rpc_client::RpcClient,
@@ -397,15 +399,15 @@ impl hpsvm::AccountSource for RpcForkSource {
 
 - [ ] **Step 4: Run focused validation**
 
-Run: `cargo test -p hpsvm-fork-rpc --test rpc_fork -- --nocapture`
+Run: `cargo test -p hpsvm --features fork --test fork -- --nocapture`
 
 Expected: PASS against a local RPC fixture or mocked client. The source caches fetched accounts and exposes deterministic counters for regression tests.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add Cargo.toml crates/fork-rpc/Cargo.toml crates/fork-rpc/src/lib.rs crates/fork-rpc/tests/rpc_fork.rs README.md
-git commit -m "feat: add rpc fork account source crate"
+git add crates/hpsvm/src/fork.rs crates/hpsvm/tests/fork.rs crates/hpsvm/Cargo.toml crates/hpsvm/src/lib.rs README.md
+git commit -m "feat: add rpc fork account source module behind the fork feature"
 ```
 
 ### Task 5: Extract Internal `SvmEnv` and `SvmCfg` From `HPSVM`
@@ -592,7 +594,7 @@ git commit -m "feat: add inspector and runtime extension registry"
 - `HPSVM::transact`
 - `HPSVM::commit_transaction`
 - `HPSVM::with_account_source`
-- `hpsvm-fork-rpc::RpcForkSource`
+- `hpsvm::fork::RpcForkSource`
 - `HPSVM::block_env`
 - `HPSVM::with_inspector`
 ```

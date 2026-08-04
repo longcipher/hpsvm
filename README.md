@@ -39,10 +39,10 @@ Add `hpsvm` as a development dependency to your Solana program project:
 cargo add --dev hpsvm
 ```
 
-To read through live RPC state while keeping execution local, add the companion crate as well:
+To read through live RPC state while keeping execution local, enable the `fork` feature:
 
 ```sh
-cargo add --dev hpsvm-fork-rpc
+cargo add --dev hpsvm --features fork
 ```
 
 ### 🤖 Quick Example
@@ -134,11 +134,10 @@ assert_eq!(svm.block_env().latest_blockhash, svm.latest_blockhash());
 
 ### Forking RPC State
 
-`hpsvm` can read missing accounts through a configured account source. The `hpsvm-fork-rpc` companion crate provides an RPC-backed source with a local cache:
+`hpsvm` can read missing accounts through a configured account source. The `fork` feature provides an RPC-backed source with a bounded, TTL-aware local cache:
 
 ```rust
-use hpsvm::HPSVM;
-use hpsvm_fork_rpc::RpcForkSource;
+use hpsvm::{HPSVM, fork::RpcForkSource};
 
 let source = RpcForkSource::builder()
     .with_rpc_url("http://127.0.0.1:8899")

@@ -16,11 +16,12 @@ hpsvm/
 ├── bin/hpsvm-cli/          # CLI binary (fixture tools)
 ├── crates/
 │   ├── hpsvm/              # Core VM simulator library
-│   ├── hpsvm-fixture/      # Test fixture generation
-│   ├── hpsvm-fixture-fd/   # Firedancer-compatible fixtures
-│   ├── loader/             # BPF loader helpers (deploy, upgrade authority)
-│   ├── token/              # SPL token instruction builders
-│   └── fork-rpc/           # RPC fork client
+│   │                       #   feature `loader`: BPF loader helpers
+│   │                       #   feature `token` / `token-2022`: SPL builders
+│   │                       #   feature `fork`: RPC-backed account source
+│   │                       #   feature `precompiles`, `register-tracing`, ...
+│   └── hpsvm-fixture/      # Fixture capture/replay + CU benching
+│                           #   feature `fd-codec`: Firedancer fixtures
 ├── features/               # BDD Gherkin feature files
 └── Justfile                # Task runner recipes
 ```

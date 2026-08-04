@@ -112,7 +112,9 @@ ecdysis = "1.1.1"
 
 - Prefer atomic types (`AtomicUsize`, `AtomicBool`, etc.) with explicit `Ordering` for simple shared state.
 - Use `scc` for highly concurrent maps/sets; avoid `Arc<RwLock<HashMap<...>>>` and `Arc<Mutex<HashMap<...>>>` on hot paths.
-- Use `moka` for concurrent caches instead of custom LRU implementations.
+- Use an existing cache crate instead of a custom LRU implementation. Prefer `lru`
+  (optionally behind `parking_lot::Mutex`) for bounded caches; reach for `moka` only
+  when its concurrent eviction, refresh-ahead, or weigher features are actually needed.
 - Prefer `parking_lot::{Mutex, RwLock}` over `std::sync` locks for synchronous locking.
 - Release `std::sync::Mutex` and `parking_lot::Mutex` guards before hitting any `.await` point.
 - Use `tokio::sync::Mutex` for locks that span across `.await` points.

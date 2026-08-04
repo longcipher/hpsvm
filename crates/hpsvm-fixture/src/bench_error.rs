@@ -57,6 +57,6 @@ pub enum BenchError {
     },
     #[error("invalid baseline report {path:?}: {reason}")]
     InvalidBaseline { path: PathBuf, reason: String },
-    #[error("report I/O via `{operation}` requires the `markdown` feature")]
+    #[error("report I/O via `{operation}` requires the `report-io` feature")]
     ReportIoDisabled { operation: &'static str },
 }

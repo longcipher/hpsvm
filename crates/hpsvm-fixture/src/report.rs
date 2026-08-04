@@ -2,11 +2,18 @@ use std::{collections::BTreeMap, path::Path};
 
 use crate::{BenchError, generated_at_string, solana_runtime_version_string};
 
-#[cfg(feature = "markdown")]
-const BASELINE_REPORT_FILE_NAME: &str = "cu-report.baseline";
+/// Machine-readable baseline sidecar written next to the human-readable report.
+///
+/// Compute-unit baselines round-trip through this file, never through the
+/// Markdown report. Keeping the two concerns separate means the Markdown output
+/// is a pure rendering target: it can be restyled freely without breaking
+/// baseline comparison, and no reverse parser has to exist.
+#[cfg(feature = "report-io")]
+pub(crate) const BASELINE_REPORT_FILE_NAME: &str = "cu-report.baseline.json";
 
+/// Human-readable report. Write-only: never parsed back.
 #[cfg(feature = "markdown")]
-const BASELINE_REPORT_MAGIC: &[u8] = b"HPSVM-CU-BASELINE-V1\n";
+pub(crate) const MARKDOWN_REPORT_FILE_NAME: &str = "cu-report.md";
 
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -35,9 +42,6 @@ pub struct CuDelta {
     pub percent: f64,
 }
 
-#[cfg(feature = "markdown")]
-pub(crate) const MARKDOWN_REPORT_FILE_NAME: &str = "cu-report.md";
-
 impl CuReport {
     pub(crate) fn new(rows: Vec<CuReportRow>) -> Self {
         Self {
@@ -61,12 +65,12 @@ impl CuReport {
             return Ok(BTreeMap::new());
         };
 
-        #[cfg(feature = "markdown")]
+        #[cfg(feature = "report-io")]
         {
             load_baseline_rows(path)
         }
 
-        #[cfg(not(feature = "markdown"))]
+        #[cfg(not(feature = "report-io"))]
         {
             let _ = path;
             Err(BenchError::ReportIoDisabled { operation: "baseline_dir" })
@@ -78,12 +82,12 @@ impl CuReport {
             return Ok(());
         };
 
-        #[cfg(feature = "markdown")]
+        #[cfg(feature = "report-io")]
         {
             write_report(self, path)
         }
 
-        #[cfg(not(feature = "markdown"))]
+        #[cfg(not(feature = "report-io"))]
         {
             let _ = path;
             Err(BenchError::ReportIoDisabled { operation: "output_dir" })
@@ -138,182 +142,29 @@ fn format_delta(delta: Option<CuDelta>) -> String {
     )
 }
 
-#[cfg(feature = "markdown")]
+#[cfg(feature = "report-io")]
 fn load_baseline_rows(path: &Path) -> Result<BTreeMap<String, u64>, BenchError> {
-    if let Some(rows) = load_sidecar_rows(path)? {
-        return Ok(rows);
-    }
-
-    load_markdown_rows(path)
-}
-
-#[cfg(feature = "markdown")]
-fn load_sidecar_rows(path: &Path) -> Result<Option<BTreeMap<String, u64>>, BenchError> {
     let baseline_path = path.join(BASELINE_REPORT_FILE_NAME);
     let bytes = match std::fs::read(&baseline_path) {
         Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(BTreeMap::new());
+        }
         Err(error) => {
             return Err(BenchError::ReadBaseline { path: baseline_path, source: error });
         }
     };
 
-    parse_sidecar_rows(&baseline_path, &bytes).map(Some)
-}
-
-#[cfg(feature = "markdown")]
-fn load_markdown_rows(path: &Path) -> Result<BTreeMap<String, u64>, BenchError> {
-    let baseline_path = path.join(MARKDOWN_REPORT_FILE_NAME);
-    let markdown = match std::fs::read_to_string(&baseline_path) {
-        Ok(markdown) => markdown,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
-        Err(error) => {
-            return Err(BenchError::ReadBaseline { path: baseline_path, source: error });
-        }
-    };
-
-    parse_baseline_rows(&baseline_path, &markdown)
-}
-
-#[cfg(feature = "markdown")]
-fn parse_baseline_rows(path: &Path, markdown: &str) -> Result<BTreeMap<String, u64>, BenchError> {
-    let mut rows = BTreeMap::new();
-
-    for line in markdown.lines().map(str::trim).filter(|line| line.starts_with('|')) {
-        let columns = parse_markdown_columns(path, line)?;
-        if columns[0] == "Name" || is_separator_row(&columns) {
-            continue;
-        }
-
-        let compute_units = columns[1].parse().map_err(|error| BenchError::InvalidBaseline {
-            path: path.to_path_buf(),
-            reason: format!("failed to parse compute units for `{}`: {error}", columns[0]),
-        })?;
-
-        if rows.insert(columns[0].clone(), compute_units).is_some() {
-            return Err(BenchError::InvalidBaseline {
-                path: path.to_path_buf(),
-                reason: format!("duplicate baseline row `{}`", columns[0]),
-            });
-        }
-    }
-
-    Ok(rows)
-}
-
-#[cfg(feature = "markdown")]
-fn parse_markdown_columns(path: &Path, line: &str) -> Result<Vec<String>, BenchError> {
-    let mut columns = Vec::new();
-    let mut current = String::new();
-    let mut escaped = false;
-
-    for character in line.chars().skip(1) {
-        if escaped {
-            current.push(character);
-            escaped = false;
-            continue;
-        }
-
-        match character {
-            '\\' => escaped = true,
-            '|' => {
-                columns.push(current.trim().to_string());
-                current.clear();
-            }
-            _ => current.push(character),
-        }
-    }
-
-    if escaped {
-        return Err(BenchError::InvalidBaseline {
-            path: path.to_path_buf(),
-            reason: String::from("unterminated escape sequence in markdown table row"),
-        });
-    }
-
-    if !current.trim().is_empty() {
-        return Err(BenchError::InvalidBaseline {
-            path: path.to_path_buf(),
-            reason: format!("markdown table row is missing a trailing separator: {line}"),
-        });
-    }
-
-    if matches!(columns.last(), Some(last) if last.is_empty()) {
-        columns.pop();
-    }
-
-    if columns.len() != 4 {
-        return Err(BenchError::InvalidBaseline {
-            path: path.to_path_buf(),
-            reason: format!(
-                "expected 4 columns in markdown table row, found {}: {line}",
-                columns.len()
-            ),
-        });
-    }
-
-    Ok(columns)
-}
-
-#[cfg(feature = "markdown")]
-fn is_separator_row(columns: &[String]) -> bool {
-    columns
-        .iter()
-        .all(|column| column.chars().all(|character| matches!(character, '-' | ':' | ' ')))
-}
-
-#[cfg(feature = "markdown")]
-fn parse_sidecar_rows(path: &Path, bytes: &[u8]) -> Result<BTreeMap<String, u64>, BenchError> {
-    if !bytes.starts_with(BASELINE_REPORT_MAGIC) {
-        return Err(BenchError::InvalidBaseline {
-            path: path.to_path_buf(),
-            reason: String::from("missing baseline sidecar header"),
-        });
-    }
+    let report: CuReport = serde_json::from_slice(&bytes).map_err(|error| {
+        BenchError::InvalidBaseline { path: baseline_path.clone(), reason: error.to_string() }
+    })?;
 
     let mut rows = BTreeMap::new();
-    let mut offset = BASELINE_REPORT_MAGIC.len();
-
-    while offset < bytes.len() {
-        let name_len_bytes =
-            bytes.get(offset..offset + std::mem::size_of::<u32>()).ok_or_else(|| {
-                BenchError::InvalidBaseline {
-                    path: path.to_path_buf(),
-                    reason: String::from("truncated baseline sidecar row header"),
-                }
-            })?;
-        offset += std::mem::size_of::<u32>();
-        let name_len = u32::from_le_bytes(
-            name_len_bytes.try_into().expect("name_len_bytes is exactly 4 bytes"),
-        ) as usize;
-
-        let name_bytes =
-            bytes.get(offset..offset + name_len).ok_or_else(|| BenchError::InvalidBaseline {
-                path: path.to_path_buf(),
-                reason: String::from("truncated baseline sidecar row name"),
-            })?;
-        offset += name_len;
-
-        let compute_units_bytes = bytes
-            .get(offset..offset + std::mem::size_of::<u64>())
-            .ok_or_else(|| BenchError::InvalidBaseline {
-                path: path.to_path_buf(),
-                reason: String::from("truncated baseline sidecar compute units value"),
-            })?;
-        offset += std::mem::size_of::<u64>();
-
-        let name =
-            std::str::from_utf8(name_bytes).map_err(|error| BenchError::InvalidBaseline {
-                path: path.to_path_buf(),
-                reason: format!("invalid utf-8 in baseline sidecar row name: {error}"),
-            })?;
-        let compute_units = u64::from_le_bytes(
-            compute_units_bytes.try_into().expect("compute_units_bytes is exactly 8 bytes"),
-        );
-
-        if rows.insert(String::from(name), compute_units).is_some() {
+    for row in report.rows {
+        let name = row.name;
+        if rows.insert(name.clone(), row.compute_units).is_some() {
             return Err(BenchError::InvalidBaseline {
-                path: path.to_path_buf(),
+                path: baseline_path,
                 reason: format!("duplicate baseline row `{name}`"),
             });
         }
@@ -322,39 +173,81 @@ fn parse_sidecar_rows(path: &Path, bytes: &[u8]) -> Result<BTreeMap<String, u64>
     Ok(rows)
 }
 
-#[cfg(feature = "markdown")]
+#[cfg(feature = "report-io")]
 fn write_report(report: &CuReport, path: &Path) -> Result<(), BenchError> {
     std::fs::create_dir_all(path)
         .map_err(|source| BenchError::CreateOutputDir { path: path.to_path_buf(), source })?;
 
     let baseline_path = path.join(BASELINE_REPORT_FILE_NAME);
-    std::fs::write(&baseline_path, encode_sidecar_rows(report, &baseline_path)?)
+    let baseline = serde_json::to_vec_pretty(report).map_err(|error| {
+        BenchError::InvalidBaseline { path: baseline_path.clone(), reason: error.to_string() }
+    })?;
+    std::fs::write(&baseline_path, baseline)
         .map_err(|source| BenchError::WriteReport { path: baseline_path, source })?;
 
-    let report_path = path.join(MARKDOWN_REPORT_FILE_NAME);
-    std::fs::write(&report_path, report.render_markdown())
-        .map_err(|source| BenchError::WriteReport { path: report_path, source })
-}
-
-#[cfg(feature = "markdown")]
-fn encode_sidecar_rows(report: &CuReport, path: &Path) -> Result<Vec<u8>, BenchError> {
-    let mut bytes = Vec::from(BASELINE_REPORT_MAGIC);
-
-    for row in &report.rows {
-        let name_bytes = row.name.as_bytes();
-        let name_len =
-            u32::try_from(name_bytes.len()).map_err(|_| BenchError::InvalidBaseline {
-                path: path.to_path_buf(),
-                reason: format!(
-                    "case name `{}` is too long to write to baseline sidecar",
-                    row.name
-                ),
-            })?;
-
-        bytes.extend_from_slice(&name_len.to_le_bytes());
-        bytes.extend_from_slice(name_bytes);
-        bytes.extend_from_slice(&row.compute_units.to_le_bytes());
+    #[cfg(feature = "markdown")]
+    {
+        let report_path = path.join(MARKDOWN_REPORT_FILE_NAME);
+        std::fs::write(&report_path, report.render_markdown())
+            .map_err(|source| BenchError::WriteReport { path: report_path, source })?;
     }
 
-    Ok(bytes)
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cu_delta_handles_zero_baseline() {
+        assert_eq!(CuDelta::between(0, 0), CuDelta { absolute: 0, percent: 0.0 });
+        assert_eq!(CuDelta::between(0, 10), CuDelta { absolute: 10, percent: 100.0 });
+    }
+
+    #[cfg(feature = "report-io")]
+    #[test]
+    fn baseline_round_trips_through_json_sidecar() {
+        let dir = std::env::temp_dir().join(format!(
+            "hpsvm-report-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock is after the unix epoch")
+                .as_nanos()
+        ));
+
+        let report = CuReport::new(vec![
+            CuReportRow {
+                name: String::from("alpha | with pipe"),
+                compute_units: 1234,
+                delta: None,
+                pass: true,
+            },
+            CuReportRow {
+                name: String::from("beta"),
+                compute_units: 42,
+                delta: Some(CuDelta::between(40, 42)),
+                pass: true,
+            },
+        ]);
+
+        report.write_to_dir(Some(&dir)).expect("report should write");
+        let baseline = CuReport::baseline_map(Some(&dir)).expect("baseline should load");
+
+        assert_eq!(baseline.get("alpha | with pipe").copied(), Some(1234));
+        assert_eq!(baseline.get("beta").copied(), Some(42));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[cfg(feature = "report-io")]
+    #[test]
+    fn missing_baseline_directory_yields_empty_map() {
+        let dir = std::env::temp_dir().join("hpsvm-report-does-not-exist");
+        assert!(
+            CuReport::baseline_map(Some(&dir))
+                .expect("missing baseline is not an error")
+                .is_empty()
+        );
+    }
 }

@@ -1,5 +1,6 @@
-use std::{collections::HashSet, sync::Arc, thread};
+use std::{collections::HashSet, sync::Arc};
 
+use rayon::prelude::*;
 use solana_address::Address;
 use solana_message::VersionedMessage;
 use solana_transaction::{sanitized::SanitizedTransaction, versioned::VersionedTransaction};
@@ -209,6 +210,17 @@ fn sanitize_transaction_for_batch(
     })
 }
 
+/// Execute every transaction in a conflict-free stage in parallel.
+///
+/// Uses Rayon's work-stealing scheduler rather than a static chunk split.
+/// Compute-unit cost varies by orders of magnitude between transactions (a bare
+/// `SystemProgram::transfer` versus a deeply nested CPI), so an even split of
+/// indexes across workers leaves most threads idle while the unluckiest chunk
+/// finishes. Work stealing keeps every worker busy until the stage drains.
+///
+/// [`rayon::iter::ParallelIterator::map_init`] builds the per-worker [`HPSVM`]
+/// clone lazily, once per Rayon worker thread rather than once per transaction,
+/// which preserves the amortized setup cost of the previous chunked design.
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn execute_transaction_batch_stage(
     vm: &HPSVM,
@@ -217,60 +229,31 @@ fn execute_transaction_batch_stage(
     transactions: &[VersionedTransaction],
 ) -> Vec<BatchStageResult> {
     let snapshot = BatchExecutionSnapshot::from_vm(vm);
-    let worker_limit = batch_stage_worker_limit(stage.transaction_indexes.len());
 
-    debug_assert!(worker_limit > 0, "batch stage should never have zero workers");
-
-    let chunk_size = stage.transaction_indexes.len().div_ceil(worker_limit);
-
-    thread::scope(|scope| {
-        let handles = stage
-            .transaction_indexes
-            .chunks(chunk_size)
-            .map(|transaction_indexes| {
-                let worker_accounts = Arc::clone(&snapshot.runtime.accounts);
-                let worker_history = Arc::clone(&snapshot.runtime.history);
-
-                scope.spawn(move || {
-                    let runtime =
-                        HpsvmRuntimeState { accounts: worker_accounts, history: worker_history };
-                    let local = worker_vm(
-                        vm,
-                        runtime,
-                        TransactionOrigin::Batch {
-                            stage_index,
-                            transaction_index: transaction_indexes[0],
-                        },
-                    );
-
-                    transaction_indexes
-                        .iter()
-                        .map(|&index| {
-                            let tx = transactions[index].clone();
-                            let (result, delta) = outcome_into_result_and_delta(
-                                local.transact(tx),
-                                local.history.is_enabled(),
-                            );
-                            BatchStageResult { index, result, delta }
-                        })
-                        .collect::<Vec<_>>()
-                })
-            })
-            .collect::<Vec<_>>();
-
-        handles
-            .into_iter()
-            .flat_map(|handle| handle.join().expect("transaction batch worker should not panic"))
-            .collect()
-    })
-}
-
-fn default_batch_stage_worker_limit() -> usize {
-    thread::available_parallelism().map_or(1, |parallelism| parallelism.get())
-}
-
-fn batch_stage_worker_limit(transaction_count: usize) -> usize {
-    transaction_count.min(default_batch_stage_worker_limit())
+    stage
+        .transaction_indexes
+        .par_iter()
+        .map_init(
+            || {
+                worker_vm(
+                    vm,
+                    snapshot.runtime.clone(),
+                    // The origin's `transaction_index` is overwritten per
+                    // transaction below; the stage index is what matters here.
+                    TransactionOrigin::Batch { stage_index, transaction_index: 0 },
+                )
+            },
+            |local, &index| {
+                local.inspection_origin =
+                    TransactionOrigin::Batch { stage_index, transaction_index: index };
+                let (result, delta) = outcome_into_result_and_delta(
+                    local.transact(transactions[index].clone()),
+                    local.history.is_enabled(),
+                );
+                BatchStageResult { index, result, delta }
+            },
+        )
+        .collect()
 }
 
 /// Construct a per-worker VM snapshot for parallel batch execution.
@@ -486,12 +469,36 @@ mod tests {
     }
 
     #[test]
-    fn batch_stage_worker_limit_caps_large_stage_to_available_parallelism() {
-        let available_parallelism = default_batch_stage_worker_limit();
-        let transaction_count = available_parallelism + 1;
+    fn batch_stage_preserves_per_transaction_origin_under_work_stealing() {
+        let mut svm = HPSVM::new();
+        let blockhash = svm.latest_blockhash();
 
-        assert_eq!(batch_stage_worker_limit(transaction_count), available_parallelism);
-        assert!(batch_stage_worker_limit(transaction_count) < transaction_count);
+        let senders: Vec<Keypair> = (0..8).map(|_| Keypair::new()).collect();
+        for sender in &senders {
+            svm.airdrop(&sender.pubkey(), 1_000_000_000).unwrap();
+        }
+
+        let transactions: Vec<VersionedTransaction> = senders
+            .iter()
+            .map(|sender| {
+                let ix = transfer(&sender.pubkey(), &Address::new_unique(), 1);
+                let msg = Message::new_with_blockhash(&[ix], Some(&sender.pubkey()), &blockhash);
+                VersionedTransaction::try_new(VersionedMessage::Legacy(msg), &[sender]).unwrap()
+            })
+            .collect();
+
+        let plan = plan_transaction_batch(&svm, &transactions).unwrap();
+        let stage = plan.stages.first().expect("conflict-free txs share one stage");
+        assert_eq!(stage.transaction_indexes.len(), transactions.len());
+
+        let results = execute_transaction_batch_stage(&svm, 0, stage, &transactions);
+
+        // Work stealing returns results out of order, but every index must be
+        // present exactly once and carry its own successful outcome.
+        let mut indexes: Vec<usize> = results.iter().map(|result| result.index).collect();
+        indexes.sort_unstable();
+        assert_eq!(indexes, (0..transactions.len()).collect::<Vec<_>>());
+        assert!(results.iter().all(|result| result.result.is_ok()));
     }
 
     #[test]

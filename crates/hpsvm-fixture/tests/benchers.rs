@@ -17,7 +17,7 @@ use solana_signer::Signer;
 use solana_system_interface::instruction::transfer;
 use solana_transaction::versioned::VersionedTransaction;
 
-#[cfg(feature = "markdown")]
+#[cfg(feature = "report-io")]
 fn unique_temp_dir() -> std::path::PathBuf {
     let nanos =
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
@@ -237,9 +237,9 @@ fn cu_delta_reports_absolute_and_percent_change() {
     assert_eq!(delta.percent, 25.0);
 }
 
-#[cfg(feature = "markdown")]
+#[cfg(feature = "report-io")]
 #[test]
-fn single_bencher_loads_baseline_from_markdown_output() {
+fn single_bencher_loads_baseline_from_json_sidecar() {
     let fixture = build_fixture();
     let output_dir = unique_temp_dir();
 
@@ -249,6 +249,10 @@ fn single_bencher_loads_baseline_from_markdown_output() {
         .execute()
         .unwrap();
 
+    // Baselines round-trip through the machine-readable JSON sidecar.
+    assert!(output_dir.join("cu-report.baseline.json").exists());
+    // Markdown is write-only and only produced when the feature is enabled.
+    #[cfg(feature = "markdown")]
     assert!(output_dir.join("cu-report.md").exists());
 
     let report = ComputeUnitBencher::new(HPSVM::new())
@@ -266,7 +270,7 @@ fn single_bencher_loads_baseline_from_markdown_output() {
     std::fs::remove_dir_all(&output_dir).unwrap();
 }
 
-#[cfg(feature = "markdown")]
+#[cfg(feature = "report-io")]
 #[test]
 fn single_bencher_loads_baseline_for_case_name_containing_pipe() {
     let fixture = build_fixture();
@@ -294,9 +298,9 @@ fn single_bencher_loads_baseline_for_case_name_containing_pipe() {
     std::fs::remove_dir_all(&output_dir).unwrap();
 }
 
-#[cfg(not(feature = "markdown"))]
+#[cfg(not(feature = "report-io"))]
 #[test]
-fn single_bencher_errors_when_report_io_is_requested_without_markdown_feature() {
+fn single_bencher_errors_when_report_io_is_requested_without_report_io_feature() {
     let fixture = build_fixture();
     let io_dir = std::env::temp_dir()
         .join(format!("hpsvm-fixture-bencher-no-markdown-{}", Address::new_unique()));

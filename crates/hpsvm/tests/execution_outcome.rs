@@ -220,9 +220,8 @@ fn commit_transaction_rejects_stale_outcomes_after_inspector_reconfiguration() {
     assert!(svm.get_transaction(&signature).is_none());
 }
 
-#[cfg(feature = "nodejs-internal")]
 #[test]
-fn commit_transaction_rejects_stale_outcomes_after_direct_nodejs_internal_setter_mutation() {
+fn commit_transaction_rejects_stale_outcomes_after_direct_setter_mutation() {
     let mut svm = HPSVM::new();
     let payer = Keypair::new();
     let recipient = Address::new_unique();

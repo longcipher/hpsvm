@@ -12,7 +12,11 @@ serde = ["dep:serde"]
 bin-codec = ["dep:wincode", "serde"]
 json-codec = ["dep:serde_json", "serde"]
 instruction-fixture = []
-markdown = []
+# Reading/writing compute-unit reports and their JSON baseline sidecar.
+report-io = ["dep:serde_json", "serde"]
+# Human-readable Markdown rendering of a compute-unit report. Write-only:
+# baselines always round-trip through the `report-io` JSON sidecar.
+markdown = ["report-io"]
 fd-codec = ["dep:prost", "dep:mollusk-svm-fuzz-fixture-firedancer", "instruction-fixture"]
 fd-json = ["fd-codec", "json-codec", "dep:serde_json"]
 
@@ -42,6 +46,10 @@ solana-sdk-ids.workspace = true
 solana-signer.workspace = true
 solana-system-interface.workspace = true
 solana-transaction.workspace = true
+
+[[test]]
+name = "fd_adapter"
+required-features = ["fd-codec"]
 
 [lints]
 workspace = true

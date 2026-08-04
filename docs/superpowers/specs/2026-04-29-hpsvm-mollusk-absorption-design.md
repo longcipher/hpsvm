@@ -118,10 +118,9 @@ The core idea is:
 
 ### Existing crates retained
 
-- `hpsvm`
-- `hpsvm-fork-rpc`
-- `hpsvm-loader`
-- `hpsvm-token`
+- `hpsvm` (with internal `loader`, `token`, and `fork` feature modules)
+- `hpsvm-fixture`
+- `hpsvm-cli`
 
 ### New crates
 

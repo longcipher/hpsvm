@@ -191,8 +191,10 @@ fn get_stake_account(svm: &mut HPSVM, pubkey: &Address) -> (Meta, Option<Stake>,
     match stake_account.state().unwrap() {
         StakeStateV2::Initialized(meta) => (meta, None, lamports),
         StakeStateV2::Stake(meta, stake, _) => (meta, Some(stake), lamports),
-        StakeStateV2::Uninitialized => panic!("panic: uninitialized"),
-        _ => unimplemented!(),
+        StakeStateV2::Uninitialized => panic!("unexpected uninitialized stake account"),
+        StakeStateV2::RewardsPool => {
+            panic!("stake account is a rewards pool, not a delegatable stake")
+        }
     }
 }
 

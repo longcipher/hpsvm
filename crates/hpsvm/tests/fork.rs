@@ -1,17 +1,18 @@
 //! Integration tests for the RPC fork account source.
+#![cfg(feature = "fork")]
+#![allow(missing_docs)]
 
 use std::str::FromStr;
 
-use hpsvm::AccountSource;
-use hpsvm_fork_rpc::RpcForkSource;
+use hpsvm::{AccountSource, fork::RpcForkSource};
 use solana_address::Address;
 use solana_rpc_client::{
     mock_sender::PUBKEY,
     rpc_client::{RpcClient, create_rpc_client_mocks},
 };
 
-#[test]
 /// Repeated reads of the same remote account should be served from cache.
+#[test]
 fn rpc_fork_source_serves_cached_accounts_without_refetching() {
     let client = RpcClient::new_mock_with_mocks("succeeds".to_owned(), create_rpc_client_mocks());
     let source = RpcForkSource::builder().with_client(client).with_slot(1).build();

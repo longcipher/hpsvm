@@ -1,8 +1,11 @@
-use std::io::Write;
+use std::{
+    collections::{HashMap, HashSet},
+    io::Write,
+};
 
 use solana_address::Address;
 
-use crate::{ExecutionSnapshot, ResultConfig};
+use crate::{AccountSnapshot, ExecutionSnapshot, ResultConfig};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -83,40 +86,55 @@ impl ExecutionSnapshot {
     }
 }
 
+/// Compare the post-execution account sets of two snapshots.
+///
+/// Both the scope filter and the cross-snapshot lookup are indexed through
+/// hash sets/maps, giving `O(n + m)` behaviour. The previous implementation
+/// nested a linear `find` inside a linear scan and resolved the scope with
+/// `Vec::contains`, which degraded to `O(n^2 * m)` on fixtures that touch many
+/// accounts (SPL token-2022 flows in particular).
 fn compare_accounts(
     left: &ExecutionSnapshot,
     right: &ExecutionSnapshot,
     scope: &AccountCompareScope,
 ) -> bool {
+    let scoped: Option<HashSet<&Address>> = match scope {
+        AccountCompareScope::All => None,
+        AccountCompareScope::Only(addresses) | AccountCompareScope::AllExcept(addresses) => {
+            Some(addresses.iter().collect())
+        }
+    };
     let should_compare = |address: &Address| match scope {
         AccountCompareScope::All => true,
-        AccountCompareScope::Only(addresses) => addresses.contains(address),
-        AccountCompareScope::AllExcept(addresses) => !addresses.contains(address),
+        AccountCompareScope::Only(_) => {
+            scoped.as_ref().is_some_and(|listed| listed.contains(address))
+        }
+        AccountCompareScope::AllExcept(_) => {
+            !scoped.as_ref().is_some_and(|listed| listed.contains(address))
+        }
     };
+
+    let right_by_address: HashMap<&Address, &AccountSnapshot> =
+        right.post_accounts.iter().map(|account| (&account.address, account)).collect();
 
     for account in &left.post_accounts {
         if !should_compare(&account.address) {
             continue;
         }
-        let Some(other_account) =
-            right.post_accounts.iter().find(|candidate| candidate.address == account.address)
-        else {
+        let Some(other_account) = right_by_address.get(&account.address) else {
             return false;
         };
-        if account != other_account {
+        if account != *other_account {
             return false;
         }
     }
 
-    for account in &right.post_accounts {
-        if should_compare(&account.address) &&
-            !left.post_accounts.iter().any(|candidate| candidate.address == account.address)
-        {
-            return false;
-        }
-    }
+    let left_addresses: HashSet<&Address> =
+        left.post_accounts.iter().map(|account| &account.address).collect();
 
-    true
+    !right.post_accounts.iter().any(|account| {
+        should_compare(&account.address) && !left_addresses.contains(&account.address)
+    })
 }
 
 fn fail(config: &ResultConfig, message: String) -> bool {

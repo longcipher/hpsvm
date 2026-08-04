@@ -18,7 +18,6 @@ ignored = ["solana-short-vec", "solana-reward-info", "solana-wincode-varint"]
 [features]
 internal-test = []
 invocation-inspect-callback = []
-nodejs-internal = ["dep:qualifier_attr"]
 hashbrown = ["dep:hashbrown"]
 serde = []
 precompiles = ["dep:agave-precompiles"]
@@ -27,6 +26,8 @@ hotpath = ["dep:hotpath"]
 # Allocation profiling on top of `hotpath`; attributes every allocation to the
 # calling instrumented function. Implies `hotpath`.
 hotpath-alloc = ["hotpath", "hotpath/hotpath-alloc"]
+# RPC-backed account source for forking live cluster state.
+fork = ["dep:solana-rpc-client", "dep:solana-rpc-client-api"]
 # Loader v3 helpers (set_upgrade_authority, deploy_upgradeable_program).
 loader = []
 # SPL token operation helpers (transfer, mint, ATA, freeze, etc.).
@@ -50,7 +51,7 @@ hotpath = { workspace = true, optional = true, features = ["hotpath"] }
 lru.workspace = true
 nu-ansi-term.workspace = true
 parking_lot.workspace = true
-qualifier_attr = { workspace = true, optional = true }
+rayon.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
@@ -87,6 +88,8 @@ solana-program-pack.workspace = true
 solana-program-runtime.workspace = true
 solana-rent.workspace = true
 solana-reward-info.workspace = true
+solana-rpc-client = { workspace = true, optional = true }
+solana-rpc-client-api = { workspace = true, optional = true }
 solana-sdk-ids.workspace = true
 solana-sha256-hasher.workspace = true
 # Version-pinning deps to prevent wincode 0.6.0 drift (transitive)
@@ -140,6 +143,10 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 [lints]
 rust.dead_code = "allow"
 clippy.allow_attributes = "warn"
+
+[[test]]
+name = "fork"
+required-features = ["fork"]
 
 [[test]]
 name = "precompiles"
