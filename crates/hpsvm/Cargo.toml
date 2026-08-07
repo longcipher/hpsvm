@@ -120,7 +120,6 @@ tracing.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
-cucumber.workspace = true
 ed25519-dalek.workspace = true
 k256.workspace = true
 serde.workspace = true
@@ -138,7 +137,6 @@ solana-vote-interface = { workspace = true, features = ["wincode"] }
 spl-associated-token-account-interface.workspace = true
 spl-token-interface.workspace = true
 test-log.workspace = true
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]
 rust.dead_code = "allow"

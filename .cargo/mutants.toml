@@ -1,0 +1,38 @@
+# cargo-mutants configuration
+#
+# Mutation testing verifies that the TDD suite actually detects behavioural
+# regressions: every mutant that survives is a gap in test assertions.
+#
+# Run with:
+#   just mutants          # full workspace run
+#   just mutants-quick    # fast feedback on uncommitted changes
+
+# The SBF program runtime is slow to start, so give each mutant room to run
+# while still bailing out on mutation-induced infinite loops.
+timeout_multiplier = 4.0
+minimum_test_timeout = 120
+
+# Build with the feature surface the test-suite actually exercises.
+all_features = true
+test_workspace = true
+
+# Exclude code that is either not behaviour-bearing or not covered by the
+# unit/integration suite, so the mutation score reflects real test quality.
+exclude_globs = [
+    "crates/hpsvm/benches/**",
+    "crates/hpsvm/tests/**",
+    "crates/hpsvm-fixture/**",
+    "bin/**",
+    "patches/**",
+]
+
+# Mutating these constructs produces noise rather than signal:
+# - Debug/Display impls are diagnostics, not behaviour.
+# - Default impls are exercised transitively and mutate into equivalent code.
+exclude_re = [
+    "impl Debug",
+    "impl Display",
+    "fmt::Debug",
+    "fmt::Display",
+    "-> String",
+]

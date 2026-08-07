@@ -4,6 +4,7 @@ use hpsvm::{HPSVM, Inspector};
 use solana_account::{Account, ReadableAccount};
 use solana_address::{Address, address};
 use solana_compute_budget::compute_budget::ComputeBudget;
+use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_instruction::{Instruction, error::InstructionError};
 use solana_keypair::Keypair;
 use solana_message::Message;
@@ -59,6 +60,136 @@ fn transact_returns_state_without_committing_it() {
             .iter()
             .any(|(key, account)| key == &recipient && account.lamports() == 64)
     );
+}
+
+#[test]
+fn transact_records_the_fee_payer_on_success() {
+    let mut svm = HPSVM::new();
+    let payer = Keypair::new();
+    let recipient = Address::new_unique();
+
+    svm.airdrop(&payer.pubkey(), 10_000).unwrap();
+    let tx = Transaction::new(
+        &[&payer],
+        Message::new(&[transfer(&payer.pubkey(), &recipient, 64)], Some(&payer.pubkey())),
+        svm.latest_blockhash(),
+    );
+
+    let outcome = svm.transact(tx);
+
+    assert!(outcome.status().is_ok());
+    assert_eq!(
+        outcome.fee_payer(),
+        Some(payer.pubkey()),
+        "fee payer must match the transaction's first signer"
+    );
+    // The fee payer must never be confused with the recipient.
+    assert_ne!(outcome.fee_payer(), Some(recipient));
+}
+
+#[test]
+fn transact_reports_compute_budget_exceeded() {
+    let mut svm = HPSVM::new();
+    let payer = Keypair::new();
+    let recipient = Address::new_unique();
+
+    svm.airdrop(&payer.pubkey(), 10_000).unwrap();
+    let tx = Transaction::new(
+        &[&payer],
+        Message::new(
+            &[
+                ComputeBudgetInstruction::set_compute_unit_limit(1),
+                transfer(&payer.pubkey(), &recipient, 64),
+            ],
+            Some(&payer.pubkey()),
+        ),
+        svm.latest_blockhash(),
+    );
+
+    let outcome = svm.transact(tx);
+
+    assert_eq!(
+        outcome.status().as_ref().unwrap_err(),
+        &TransactionError::InstructionError(0, InstructionError::ComputationalBudgetExceeded)
+    );
+    assert_eq!(svm.get_balance(&recipient), None, "a failed transaction must not move lamports");
+}
+
+#[test]
+fn transact_reports_insufficient_funds_for_rent() {
+    let mut svm = HPSVM::new();
+    let payer = Keypair::new();
+    let recipient = Address::new_unique();
+
+    // Exactly rent-exempt: paying the fee plus the transfer would drop the fee
+    // payer below the rent-exempt minimum.
+    svm.set_account(
+        payer.pubkey(),
+        Account { lamports: 1, owner: solana_sdk_ids::system_program::id(), ..Default::default() },
+    )
+    .unwrap();
+    let tx = Transaction::new(
+        &[&payer],
+        Message::new(&[transfer(&payer.pubkey(), &recipient, 100)], Some(&payer.pubkey())),
+        svm.latest_blockhash(),
+    );
+
+    let outcome = svm.transact(tx);
+
+    let err = outcome.status().as_ref().unwrap_err();
+    assert!(
+        matches!(
+            err,
+            TransactionError::InsufficientFundsForRent { .. } |
+                TransactionError::InsufficientFundsForFee
+        ),
+        "expected an insufficient-funds variant, got {err:?}"
+    );
+    assert_eq!(svm.get_balance(&recipient), None);
+}
+
+#[test]
+fn transact_reports_invalid_program_for_execution() {
+    let mut svm = HPSVM::new();
+    let payer = Keypair::new();
+    let missing_program = Address::new_unique();
+
+    svm.airdrop(&payer.pubkey(), 10_000).unwrap();
+    let tx = Transaction::new(
+        &[&payer],
+        Message::new(
+            &[Instruction { program_id: missing_program, accounts: vec![], data: vec![] }],
+            Some(&payer.pubkey()),
+        ),
+        svm.latest_blockhash(),
+    );
+
+    let outcome = svm.transact(tx);
+
+    assert_eq!(
+        outcome.status().as_ref().unwrap_err(),
+        &TransactionError::InvalidProgramForExecution
+    );
+}
+
+#[test]
+fn transact_reports_blockhash_not_found_after_expiry() {
+    let mut svm = HPSVM::new();
+    let payer = Keypair::new();
+    let recipient = Address::new_unique();
+
+    svm.airdrop(&payer.pubkey(), 10_000).unwrap();
+    let tx = Transaction::new(
+        &[&payer],
+        Message::new(&[transfer(&payer.pubkey(), &recipient, 64)], Some(&payer.pubkey())),
+        svm.latest_blockhash(),
+    );
+
+    svm.expire_blockhash();
+    let outcome = svm.transact(tx);
+
+    assert_eq!(outcome.status().as_ref().unwrap_err(), &TransactionError::BlockhashNotFound);
+    assert_eq!(svm.get_balance(&payer.pubkey()), Some(10_000), "no fee may be charged");
 }
 
 #[test]

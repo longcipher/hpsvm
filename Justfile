@@ -25,18 +25,27 @@ lint:
 test:
   cargo test --all-features
 
-# Run BDD scenarios
-bdd:
-  cargo test -p hpsvm --test bdd
-
-# Run both TDD and BDD suites
+# Run the full test suite across the workspace
 test-all:
-  cargo test --all-features
-  cargo test -p hpsvm --test bdd
+  cargo test --workspace --all-features --all-targets
 
 # Run tests with coverage
 test-coverage:
   cargo tarpaulin --all-features --workspace --timeout 300
+
+# Run mutation testing across the workspace
+mutants:
+  cargo mutants --workspace
+
+# Run mutation testing only on changes vs. master (fast feedback)
+mutants-quick:
+  mkdir -p target/mutants
+  git diff origin/master...HEAD > target/mutants/branch.diff
+  cargo mutants --workspace --in-diff target/mutants/branch.diff
+
+# List the mutants that would be generated without running them
+mutants-list:
+  cargo mutants --workspace --list
 
 # Build entire workspace
 build:
@@ -115,6 +124,7 @@ setup:
   cargo install typos-cli
   cargo install rumdl
   cargo install cargo-tarpaulin
+  cargo install cargo-mutants
 
 # Generate documentation for the workspace
 docs:

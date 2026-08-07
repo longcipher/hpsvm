@@ -171,31 +171,30 @@ ecdysis = "1.1.1"
 
 When fixing failures, identify root cause first, then apply idiomatic fixes instead of suppressing warnings or patching symptoms.
 
-Use outside-in development for behavior changes:
+Use test-driven development for behavior changes:
 
 - **Git Restrictions:** NEVER use `git worktree`. All code modifications MUST be made directly on the current branch in the existing working directory.
-- start with a failing Gherkin scenario under `features/`,
+- start with a failing crate-local unit or integration test that names the expected behavior,
 - drive implementation with failing crate-local unit tests and `proptest` properties in the affected crate,
 - keep `proptest` in the normal `cargo test` loop instead of creating a separate property-test command,
-- treat `cargo-fuzz` as conditional planning work rather than baseline template setup,
-- keep `cucumber-rs` steps thin and route business rules through shared Rust crates.
+- use `cargo mutants` to verify the new tests actually kill mutants in the changed code,
+- treat `cargo-fuzz` as conditional planning work rather than baseline template setup.
+
+**BDD is not used in this project.** Do not add Gherkin `.feature` files, `cucumber-rs`, step definitions, or BDD runners.
 
 After each feature or bug fix, run:
 
 ```bash
 just format
 just lint
-just test
-just bdd
 just test-all
+just mutants-quick
 ```
 
 If any command fails, report the failure and do not claim completion.
 
 ## Testing Requirements
 
-- BDD scenarios: place Gherkin features under `features/` and keep the runner in crate-level `tests/` with `cucumber-rs`.
-- Use BDD to define acceptance behavior first, then use crate-local unit tests and `proptest` properties for the inner TDD loop.
 - Unit tests: colocate with implementation (`#[cfg(test)]`).
 - Prefer example-based unit tests for named business cases and edge cases, and reserve `proptest` for invariants that should hold across many generated inputs.
 - Property tests: colocate `proptest` coverage with the crate logic it exercises so it runs through the ordinary `cargo test` path.
@@ -206,6 +205,8 @@ If any command fails, report the failure and do not claim completion.
 - For `/pb-plan` work, mark benchmarking as `conditional` or `N/A` unless the scope explicitly includes a performance requirement or hot path, and mark fuzzing as `conditional` or `N/A` unless the scope explicitly includes parser-like, protocol, binary-decoding, or `unsafe`-heavy code.
 - Integration tests: place in crate-level `tests/`.
 - Add tests for behavioral changes and public API changes.
+- Mutation testing: configured via `.cargo/mutants.toml` and run with `just mutants` (full) or `just mutants-quick` (changed code only). A surviving mutant means an assertion is missing or too weak — tighten the test rather than excluding the mutant.
+- Assertions must be specific: compare against exact expected values and error variants instead of asserting only `is_err()` or matching on stringified errors.
 
 ## Language Requirement
 
