@@ -160,13 +160,10 @@ For each public type, add doc comments that describe:
 
 Priority order: `ExecutionOutcome` (most used), `TransactionMetadata`, `ExecutionDiagnostics`, `FailedTransactionMetadata`.
 
-## BDD/TDD Strategy
+## Test Strategy
 
 - **Primary Language:** Rust
-- **BDD Runner:** cucumber-rs (existing)
-- **BDD Command:** `cargo test -p hpsvm --test bdd`
 - **Unit Test Command:** `cargo test --all-features`
-- **Feature Files:** `specs/2026-06-17-04-code-quality/features/code-quality.feature`
 
 ## Code Simplification Constraints
 
@@ -180,6 +177,5 @@ Priority order: `ExecutionOutcome` (most used), `TransactionMetadata`, `Executio
 |-----------|--------------------------------------------------|---------------------|
 | Check     | `cargo check --all-targets --all-features`       | exit 0              |
 | Tests     | `cargo test --all-features`                      | all pass            |
-| BDD       | `cargo test -p hpsvm --test bdd`                 | all pass            |
 | Clippy    | `cargo +nightly clippy --all -- -D warnings`     | exit 0              |
 | Docs      | `cargo doc --no-deps`                            | no missing_docs warnings |

@@ -10,45 +10,13 @@
 
 ## Summary
 
-> Add BDD scenarios for transaction failure paths (the most common error conditions users encounter) and unit tests for the rent state transition logic (a correctness-critical boundary). Currently only 2 BDD scenarios exist, both testing success paths only.
+> Add unit tests for the rent state transition logic (a correctness-critical boundary) that currently has zero coverage.
 
 ## Why this matters
 
-The BDD layer currently provides zero regression coverage for error conditions. Changes to error propagation in the core VM pipeline have no BDD-level safety net. The rent state transition logic determines whether transactions succeed or fail with `InsufficientFundsForRent` — a core Solana protocol invariant — and has zero unit tests.
+The rent state transition logic determines whether transactions succeed or fail with `InsufficientFundsForRent` — a core Solana protocol invariant — and has zero unit tests.
 
 ## Findings
-
-### Finding 7: No BDD scenarios for transaction failure paths
-
-- **Category:** test coverage
-- **Impact:** HIGH
-- **Effort:** M
-- **Risk:** LOW — adding tests cannot break existing behavior.
-
-#### Requirements (EARS Notation)
-
-- **[REQ-01]:** BDD scenarios SHALL cover compute budget exceeded errors.
-- **[REQ-02]:** BDD scenarios SHALL cover insufficient funds errors.
-- **[REQ-03]:** BDD scenarios SHALL cover invalid program errors.
-- **[REQ-04]:** BDD scenarios SHALL cover expired blockhash errors.
-- **[REQ-05]:** Each scenario SHALL have step definitions that reuse existing domain modules (HPSVM, Account builders).
-
-#### Current state
-
-- `features/instruction_first_execution.feature` — 1 scenario, success path only.
-- `features/feature_set_reconfiguration.feature` — 1 scenario, success path only.
-- `crates/hpsvm/tests/bdd.rs` — step definitions for the above 2 scenarios.
-
-#### Approach
-
-Add a new `features/transaction_errors.feature` file with scenarios for each error type. Add corresponding step definitions in `bdd.rs` (or a new step definition file). Each scenario:
-
-1. Creates a default HPSVM instance
-2. Sets up the specific error condition (zero balance, compute budget, etc.)
-3. Executes the transaction
-4. Asserts the error type
-
-Pattern to follow: existing `bdd.rs` `FeatureSetWorld` pattern with `#[derive(cucumber::World)]`.
 
 ### Finding 17: No unit tests for rent state transition logic
 
@@ -77,20 +45,17 @@ Add a `#[cfg(test)] mod tests` at the bottom of `rent.rs`. Test cases:
 - `check_rent_state_with_account`: incinerator address bypass, normal address with invalid transition.
 - `get_account_rent_state`: zero lamports (Uninitialized), rent-exempt amount (RentExempt), below rent-exempt (RentPaying).
 
-## BDD/TDD Strategy
+## Test Strategy
 
 - **Primary Language:** Rust
-- **BDD Runner:** cucumber-rs
-- **BDD Command:** `cargo test -p hpsvm --test bdd`
 - **Unit Test Command:** `cargo test --all-features`
-- **Feature Files:** `specs/2026-06-17-03-test-coverage/features/test-coverage.feature`
-- **Outside-in Loop:** BDD scenarios fail first (RED), step definitions added, scenarios pass (GREEN), step definitions cleaned up (REFACTOR).
+- **Test Location:** colocated `#[cfg(test)]` modules in the affected crate
 
 ## Code Simplification Constraints
 
 - **Behavioral Contract:** Existing test scenarios must continue to pass. New tests must not modify production code.
-- **Repo Standards:** Follow existing `cucumber-rs` patterns in `bdd.rs`. Use `#[cfg(test)]` colocated tests for unit tests.
-- **Readability Priorities:** Step definitions should be thin wrappers that delegate to domain modules.
+- **Repo Standards:** Follow existing `#[cfg(test)]` colocated test patterns.
+- **Readability Priorities:** Keep tests example-based and readable.
 
 ## Verification
 
@@ -98,5 +63,4 @@ Add a `#[cfg(test)] mod tests` at the bottom of `rent.rs`. Test cases:
 |-----------|--------------------------------------------------|---------------------|
 | Check     | `cargo check --all-targets --all-features`       | exit 0              |
 | Tests     | `cargo test --all-features`                      | all pass            |
-| BDD       | `cargo test -p hpsvm --test bdd`                 | all pass (including new scenarios) |
 | Clippy    | `cargo +nightly clippy --all -- -D warnings`     | exit 0              |

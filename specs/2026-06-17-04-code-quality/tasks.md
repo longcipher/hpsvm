@@ -8,7 +8,6 @@ Planned at commit `5ba1579` (2026-06-17).
 
 > **Context:** `lib.rs` is 2880 lines containing the entire execution pipeline, free functions, and HPSVM struct.
 > **Verification:** All existing tests pass; `lib.rs` is reduced by ~800 lines.
-> **Scenario Coverage:** `features/code-quality.feature` — "Transaction execution logic is extracted from lib.rs"
 
 - **Loop Type:** `TDD-only`
 - **Behavioral Contract:** `All existing behavior preserved; no public API changes`
@@ -30,7 +29,6 @@ Planned at commit `5ba1579` (2026-06-17).
 - [x] Step 4: Update `use` imports — make extracted items `pub(crate)`.
 - [x] Step 5: Run `cargo check --all-features` to verify compilation.
 - [x] Step 6: Run `cargo test --all-features` — all pass.
-- [x] BDD Verification: `cargo test -p hpsvm --test bdd` — all pass
 - [x] Advanced Test Verification: `cargo test --all-features` — all pass
 - [x] Runtime Verification: `cargo check --all-features`
 
@@ -38,7 +36,6 @@ Planned at commit `5ba1579` (2026-06-17).
 
 > **Context:** Free functions in `lib.rs` are not part of the HPSVM struct impl.
 > **Verification:** All functions compile and tests pass.
-> **Scenario Coverage:** `features/code-quality.feature` — "Transaction execution logic is extracted"
 
 - **Loop Type:** `TDD-only`
 - **Behavioral Contract:** `All existing behavior preserved`
@@ -58,7 +55,6 @@ Planned at commit `5ba1579` (2026-06-17).
 - [x] Step 4: Update `use` imports — make extracted items `pub(crate)`.
 - [x] Step 5: Run `cargo check --all-features`.
 - [x] Step 6: Run `cargo test --all-features` — all pass.
-- [x] BDD Verification: `cargo test -p hpsvm --test bdd` — all pass
 - [x] Advanced Test Verification: `cargo test --all-features` — all pass
 - [x] Runtime Verification: `cargo check --all-features`
 
@@ -68,7 +64,6 @@ Planned at commit `5ba1579` (2026-06-17).
 
 > **Context:** `execute_sanitized_transaction` and `execute_sanitized_transaction_readonly` are structurally identical.
 > **Verification:** Single implementation handles both mutable and readonly paths.
-> **Scenario Coverage:** `features/code-quality.feature` — "Duplicate execute_sanitized_transaction methods are unified"
 
 - **Loop Type:** `TDD-only`
 - **Behavioral Contract:** `All existing behavior preserved; callers now use the unified method`
@@ -80,7 +75,6 @@ Planned at commit `5ba1579` (2026-06-17).
 - [x] Step 4: Update callers (`execute_transaction`, `execute_transaction_no_verify`, etc.) to use the unified method.
 - [x] Step 5: Remove `execute_sanitized_transaction_readonly`.
 - [x] Step 6: Run `cargo test --all-features` — all pass.
-- [x] BDD Verification: `cargo test -p hpsvm --test bdd` — all pass
 - [x] Advanced Test Verification: `cargo test --all-features` — all pass
 - [x] Runtime Verification: `cargo check --all-features`
 
@@ -90,7 +84,6 @@ Planned at commit `5ba1579` (2026-06-17).
 
 > **Context:** 20+ token builders repeat ~25 lines of identical transaction construction.
 > **Verification:** All token builder tests pass with the new helper.
-> **Scenario Coverage:** `features/code-quality.feature` — "Token builder send() boilerplate is deduplicated"
 
 - **Loop Type:** `TDD-only`
 - **Behavioral Contract:** `Public API unchanged; each builder's send() produces identical results`
@@ -101,7 +94,6 @@ Planned at commit `5ba1579` (2026-06-17).
 - [x] Step 3: Run `cargo test -p hpsvm-token` — all pass.
 - [x] Step 4: Update remaining builders: `approve_checked`, `burn`, `burn_checked`, `close_account`, `mint_to`, `mint_to_checked`, `transfer`, `transfer_checked`, `freeze_account`, `revoke`, `set_authority`, `thaw_account`, `create_ata`, `create_ata_idempotent`, `create_native_mint_2022`, `sync_native`.
 - [x] Step 5: Run `cargo test -p hpsvm-token --all-features` — all pass.
-- [x] BDD Verification: N/A — token crate tests
 - [x] Advanced Test Verification: `cargo test -p hpsvm-token --all-features` — all pass
 - [x] Runtime Verification: `cargo check --all-features`
 
@@ -113,7 +105,6 @@ Planned at commit `5ba1579` (2026-06-17).
 
 > **Context:** 21 `#[expect(missing_docs)]` suppressions on public API types.
 > **Verification:** `cargo doc --no-deps` produces complete docs; no `missing_docs` warnings.
-> **Scenario Coverage:** `features/code-quality.feature` — "Public types in types.rs have complete documentation"
 
 - **Loop Type:** `TDD-only`
 - **Behavioral Contract:** `N/A — documentation only`
@@ -126,6 +117,5 @@ Planned at commit `5ba1579` (2026-06-17).
 - [x] Step 5: Remove `#[expect(missing_docs)]` from `pretty_logs` method (line 28).
 - [x] Step 6: Edit `crates/hpsvm/src/lib.rs:387-394` — remove module-level `#[expect(missing_docs)]` for `batch`, `error`, `instruction`, `types`. Add `//!` doc comments to each module.
 - [x] Step 7: Run `cargo doc --no-deps` — verify no warnings.
-- [x] BDD Verification: N/A — documentation
 - [x] Advanced Test Verification: `cargo doc --no-deps` — clean
 - [x] Runtime Verification: `cargo check --all-features`

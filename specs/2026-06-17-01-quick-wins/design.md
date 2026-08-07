@@ -181,5 +181,4 @@ Change `offset` to `u64` or add a guard: `if program_bytes.len() > u32::MAX as u
 |-----------|--------------------------------------------------|---------------------|
 | Check     | `cargo check --all-targets --all-features`       | exit 0              |
 | Tests     | `cargo test --all-features`                      | all pass            |
-| BDD       | `cargo test -p hpsvm --test bdd`                 | all pass            |
 | Clippy    | `cargo +nightly clippy --all -- -D warnings`     | exit 0              |

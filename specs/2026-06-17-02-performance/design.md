@@ -72,14 +72,10 @@ The key insight: since the batch stage already guarantees conflict-freedom (tran
 
 Add `compute_diagnostics: bool` to `SvmCfg` (default `true` for backward compatibility). In `execution_into_outcome`, skip `execution_diagnostics` when false, returning `ExecutionDiagnostics::default()`. Add `send_transaction_with_diagnostics` that sets the flag temporarily, or make it a persistent config option.
 
-## BDD/TDD Strategy
+## Test Strategy
 
 - **Primary Language:** Rust
-- **BDD Runner:** cucumber-rs
-- **BDD Command:** `cargo test -p hpsvm --test bdd`
 - **Unit Test Command:** `cargo test --all-features`
-- **Feature Files:** `specs/2026-06-17-02-performance/features/performance.feature`
-- **Outside-in Loop:** Scenario "Batch workers share AccountsDb" fails when workers still clone, passes after Arc refactor.
 
 ## Code Simplification Constraints
 
@@ -93,6 +89,5 @@ Add `compute_diagnostics: bool` to `SvmCfg` (default `true` for backward compati
 |-----------|--------------------------------------------------|---------------------|
 | Check     | `cargo check --all-targets --all-features`       | exit 0              |
 | Tests     | `cargo test --all-features`                      | all pass            |
-| BDD       | `cargo test -p hpsvm --test bdd`                 | all pass            |
 | Bench     | `just bench-runtime`                             | no regression       |
 | Clippy    | `cargo +nightly clippy --all -- -D warnings`     | exit 0              |

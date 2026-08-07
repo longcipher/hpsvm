@@ -22,7 +22,6 @@ hpsvm/
 │   │                       #   feature `precompiles`, `register-tracing`, ...
 │   └── hpsvm-fixture/      # Fixture capture/replay + CU benching
 │                           #   feature `fd-codec`: Firedancer fixtures
-├── features/               # BDD Gherkin feature files
 └── Justfile                # Task runner recipes
 ```
 
@@ -34,7 +33,6 @@ hpsvm/
 | Lint      | `just lint`                                      | exit 0, no errors   |
 | Format    | `just format`                                    | exit 0              |
 | Tests     | `cargo test --all-features`                      | all pass            |
-| BDD       | `cargo test -p hpsvm --test bdd`                 | all pass            |
 | Check     | `cargo check --all-targets --all-features`       | exit 0              |
 | Clippy    | `cargo +nightly clippy --all -- -D warnings ...` | exit 0, no errors   |
 
@@ -62,8 +60,6 @@ hpsvm/
 ## Existing Test Patterns
 
 - **Unit Tests:** `#[cfg(test)]` modules colocated with implementation
-- **BDD Tests:** `features/*.feature` Gherkin scenarios, runner in `crates/hpsvm/tests/bdd.rs`
-- **BDD Pattern:** `cucumber-rs` with `#[derive(cucumber::World)]`, steps call `HPSVM` directly
 - **Benchmarks:** Criterion-based benches in `crates/hpsvm/benches/`
 
 ## Git History Signal

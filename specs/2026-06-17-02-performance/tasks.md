@@ -8,9 +8,8 @@ Planned at commit `5ba1579` (2026-06-17).
 
 > **Context:** Each worker in `send_transaction_batch` deep-clones the entire `AccountsDb`. With N transactions, N full clones are created.
 > **Verification:** Batch execution produces identical results; no per-worker AccountsDb clones.
-> **Scenario Coverage:** `features/performance.feature` — "Batch workers share AccountsDb via Arc"
 
-- **Loop Type:** `BDD+TDD`
+- **Loop Type:** `TDD`
 - **Behavioral Contract:** `Batch execution must produce identical transaction results, account states, and error outcomes`
 - **Simplification Focus:** `Replace N deep clones with 1 Arc + N small deltas`
 - **Status:** 🟢 DONE
@@ -30,7 +29,6 @@ Planned at commit `5ba1579` (2026-06-17).
 - [x] Step 6: Modify the staging loop to collect deltas and apply via `apply_commit_delta`.
 - [x] Step 7: GREEN — run test, confirm identical results.
 - [x] Step 8: Run full test suite to verify no regressions.
-- [x] BDD Verification: `cargo test -p hpsvm --test bdd` — all pass
 - [x] Advanced Test Verification: `cargo test --all-features` — all pass
 - [x] Runtime Verification: `just bench-runtime` — no regression
 
@@ -40,9 +38,8 @@ Planned at commit `5ba1579` (2026-06-17).
 
 > **Context:** Every `send_transaction`/`transact` call unconditionally computes full diagnostics (pre/post diffs, token balances).
 > **Verification:** Diagnostics are skipped when flag is false; full diagnostics when true.
-> **Scenario Coverage:** `features/performance.feature` — "Transaction diagnostics are computed only when requested"
 
-- **Loop Type:** `BDD+TDD`
+- **Loop Type:** `TDD`
 - **Behavioral Contract:** `Default behavior preserves diagnostics (compute_diagnostics: true) for backward compatibility`
 - **Simplification Focus:** `Make expensive computation opt-in`
 - **Status:** 🟢 DONE
@@ -52,6 +49,5 @@ Planned at commit `5ba1579` (2026-06-17).
 - [x] Step 4: Edit `crates/hpsvm/src/lib.rs` `execution_into_outcome` — when `vm.cfg.compute_diagnostics` is false, return `ExecutionDiagnostics::default()` instead of calling `execution_diagnostics(...)`.
 - [x] Step 5: GREEN — run test, confirm it passes.
 - [x] Step 6: Verify default behavior: existing tests pass with `compute_diagnostics: true` (default).
-- [x] BDD Verification: `cargo test -p hpsvm --test bdd` — all pass
 - [x] Advanced Test Verification: `cargo test --all-features` — all pass
 - [x] Runtime Verification: `just bench-runtime` — no regression
