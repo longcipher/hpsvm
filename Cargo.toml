@@ -3,7 +3,7 @@ resolver = "3"
 members = ["bin/*", "crates/*"]
 
 [workspace.package]
-version = "0.1.15"
+version = "0.1.16"
 edition = "2024"
 authors = ["Akagi201 <akagi201@gmail.com>"]
 license = "Apache-2.0"
@@ -11,8 +11,8 @@ repository = "https://github.com/longcipher/hpsvm"
 
 [workspace.dependencies]
 # local crates
-hpsvm = { path = "crates/hpsvm", version = "0.1.15" }
-hpsvm-fixture = { path = "crates/hpsvm-fixture", version = "0.1.15", default-features = false }
+hpsvm = { path = "crates/hpsvm", version = "0.1.16" }
+hpsvm-fixture = { path = "crates/hpsvm-fixture", version = "0.1.16", default-features = false }
 
 # external crates
 agave-feature-set = "4.1.2"
@@ -23,7 +23,7 @@ criterion = "0.8.2"
 ed25519-dalek = "3.0.0"
 hashbrown = "0.17.1"
 hex = "0.4.3"
-hotpath = "0.23.1"
+hotpath = "0.23.2"
 k256 = { version = "0.14.0", features = ["arithmetic"] }
 lru = "0.18.2"
 mollusk-svm-fuzz-fixture-firedancer = "0.14.0"
@@ -35,7 +35,7 @@ serde = "1.0.229"
 serde_json = "1.0.151"
 sha2 = "0.11.0"
 smallvec = "1.15.2"
-solana-account = "4.5.0"
+solana-account = "4.6.0"
 solana-address = "2.7.0"
 solana-address-lookup-table-interface = "3.1.0"
 solana-builtins = "4.1.2"
@@ -60,19 +60,23 @@ solana-loader-v4-interface = "3.1.0"
 solana-message = "4.3.0"
 solana-native-token = "3.0.0"
 solana-nonce = "3.2.1"
-solana-nonce-account = "4.1.1"
+solana-nonce-account = "4.3.0"
 solana-precompile-error = "3.0.0"
 solana-program-error = "3.0.1"
 solana-program-option = "3.1.0"
 solana-program-pack = "3.1.0"
 solana-program-runtime = "4.1.2"
 solana-rent = "4.3.0"
+# Pinned transitive deps — prevent crates.io drift to wincode 0.6.0
+# (agave 4.x still requires wincode 0.5.x; newer crate releases pull 0.6.0)
+solana-reward-info = "6.3.0"
 solana-rpc-client = "4.1.2"
 solana-rpc-client-api = "4.1.2"
 solana-sdk-ids = "3.1.0"
 solana-secp256k1-program = "3.0.1"
 solana-sha256-hasher = "3.1.0"
-solana-signature = "3.5.1"
+solana-short-vec = "3.3.0"
+solana-signature = "3.5.2"
 solana-signer = "3.0.1"
 solana-slot-hashes = "3.1.0"
 solana-slot-history = "3.1.0"
@@ -84,25 +88,20 @@ solana-svm-transaction = "4.1.2"
 solana-syscalls = "4.1.2"
 solana-system-interface = "3.3.0"
 solana-system-program = "4.1.2"
-solana-sysvar = "4.1.0"
+solana-sysvar = "4.3.0"
 solana-sysvar-id = "3.1.0"
 solana-transaction = "4.1.5"
 solana-transaction-context = "4.1.2"
 solana-transaction-error = "3.3.1"
 solana-vote-interface = "6.0.3"
+solana-wincode-varint = "1.1.0"
 spl-associated-token-account-interface = "2.0.0"
 spl-token-2022-interface = "3.1.1"
 spl-token-interface = "3.0.0"
 test-log = "0.2.21"
-thiserror = "2.0.19"
+thiserror = "2.0.20"
 tracing = "0.1.44"
-wincode = "0.6.0"
-
-# Pinned transitive deps — prevent crates.io drift to wincode 0.6.0
-# (agave 4.x still requires wincode 0.5.x; newer crate releases pull 0.6.0)
-solana-reward-info = "6.3.0"
-solana-short-vec = "3.3.0"
-solana-wincode-varint = "1.1.0"
+wincode = "0.6.1"
 
 [workspace.metadata.cargo-shear]
 ignored = ["solana-short-vec", "solana-reward-info", "solana-wincode-varint"]

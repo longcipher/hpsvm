@@ -38,6 +38,7 @@ use solana_slot_hashes::SlotHashes;
 use solana_slot_history::SlotHistory;
 use solana_stake_interface::stake_history::StakeHistory;
 use solana_svm_log_collector::LogCollector;
+#[expect(deprecated)]
 use solana_sysvar::{Sysvar, SysvarSerialize};
 #[expect(deprecated)]
 use solana_sysvar::{
@@ -394,8 +395,8 @@ impl HPSVM {
             latest_blockhash,
         )]));
         self.set_sysvar_internal(&SlotHistory::default());
-        // ponytail: StakeHistory doesn't impl Sysvar+SysvarSerialize (version conflict).
-        // Set account directly via serde using the standard Solana API.
+        // ponytail: StakeHistory doesn't impl the wincode StateMutWincode helper,
+        // so set the account directly via serde using the standard Solana API.
         {
             let account = AccountSharedData::new_data(
                 1,
@@ -624,6 +625,7 @@ impl HPSVM {
     ///
     /// Returns an error if serialization fails or if the sysvar account update
     /// is rejected by the internal accounts database.
+    #[expect(deprecated)]
     pub fn set_sysvar<T>(&mut self, sysvar: &T) -> Result<(), HPSVMError>
     where
         T: Sysvar + SysvarId + SysvarSerialize,
@@ -634,10 +636,15 @@ impl HPSVM {
         Ok(())
     }
 
+    #[expect(deprecated)]
     pub(crate) fn try_set_sysvar<T>(&mut self, sysvar: &T) -> Result<(), HPSVMError>
     where
         T: Sysvar + SysvarId + SysvarSerialize,
     {
+        // `SysvarSerialize` is deprecated, but it is still the correct codec here:
+        // the read path (`AccountSharedData::deserialize_data`) decodes bincode, and
+        // sysvars such as `RecentBlockhashes` require a fixed-size buffer
+        // (`T::size_of()` returns `RecentBlockhashes::SIZE`, not the serialized length).
         let mut account = AccountSharedData::new(1, T::size_of(), &solana_sdk_ids::sysvar::id());
         account.serialize_data(sysvar).map_err(|error| HPSVMError::SysvarSerialization {
             sysvar: std::any::type_name::<T>(),
@@ -646,6 +653,7 @@ impl HPSVM {
         self.accounts.add_account(T::id(), account)
     }
 
+    #[expect(deprecated)]
     pub(crate) fn set_sysvar_internal<T>(&mut self, sysvar: &T)
     where
         T: Sysvar + SysvarId + SysvarSerialize,
