@@ -10,7 +10,7 @@ use solana_rent::Rent;
 use solana_sdk_ids::native_loader;
 use solana_svm_log_collector::LogCollector;
 use solana_svm_timings::ExecuteTimings;
-use solana_svm_transaction::svm_message::SVMStaticMessage;
+use solana_svm_transaction::svm_message::{SVMMessage, SVMStaticMessage};
 use solana_transaction::{
     sanitized::{MessageHash, SanitizedTransaction},
     versioned::VersionedTransaction,
@@ -243,7 +243,7 @@ impl HPSVM {
                 let account = if solana_sdk_ids::sysvar::instructions::check_id(key) {
                     construct_instructions_account(message)
                 } else {
-                    let is_instruction_account = message.is_instruction_account(i);
+                    let is_instruction_account = SVMMessage::is_instruction_account(message, i);
                     let mut account = if !is_instruction_account &&
                         !message.is_writable(i) &&
                         self.accounts.has_program_cache_entry(key)

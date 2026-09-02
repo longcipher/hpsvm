@@ -3,7 +3,7 @@ resolver = "3"
 members = ["bin/*", "crates/*"]
 
 [workspace.package]
-version = "0.1.16"
+version = "0.1.17"
 edition = "2024"
 authors = ["Akagi201 <akagi201@gmail.com>"]
 license = "Apache-2.0"
@@ -11,8 +11,8 @@ repository = "https://github.com/longcipher/hpsvm"
 
 [workspace.dependencies]
 # local crates
-hpsvm = { path = "crates/hpsvm", version = "0.1.16" }
-hpsvm-fixture = { path = "crates/hpsvm-fixture", version = "0.1.16", default-features = false }
+hpsvm = { path = "crates/hpsvm", version = "0.1.17" }
+hpsvm-fixture = { path = "crates/hpsvm-fixture", version = "0.1.17", default-features = false }
 
 # external crates
 agave-feature-set = "4.1.2"
@@ -23,7 +23,7 @@ criterion = "0.8.2"
 ed25519-dalek = "3.0.0"
 hashbrown = "0.17.1"
 hex = "0.4.3"
-hotpath = "0.23.2"
+hotpath = "0.24.0"
 k256 = { version = "0.14.0", features = ["arithmetic"] }
 lru = "0.18.2"
 mollusk-svm-fuzz-fixture-firedancer = "0.14.0"
@@ -55,7 +55,7 @@ solana-instruction = "3.4.0"
 solana-instructions-sysvar = "4.0.0"
 solana-keypair = "3.1.2"
 solana-last-restart-slot = "3.1.0"
-solana-loader-v3-interface = "8.1.0"
+solana-loader-v3-interface = "8.1.1"
 solana-loader-v4-interface = "3.1.0"
 solana-message = "4.3.0"
 solana-native-token = "3.0.0"

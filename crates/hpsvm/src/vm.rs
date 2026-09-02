@@ -38,6 +38,7 @@ use solana_slot_hashes::SlotHashes;
 use solana_slot_history::SlotHistory;
 use solana_stake_interface::stake_history::StakeHistory;
 use solana_svm_log_collector::LogCollector;
+use solana_svm_transaction::svm_message::SVMMessage;
 #[expect(deprecated)]
 use solana_sysvar::{Sysvar, SysvarSerialize};
 #[expect(deprecated)]
@@ -1204,15 +1205,13 @@ impl HPSVM {
     }
 
     pub(crate) fn check_message_for_nonce(&self, message: &SanitizedMessage) -> bool {
-        message
-            .get_durable_nonce()
+        SVMMessage::get_durable_nonce(message)
             .and_then(|nonce_address| self.accounts.get_account(nonce_address))
             .and_then(|nonce_account| {
                 verify_nonce_account(&nonce_account, message.recent_blockhash())
             })
             .is_some_and(|nonce_data| {
-                message
-                    .get_ix_signers(NONCED_TX_MARKER_IX_INDEX as usize)
+                SVMMessage::get_ix_signers(message, NONCED_TX_MARKER_IX_INDEX as usize)
                     .any(|signer| signer == &nonce_data.authority)
             })
     }
