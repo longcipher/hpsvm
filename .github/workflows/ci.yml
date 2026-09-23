@@ -29,8 +29,8 @@ jobs:
         with:
           tool: just,cargo-machete,typos-cli,rumdl
 
-      - name: Install cargo-sort and cargo-shear
-        run: cargo install cargo-sort cargo-shear
+      - name: Install cargo-sort, cargo-shear and cargo-workspace-inheritance-check
+        run: cargo install cargo-sort cargo-shear cargo-workspace-inheritance-check
 
       - name: Install Solana CLI
         run: |

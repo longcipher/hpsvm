@@ -122,6 +122,7 @@ clean:
 setup:
   cargo install cargo-shear
   cargo install cargo-sort
+  cargo install cargo-workspace-inheritance-check
   cargo install typos-cli
   cargo install rumdl
   cargo install cargo-tarpaulin

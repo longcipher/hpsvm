@@ -33,8 +33,8 @@ jobs:
         with:
           tool: just,cargo-machete,cargo-shear,taplo-cli,typos-cli,rumdl,leptosfmt
 
-      - name: Install cargo-sort
-        run: cargo install cargo-sort
+      - name: Install cargo-sort and cargo-workspace-inheritance-check
+        run: cargo install cargo-sort cargo-workspace-inheritance-check
 
       - name: Install Solana CLI
         run: |
