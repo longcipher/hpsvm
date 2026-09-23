@@ -38,7 +38,7 @@ use solana_slot_hashes::SlotHashes;
 use solana_slot_history::SlotHistory;
 use solana_stake_interface::stake_history::StakeHistory;
 use solana_svm_log_collector::LogCollector;
-use solana_svm_transaction::svm_message::SVMMessage;
+use solana_svm_transaction::svm_message::{SVMMessage, SVMStaticMessage};
 #[expect(deprecated)]
 use solana_sysvar::{Sysvar, SysvarSerialize};
 #[expect(deprecated)]
@@ -463,8 +463,7 @@ impl HPSVM {
         self.refresh_runtime_environments();
         for builtint in BUILTINS {
             if builtint.enable_feature_id.is_none_or(|x| self.cfg.feature_set.is_active(&x)) {
-                let loaded_program =
-                    ProgramCacheEntry::new_builtin(0, builtint.name.len(), builtint.register_fn);
+                let loaded_program = ProgramCacheEntry::new_builtin(0, builtint.register_fn);
                 self.accounts
                     .replenish_program_cache(builtint.program_id, Arc::new(loaded_program));
                 self.accounts.add_builtin_account(
@@ -738,7 +737,7 @@ impl HPSVM {
 
     /// Adds a builtin program to the test environment.
     pub fn add_builtin(&mut self, program_id: Address, entrypoint: BuiltinFunctionRegisterer) {
-        let builtin = ProgramCacheEntry::new_builtin(self.accounts.current_slot(), 1, entrypoint);
+        let builtin = ProgramCacheEntry::new_builtin(self.accounts.current_slot(), entrypoint);
 
         self.accounts.replenish_program_cache(program_id, Arc::new(builtin));
 
@@ -770,7 +769,7 @@ impl HPSVM {
         let program_id = program_id.into();
         let current_slot = self.accounts.current_slot();
 
-        let program_size = if bpf_loader_upgradeable::check_id(loader_id) {
+        if bpf_loader_upgradeable::check_id(loader_id) {
             let (programdata_address, _bump) =
                 Address::find_program_address(&[program_id.as_ref()], loader_id);
 
@@ -799,8 +798,6 @@ impl HPSVM {
 
             self.accounts.add_account_no_checks(programdata_address, programdata_account);
             self.accounts.add_account_no_checks(program_id, program_account);
-
-            programdata_len
         } else if bpf_loader::check_id(loader_id) || bpf_loader_deprecated::check_id(loader_id) {
             let program_len = program_bytes.len();
             let lamports = self.minimum_balance_for_rent_exemption(program_len);
@@ -809,8 +806,6 @@ impl HPSVM {
             account.set_data_from_slice(program_bytes);
 
             self.accounts.add_account_no_checks(program_id, account);
-
-            program_len
         } else {
             return Err(HPSVMError::InvalidLoader { program_id, loader_id: *loader_id });
         };
@@ -819,13 +814,8 @@ impl HPSVM {
         // environment by reference avoids the per-load `ProgramRuntimeEnvironment`
         // clone the previous implementation performed.
         let env = self.accounts.runtime_environments().get_env_for_execution();
-        let loaded_program_arc = self.resolve_program_entry::<CACHED>(
-            loader_id,
-            env,
-            current_slot,
-            program_bytes,
-            program_size,
-        )?;
+        let loaded_program_arc =
+            self.resolve_program_entry::<CACHED>(loader_id, env, current_slot, program_bytes)?;
 
         self.accounts.replenish_program_cache(program_id, loaded_program_arc);
 
@@ -1211,7 +1201,7 @@ impl HPSVM {
                 verify_nonce_account(&nonce_account, message.recent_blockhash())
             })
             .is_some_and(|nonce_data| {
-                SVMMessage::get_ix_signers(message, NONCED_TX_MARKER_IX_INDEX as usize)
+                SVMStaticMessage::get_ix_signers(message, NONCED_TX_MARKER_IX_INDEX as usize)
                     .any(|signer| signer == &nonce_data.authority)
             })
     }

@@ -166,7 +166,7 @@ impl HPSVM {
     ///   memoized executable is valid here;
     /// - loading at slot 0, so the entry's baked-in slot fields match.
     ///
-    /// On a cache hit the expensive `ProgramCacheEntry::new` (ELF parse +
+    /// On a cache hit the expensive `ProgramCacheEntry::load` (ELF parse +
     /// verify + JIT) is skipped entirely. Misses populate the cache so the next
     /// default VM reuses the entry.
     pub(crate) fn resolve_program_entry<const CACHED: bool>(
@@ -175,7 +175,6 @@ impl HPSVM {
         env: &ProgramRuntimeEnvironment,
         current_slot: u64,
         program_bytes: &[u8],
-        program_size: usize,
     ) -> Result<Arc<ProgramCacheEntry>, HPSVMError> {
         let cache_key = if CACHED && current_slot == 0 {
             shared_default_env_ptr(self.accounts.runtime_environments_arc()).map(|env_ptr| {
@@ -192,17 +191,14 @@ impl HPSVM {
             }
         }
 
-        let mut loaded_program = ProgramCacheEntry::new(
+        let loaded_program = ProgramCacheEntry::load(
             loader_id,
             env.clone(),
-            current_slot,
-            current_slot,
+            crate::accounts_db::IMMEDIATE_DEPLOYMENT_SLOT,
             program_bytes,
-            program_size,
             &mut LoadProgramMetrics::default(),
         )
         .map_err(HPSVMError::from)?;
-        loaded_program.effective_slot = current_slot;
         let arc = Arc::new(loaded_program);
 
         if let Some(key) = cache_key {

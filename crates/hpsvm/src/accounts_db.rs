@@ -20,7 +20,7 @@ use solana_program_runtime::{
     loaded_programs::{
         ProgramCacheForTxBatch, ProgramRuntimeEnvironment, ProgramRuntimeEnvironments,
     },
-    program_cache_entry::{ProgramCacheEntry, ProgramCacheEntryOwner, ProgramCacheEntryType},
+    program_cache_entry::{ProgramCacheEntry, ProgramCacheEntryOwner},
     program_metrics::LoadProgramMetrics,
     sysvar_cache::SysvarCache,
 };
@@ -190,6 +190,12 @@ impl Default for AccountsDb {
         }
     }
 }
+
+// ponytail: agave 4.3 delays BPF program visibility by one slot
+// (`effective_slot = deployment_slot + 1`, enforced in cache `find`), and no
+// backdating can precede genesis slot 0. A deployment slot no real clock slot
+// ever equals keeps hpsvm-loaded programs immediately effective.
+pub(crate) const IMMEDIATE_DEPLOYMENT_SLOT: u64 = u64::MAX;
 
 impl std::fmt::Debug for AccountsDb {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -413,8 +419,7 @@ impl AccountsDb {
         // second lookup inside `replenish` that the old pattern incurred.
         for builtin in BUILTINS {
             if self.inner.contains_key(&builtin.program_id) {
-                let loaded_program =
-                    ProgramCacheEntry::new_builtin(0, builtin.name.len(), builtin.register_fn);
+                let loaded_program = ProgramCacheEntry::new_builtin(0, builtin.register_fn);
                 cache.replenish(builtin.program_id, Arc::new(loaded_program));
             }
         }
@@ -483,13 +488,11 @@ impl AccountsDb {
             self.sysvar_cache.get_clock().expect("clock sysvar should always be available").slot;
 
         if bpf_loader::check_id(owner) || bpf_loader_deprecated::check_id(owner) {
-            ProgramCacheEntry::new(
+            ProgramCacheEntry::load(
                 owner,
                 program_runtime,
-                slot,
-                slot,
+                IMMEDIATE_DEPLOYMENT_SLOT,
                 program_account.data(),
-                program_account.data().len(),
                 metrics,
             )
             .map_err(|e| {
@@ -506,28 +509,22 @@ impl AccountsDb {
                 return Err(InstructionError::InvalidAccountData);
             };
             let Some(programdata_account) = self.get_account(&programdata_address) else {
-                return Ok(ProgramCacheEntry::new_tombstone(
+                return Ok(ProgramCacheEntry::new_closed_tombstone(
                     slot,
                     ProgramCacheEntryOwner::LoaderV3,
-                    ProgramCacheEntryType::Closed,
                 ));
             };
             let program_data = programdata_account.data();
             if let Some(programdata) =
                 program_data.get(UpgradeableLoaderState::size_of_programdata_metadata()..)
             {
-                ProgramCacheEntry::new(
+                ProgramCacheEntry::load(
                     owner,
                     program_runtime,
-                    slot,
-                    slot,
+                    IMMEDIATE_DEPLOYMENT_SLOT,
                     programdata,
-                    program_account
-                        .data()
-                        .len()
-                        .saturating_add(program_data.len()),
                     metrics).map_err(|e| {
-                        tracing::error!("Error encountered when calling ProgramCacheEntry::new() for bpf_loader_upgradeable: {e:?}");
+                        tracing::error!("Error encountered when calling ProgramCacheEntry::load() for bpf_loader_upgradeable: {e:?}");
                         InstructionError::InvalidAccountData
                     })
             } else {
@@ -538,13 +535,11 @@ impl AccountsDb {
             if let Some(elf_bytes) =
                 program_account.data().get(LoaderV4State::program_data_offset()..)
             {
-                ProgramCacheEntry::new(
+                ProgramCacheEntry::load(
                     &loader_v4::id(),
                     program_runtime,
-                    slot,
-                    slot,
+                    IMMEDIATE_DEPLOYMENT_SLOT,
                     elf_bytes,
-                    program_account.data().len(),
                     metrics,
                 )
                 .map_err(|_| {

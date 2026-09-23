@@ -164,12 +164,8 @@ pub(crate) fn execute_tx_helper(
     let signature = sanitized_tx.signature().to_owned();
     let (inner_instructions, execution_trace) =
         crate::utils::inner_instructions::extract_instruction_trace_data(&mut ctx);
-    let ExecutionRecord {
-        accounts,
-        return_data,
-        touched_account_count: _,
-        accounts_resize_delta: _,
-    } = ctx.into();
+    let ExecutionRecord { accounts, return_data, touched_flags: _, accounts_resize_delta: _ } =
+        ctx.into();
     let msg = sanitized_tx.message();
     let post_accounts = accounts
         .into_iter()

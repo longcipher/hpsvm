@@ -73,7 +73,7 @@ impl<'a> ComputeUnitMatrixBencher<'a> {
         } else {
             for variant in group_variant_sets(programs) {
                 let report = execute_variant(&cases, Some(&variant))?;
-                reports.insert(variant.name.clone(), report);
+                reports.insert(variant.name, report);
             }
         }
 

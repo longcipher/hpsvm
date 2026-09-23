@@ -17,6 +17,7 @@ fix:
 lint:
 	rumdl check .
 	cargo sort -w -g -c
+	cargo workspace-inheritance-check
 	cargo +nightly fmt --all -- --check
 	cargo +nightly clippy --all -- -D warnings -A deprecated -A clippy::missing_const_for_fn -A clippy::unwrap_used -A clippy::or_fun_call -A unused-mut -A clippy::result_large_err
 	cargo shear
