@@ -331,6 +331,12 @@ mod utils;
 /// Core `HPSVM` construction, account/sysvar state, and transaction API.
 mod vm;
 
+/// Compiles and runs every ```rust``` block in the repository README as a
+/// doctest, so the published quick-start examples cannot drift from the API.
+#[cfg(doctest)]
+#[doc = include_str!("../../../README.md")]
+struct ReadmeExamples;
+
 pub use account_source::{AccountSource, AccountSourceError};
 pub use accounts_db::AccountsView;
 pub use builder::{FeatureConfigOpen, FeatureConfigSealed, HpsvmBuilder};

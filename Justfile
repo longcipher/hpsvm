@@ -26,9 +26,16 @@ lint:
 test:
   cargo test --all-features
 
+# Build the SBF test programs that the integration tests and benches load
+sbf-test-programs:
+  ./scripts/check-sbf-test-programs.sh
+
 # Run the full test suite across the workspace
-test-all:
+# `--all-targets` compiles benches but skips doctests, so the doc examples in
+# `lib.rs` and the README are verified by a separate pass below.
+test-all: sbf-test-programs
   cargo test --workspace --all-features --all-targets
+  cargo test --workspace --all-features --doc
 
 # Run tests with coverage
 test-coverage:
