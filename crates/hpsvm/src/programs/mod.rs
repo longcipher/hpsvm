@@ -74,6 +74,21 @@ fn load_non_spl_default_programs(svm: &mut HPSVM) {
         &bpf_loader::id(),
     )
     .expect("failed to load spl-memo 3.0.0");
+    // The ELFs in `crates/hpsvm/elf` are vendored prebuilt binaries, not built
+    // from the workspace. They track a Solana release rather than the crate
+    // versions in `Cargo.toml`, so bumping the dependencies does not refresh
+    // them and they can drift out of step with the programs loaded here.
+    //
+    // `core_bpf_stake-1.0.1.so` is known to be affected: its `DelegateStake`
+    // handler cannot decode a vote account written by the current
+    // `solana-vote-interface`, so `DelegateStake` and `DeactivateDelinquent`
+    // fail with `InvalidAccountData` while the rest of the stake program works.
+    // `crates/hpsvm/tests/stake_program.rs` pins that behaviour in
+    // `delegate_is_blocked_by_the_stale_vendored_stake_elf` so the drift is
+    // visible and fails loudly once the binary is rebuilt.
+    //
+    // To refresh, rebuild each program from its upstream source and commit the
+    // result; nothing in this workspace can regenerate them.
     svm.add_program_preverified(
         config::ID,
         include_bytes!("../../elf/config.so"),

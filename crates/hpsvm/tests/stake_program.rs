@@ -665,8 +665,87 @@ fn test_authorize() {
     }
 }
 
+/// Returns the staker recorded on an initialized stake account.
+fn get_stake_authority(svm: &mut HPSVM, stake: &Address) -> Address {
+    let (meta, _, _) = get_stake_account(svm, stake);
+    meta.authorized.staker
+}
+
+/// Pins a known incompatibility between the vendored stake program and the
+/// current crate generation, so the breakage is visible rather than silent.
+///
+/// `crates/hpsvm/elf/core_bpf_stake-1.0.1.so` was committed on 2026-04-28 and has
+/// never been rebuilt, while the workspace moved to the agave 4.3 crates on
+/// 2026-09-23. `DelegateStake` reads the vote account before the stake account,
+/// and the ELF's vote-state deserializer rejects every encoding the current
+/// `solana-vote-interface` can produce: bincode and wincode, padded and
+/// unpadded, at sizes from 3000 to 4000 bytes. The resulting error is
+/// `InvalidAccountData`, which is indistinguishable from genuine account
+/// corruption because the program's `to_program_error` helper folds unmapped
+/// stake errors into that same variant.
+///
+/// Only the instructions that read vote state are affected; `Initialize`,
+/// `Authorize`, `SetLockup` and their checked/with-seed forms all pass, which is
+/// why the rest of this file is green.
+///
+/// This test runs by default on purpose. It fails loudly once the vendored ELF is
+/// rebuilt into a working program, and that failure is the signal to remove this
+/// guard and drop the `#[ignore]` on `test_stake_delegate`.
 #[test]
-#[ignore]
+fn delegate_is_blocked_by_the_stale_vendored_stake_elf() {
+    let mut svm = HPSVM::new();
+    let accounts = Accounts::default();
+    let payer = Keypair::new();
+    svm.airdrop(&payer.pubkey(), 1_000_000_000_000).expect("payer airdrop must succeed");
+    accounts.initialize(&mut svm, &payer);
+
+    increment_vote_account_credits(&mut svm, accounts.vote_account.pubkey(), 100);
+    let minimum_delegation = get_minimum_delegation(&mut svm, &payer);
+    let staker_keypair = Keypair::new();
+    let authorized =
+        Authorized { staker: staker_keypair.pubkey(), withdrawer: staker_keypair.pubkey() };
+    let stake = create_independent_stake_account(&mut svm, &authorized, minimum_delegation, &payer);
+    let vote = accounts.vote_account.pubkey();
+
+    // Sanity: both accounts the program reads are well formed by every measure
+    // the host can apply, which is what makes the program's rejection notable.
+    let stake_account = svm.get_account(&stake).expect("stake account must exist");
+    assert_eq!(stake_account.owner, solana_sdk_ids::stake::id());
+    assert_eq!(stake_account.data.len(), StakeStateV2::size_of());
+
+    let vote_account = svm.get_account(&vote).expect("vote account must exist");
+    assert_eq!(vote_account.owner, solana_sdk_ids::vote::id());
+    assert!(VoteStateV4::is_correct_size_and_initialized(&vote_account.data));
+    assert!(
+        VoteStateV4::deserialize(&vote_account.data, &vote)
+            .expect("vote state must deserialize on the host")
+            .credits() >
+            0
+    );
+
+    // The staker is whatever `initialize` recorded on the stake account, and the
+    // transaction is signed by it, so the program gets past its own signature
+    // check and fails only on the account it cannot decode.
+    let staker = get_stake_authority(&mut svm, &stake);
+    assert_eq!(staker, staker_keypair.pubkey());
+
+    let result = process_instruction(
+        &mut svm,
+        &ixn::delegate_stake(&stake, &staker, &vote),
+        &vec![&staker_keypair],
+        &payer,
+    );
+
+    assert_eq!(
+        result.map_err(|e| e.to_string()),
+        Err("An account's data contents was invalid".to_owned()),
+        "the vendored stake ELF now accepts DelegateStake; remove this guard and \
+         drop the #[ignore] on test_stake_delegate"
+    );
+}
+
+#[test]
+#[ignore = "blocked by the stale vendored stake ELF; see delegate_is_blocked_by_the_stale_vendored_stake_elf"]
 fn test_stake_delegate() {
     let mut svm = HPSVM::new();
     let accounts = Accounts::default();
