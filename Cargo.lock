@@ -2185,6 +2185,7 @@ dependencies = [
  "solana-system-interface",
  "solana-transaction",
  "thiserror 2.0.20",
+ "wincode",
 ]
 
 [[package]]

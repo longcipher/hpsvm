@@ -26,6 +26,10 @@ pub(crate) enum CliError {
     InvalidProgramMapping { value: String },
     #[error("invalid program id {value}: {reason}")]
     InvalidProgramId { value: String, reason: String },
+    #[error("failed to read accounts file {path}: {reason}")]
+    AccountFile { path: String, reason: String },
+    #[error("failed to decode transaction file {path} as {encoding}: {reason}")]
+    TransactionEncoding { path: String, encoding: String, reason: String },
     #[error("no fixture files found in directory {path}")]
     NoFixturesInDirectory { path: String },
     #[cfg(not(feature = "fd-compat"))]
