@@ -7,12 +7,22 @@
 - Add explicit `ExecutionOutcome` flow through `HPSVM::transact` and `HPSVM::commit_transaction`.
 - Add `AccountSource` integration plus the `fork`-feature `RpcForkSource` for cached RPC-backed reads.
 - Add extracted execution environment surfaces, including `HPSVM::block_env` and the public `Inspector` hook via `HPSVM::with_inspector`.
+- Add `hpsvm fixture record` to the CLI, closing the fixture authoring loop: a signed transaction plus a JSON pre-state and program ELFs now produce a replayable fixture with a recorded baseline. Transactions may be supplied as raw, base64, or hex bytes, and pre-accounts accept base58 or 32-byte addresses.
+- Document the full `hpsvm` CLI surface (fixture record/inspect/run/compare and cu report) in the README.
 
 ### Changed
 
 - Share one commit-delta path across single-transaction and batch execution.
 - Move internal block/config/runtime state behind `BlockEnv`, `SvmCfg`, and `RuntimeEnv`.
 - Centralize custom syscalls and standard precompile materialization behind an internal `RuntimeExtensionRegistry`.
+- Run doctests as part of `just test-all`; `--all-targets` alone skips them, so the documented examples were never verified in CI.
+- Compile and run every Rust example in the README as a doctest so the published quick-start cannot drift from the API.
+
+### Fixed
+
+- Persist `--compute-unit-limit` into the recorded fixture's runtime block. The limit was applied to the recording VM but not stored, so a replay used the VM default and a fixture recorded against a tight budget could not reproduce its own baseline.
+- Make the broken stake delegation path visible instead of silent. The vendored `core_bpf_stake-1.0.1.so` ELF has drifted from the crate generation and cannot decode a vote account, so `DelegateStake` fails with `InvalidAccountData`. `test_stake_delegate` now carries a reason on its `#[ignore]`, a new `delegate_is_blocked_by_the_stale_vendored_stake_elf` test runs by default and pins the current behaviour, and the ELF load site documents the drift and how to refresh it. The guard fails with an explicit instruction once the binary is rebuilt.
+- Add `just sbf-test-programs` and make `just test-all` depend on it, so a missing SBF test program reports which artifact is absent instead of failing later with a bare `Os { code: 2 }` from inside an unrelated test.
 
 ## [0.11.0] - 2026-03-30
 

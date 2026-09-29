@@ -178,6 +178,111 @@ let _svm = HPSVM::new().with_inspector(inspector);
 assert_eq!(observed.load(Ordering::SeqCst), 0);
 ```
 
+## 🖥️ Command-line fixtures
+
+The `hpsvm-cli` crate ships an `hpsvm` binary for recording, replaying, and
+A/B-comparing transaction fixtures. A fixture bundles a transaction, the
+accounts it needs, the programs it calls, and a recorded baseline snapshot, so
+a program's behaviour can be frozen and checked in CI.
+
+```sh
+cargo install hpsvm-cli
+```
+
+### Record a fixture
+
+`fixture record` executes a signed transaction against the pre-state you supply
+and writes a fixture containing the observed baseline:
+
+```sh
+hpsvm fixture record \
+  --transaction tx.bin \
+  --accounts accounts.json \
+  --output fixtures/transfer-64.json \
+  --name transfer-64 \
+  --tag transfers
+```
+
+`--transaction` holds a `wincode`-serialized `VersionedTransaction`. Use
+`--transaction-encoding base64` or `--transaction-encoding hex` when the bytes
+travel as text instead. `--accounts` is a JSON array of pre-execution accounts:
+
+```json
+[
+  {
+    "address": "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin",
+    "lamports": 10000,
+    "owner": "11111111111111111111111111111111",
+    "executable": false,
+    "rent_epoch": 0,
+    "data": []
+  }
+]
+```
+
+Each address accepts either a base58 string or a 32-byte array, and the shape
+matches `input.pre_accounts` inside an existing fixture — so pre-accounts can
+be copied straight out of one. Programs the transaction calls are bound with
+`--program <program-id>=<path-to-elf>`, which is repeatable. Further options
+include `--loader`, `--slot`, `--sigverify`, `--log-bytes-limit`,
+`--compute-unit-limit`, and `--ignore-compute-units` for fixtures that should
+tolerate compute-unit drift. A `.json` output path writes the JSON codec; a
+`.bin` path writes the binary codec.
+
+### Replay and compare
+
+```sh
+hpsvm fixture run fixtures/transfer-64.json
+hpsvm fixture run fixtures/
+hpsvm fixture inspect fixtures/transfer-64.json
+```
+
+`run` replays a fixture — or every fixture in a directory, in sorted order —
+and exits non-zero on the first failure. `inspect` prints the fixture as JSON.
+
+`compare` replays the same fixture twice, once per program build, and diffs the
+two execution snapshots. This is the A/B check for a program rewrite — both
+mappings bind the fixture's program id, each to a different ELF:
+
+```sh
+hpsvm fixture compare fixtures/transfer-64.json \
+  --baseline-program 9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin=target/old.so \
+  --candidate-program 9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin=target/new.so
+```
+
+By default the comparison uses the checks stored in the fixture. Override them
+with `--config`, whose JSON body is a `compares` list:
+
+```json
+{ "compares": ["Status", "Fee", "Accounts"] }
+```
+
+Pass `--ignore-compute-units` to drop the compute-unit check while keeping the
+rest.
+
+### Compute-unit reports
+
+```sh
+hpsvm cu report fixtures/transfer-64.json \
+  --output-dir cu \
+  --baseline-dir cu \
+  --must-pass
+```
+
+This writes a Markdown summary (`cu-report.md`) and a JSON baseline sidecar
+(`cu-report.baseline.json`) into `--output-dir`. `--baseline-dir` is
+**read-only**: it supplies the previous sidecar to compute per-case
+compute-unit deltas against, so pointing it at the same directory makes the
+first run establish a baseline and later runs report drift:
+
+```text
+| Name       | Compute Units | Delta        | Pass |
+| transfer-64 |          150 | +0 (+0.00%) | PASS |
+```
+
+Add `--must-pass` to fail the command as soon as a case's recorded expectations
+no longer hold.
+
 ## 🛠️ Developing hpsvm
 
 ### Building Test Programs
@@ -190,6 +295,18 @@ cargo build-sbf
 ```
 
 ### Running Tests
+
+The test suite loads four SBF programs from
+`crates/hpsvm/test_programs/target/deploy/`. They are gitignored build
+artifacts, so build them once after checkout (CI does this automatically):
+
+```bash
+cd crates/hpsvm/test_programs && cargo build-sbf
+```
+
+`just test-all` checks for them first and reports exactly which artifact is
+missing. If `cargo build-sbf` itself fails on macOS, see the note at the end of
+this section.
 
 Run the full test suite:
 
@@ -280,6 +397,15 @@ Lint code:
 ```bash
 cargo clippy
 ```
+
+### Troubleshooting `cargo build-sbf`
+
+On macOS the anza platform-tools `rustc` can emit proc-macro dylibs that `dyld`
+rejects with `mis-aligned LINKEDIT string pool`, which `cargo` then reports as
+`can't find crate for borsh_derive` or `can't find crate for bytemuck_derive`.
+This is a toolchain bug and reproduces in a two-crate scratch project, so it is
+not caused by this repository. Build the test programs on another host and copy
+`crates/hpsvm/test_programs/target/deploy` back.
 
 ## 🙏 Acknowledgments
 
