@@ -18,11 +18,15 @@ test_workspace = true
 
 # Exclude code that is either not behaviour-bearing or not covered by the
 # unit/integration suite, so the mutation score reflects real test quality.
+#
+# `bin/hpsvm-cli/src` is deliberately NOT excluded: the CLI carries real
+# behaviour (argument validation, encoding, fixture authoring) with unit and
+# integration coverage. Excluding it wholesale would let new code merge with
+# zero mutation testing, since `--in-diff` still honours these globs.
 exclude_globs = [
     "crates/hpsvm/benches/**",
     "crates/hpsvm/tests/**",
     "crates/hpsvm-fixture/**",
-    "bin/**",
     "patches/**",
 ]
 
