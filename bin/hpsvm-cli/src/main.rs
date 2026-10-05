@@ -18,20 +18,20 @@ use crate::{
     record::{RecordRequest, record_fixture},
 };
 
-#[derive(Parser)]
+#[derive(Debug, Parser)]
 #[command(name = "hpsvm")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
 }
 
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 enum Command {
     Cu(CuArgs),
     Fixture(FixtureArgs),
 }
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 struct CuArgs {
     #[command(subcommand)]
     command: CuCommand,
@@ -176,7 +176,7 @@ fn decode_hex(encoded: &[u8]) -> Result<Vec<u8>, String> {
         .collect()
 }
 
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 enum CuCommand {
     Report {
         fixture: PathBuf,
@@ -193,13 +193,13 @@ enum CuCommand {
     },
 }
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 struct FixtureArgs {
     #[command(subcommand)]
     command: FixtureCommand,
 }
 
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 enum FixtureCommand {
     Inspect {
         fixture: PathBuf,
@@ -360,7 +360,15 @@ fn run() -> Result<(), error::CliError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{TransactionEncodingArg, decode_base64, decode_hex};
+    use std::path::PathBuf;
+
+    use clap::Parser;
+    use solana_address::Address;
+
+    use super::{
+        Cli, Command, CuArgs, CuCommand, FixtureArgs, FixtureCommand, FixtureFormatArg,
+        TransactionEncodingArg, decode_base64, decode_hex,
+    };
 
     /// Reference encoder, independent of the decoder under test.
     fn encode_base64(bytes: &[u8]) -> String {
@@ -467,5 +475,463 @@ mod tests {
         assert_eq!(TransactionEncodingArg::Raw.as_str(), "raw");
         assert_eq!(TransactionEncodingArg::Base64.as_str(), "base64");
         assert_eq!(TransactionEncodingArg::Hex.as_str(), "hex");
+    }
+
+    // ---------------------------------------------------------------------
+    // clap surface
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn parsing_requires_a_subcommand() {
+        assert!(Cli::try_parse_from(["hpsvm"]).is_err());
+        assert!(Cli::try_parse_from(["hpsvm", "nonsense"]).is_err());
+    }
+
+    #[test]
+    fn fixture_format_defaults_to_hpsvm_and_parses_both_values() {
+        let cli = Cli::try_parse_from(["hpsvm", "fixture", "inspect", "f.json"]).unwrap();
+        match cli.command {
+            Command::Fixture(FixtureArgs {
+                command: FixtureCommand::Inspect { fixture_format, .. },
+            }) => {
+                assert_eq!(fixture_format, FixtureFormatArg::Hpsvm);
+            }
+            other => panic!("unexpected command {other:?}"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "hpsvm",
+            "fixture",
+            "inspect",
+            "f.fix",
+            "--fixture-format",
+            "firedancer",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Fixture(FixtureArgs {
+                command: FixtureCommand::Inspect { fixture_format, .. },
+            }) => {
+                assert_eq!(fixture_format, FixtureFormatArg::Firedancer);
+            }
+            other => panic!("unexpected command {other:?}"),
+        }
+
+        assert!(
+            Cli::try_parse_from([
+                "hpsvm",
+                "fixture",
+                "inspect",
+                "f.json",
+                "--fixture-format",
+                "bogus"
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn cu_report_requires_output_dir_and_defaults_everything_else() {
+        let cli = Cli::try_parse_from(["hpsvm", "cu", "report", "f.json", "--output-dir", "out"])
+            .unwrap();
+        match cli.command {
+            Command::Cu(CuArgs {
+                command:
+                    CuCommand::Report {
+                        fixture,
+                        output_dir,
+                        baseline_dir,
+                        programs,
+                        must_pass,
+                        fixture_format,
+                    },
+            }) => {
+                assert_eq!(fixture, PathBuf::from("f.json"));
+                assert_eq!(output_dir, PathBuf::from("out"));
+                assert_eq!(baseline_dir, None);
+                assert!(programs.is_empty());
+                assert!(!must_pass);
+                assert_eq!(fixture_format, FixtureFormatArg::Hpsvm);
+            }
+            other => panic!("unexpected command {other:?}"),
+        }
+
+        // `--output-dir` is mandatory.
+        assert!(Cli::try_parse_from(["hpsvm", "cu", "report", "f.json"]).is_err());
+    }
+
+    #[test]
+    fn cu_report_collects_repeatable_program_mappings() {
+        let cli = Cli::try_parse_from([
+            "hpsvm",
+            "cu",
+            "report",
+            "f.json",
+            "--output-dir",
+            "out",
+            "--program",
+            "a=one.so",
+            "--program",
+            "b=two.so",
+            "--baseline-dir",
+            "base",
+            "--must-pass",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Cu(CuArgs {
+                command: CuCommand::Report { programs, baseline_dir, must_pass, .. },
+            }) => {
+                assert_eq!(programs, vec![String::from("a=one.so"), String::from("b=two.so")]);
+                assert_eq!(baseline_dir, Some(PathBuf::from("base")));
+                assert!(must_pass);
+            }
+            other => panic!("unexpected command {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fixture_run_collects_repeatable_programs() {
+        let cli = Cli::try_parse_from([
+            "hpsvm",
+            "fixture",
+            "run",
+            "dir",
+            "--program",
+            "id=path.so",
+            "--program",
+            "id2=path2.so",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Fixture(FixtureArgs { command: FixtureCommand::Run { programs, .. } }) => {
+                assert_eq!(
+                    programs,
+                    vec![String::from("id=path.so"), String::from("id2=path2.so")]
+                );
+            }
+            other => panic!("unexpected command {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fixture_compare_parses_both_program_flags_config_and_ignore_compute_units() {
+        let cli = Cli::try_parse_from([
+            "hpsvm",
+            "fixture",
+            "compare",
+            "f.json",
+            "--baseline-program",
+            "b=base.so",
+            "--candidate-program",
+            "c=cand.so",
+            "--config",
+            "cmp.json",
+            "--ignore-compute-units",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Fixture(FixtureArgs {
+                command:
+                    FixtureCommand::Compare {
+                        baseline_programs,
+                        candidate_programs,
+                        config,
+                        ignore_compute_units,
+                        ..
+                    },
+            }) => {
+                assert_eq!(baseline_programs, vec![String::from("b=base.so")]);
+                assert_eq!(candidate_programs, vec![String::from("c=cand.so")]);
+                assert_eq!(config, Some(PathBuf::from("cmp.json")));
+                assert!(ignore_compute_units);
+            }
+            other => panic!("unexpected command {other:?}"),
+        }
+
+        // All of those flags are optional.
+        let cli = Cli::try_parse_from(["hpsvm", "fixture", "compare", "f.json"]).unwrap();
+        match cli.command {
+            Command::Fixture(FixtureArgs {
+                command:
+                    FixtureCommand::Compare {
+                        baseline_programs,
+                        candidate_programs,
+                        config,
+                        ignore_compute_units,
+                        ..
+                    },
+            }) => {
+                assert!(baseline_programs.is_empty());
+                assert!(candidate_programs.is_empty());
+                assert_eq!(config, None);
+                assert!(!ignore_compute_units);
+            }
+            other => panic!("unexpected command {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fixture_record_defaults_name_tags_source_and_flags() {
+        let cli = Cli::try_parse_from([
+            "hpsvm",
+            "fixture",
+            "record",
+            "--transaction",
+            "tx.bin",
+            "--accounts",
+            "acc.json",
+            "-o",
+            "out.json",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Fixture(FixtureArgs {
+                command:
+                    FixtureCommand::Record {
+                        name,
+                        tags,
+                        source,
+                        programs,
+                        loader,
+                        slot,
+                        sigverify,
+                        log_bytes_limit,
+                        compute_unit_limit,
+                        ignore_compute_units,
+                        transaction_encoding,
+                        ..
+                    },
+            }) => {
+                assert_eq!(name, None);
+                assert!(tags.is_empty());
+                assert_eq!(source, None);
+                assert!(programs.is_empty());
+                assert_eq!(loader, None);
+                assert_eq!(slot, None);
+                // Signature verification is on by default.
+                assert!(sigverify);
+                assert_eq!(log_bytes_limit, None);
+                assert_eq!(compute_unit_limit, None);
+                assert!(!ignore_compute_units);
+                assert_eq!(transaction_encoding, TransactionEncodingArg::Raw);
+            }
+            other => panic!("unexpected command {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fixture_record_requires_transaction_accounts_and_output() {
+        assert!(Cli::try_parse_from(["hpsvm", "fixture", "record"]).is_err());
+        assert!(
+            Cli::try_parse_from(["hpsvm", "fixture", "record", "--transaction", "tx.bin"]).is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "hpsvm",
+                "fixture",
+                "record",
+                "--transaction",
+                "tx.bin",
+                "--accounts",
+                "acc.json"
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn fixture_record_parses_every_optional_flag() {
+        const LOADER: &str = "BPFLoaderUpgradeab1e11111111111111111111111";
+        let cli = Cli::try_parse_from([
+            "hpsvm",
+            "fixture",
+            "record",
+            "--transaction",
+            "tx.hex",
+            "--transaction-encoding",
+            "hex",
+            "--accounts",
+            "acc.json",
+            "-o",
+            "out.bin",
+            "--name",
+            "my-fixture",
+            "--tag",
+            "alpha",
+            "--tag",
+            "beta",
+            "--source",
+            "agave-test-validator",
+            "--program",
+            "p=prog.so",
+            "--loader",
+            LOADER,
+            "--slot",
+            "4242",
+            "--sigverify",
+            "false",
+            "--log-bytes-limit",
+            "1024",
+            "--compute-unit-limit",
+            "200000",
+            "--ignore-compute-units",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Fixture(FixtureArgs {
+                command:
+                    FixtureCommand::Record {
+                        transaction_encoding,
+                        name,
+                        tags,
+                        source,
+                        programs,
+                        loader,
+                        slot,
+                        sigverify,
+                        log_bytes_limit,
+                        compute_unit_limit,
+                        ignore_compute_units,
+                        output,
+                        ..
+                    },
+            }) => {
+                assert_eq!(transaction_encoding, TransactionEncodingArg::Hex);
+                assert_eq!(name.as_deref(), Some("my-fixture"));
+                assert_eq!(tags, vec![String::from("alpha"), String::from("beta")]);
+                assert_eq!(source.as_deref(), Some("agave-test-validator"));
+                assert_eq!(programs, vec![String::from("p=prog.so")]);
+                assert_eq!(loader, Some(parse_address(LOADER)));
+                assert_eq!(slot, Some(4242));
+                assert!(!sigverify);
+                assert_eq!(log_bytes_limit, Some(1024));
+                assert_eq!(compute_unit_limit, Some(200_000));
+                assert!(ignore_compute_units);
+                assert_eq!(output, PathBuf::from("out.bin"));
+            }
+            other => panic!("unexpected command {other:?}"),
+        }
+    }
+
+    #[test]
+    fn transaction_encoding_parses_every_value_and_rejects_unknown_ones() {
+        for (name, expected) in [
+            ("raw", TransactionEncodingArg::Raw),
+            ("base64", TransactionEncodingArg::Base64),
+            ("hex", TransactionEncodingArg::Hex),
+        ] {
+            let cli = Cli::try_parse_from([
+                "hpsvm",
+                "fixture",
+                "record",
+                "--transaction",
+                "tx",
+                "--transaction-encoding",
+                name,
+                "--accounts",
+                "a",
+                "-o",
+                "o.json",
+            ])
+            .unwrap();
+            match cli.command {
+                Command::Fixture(FixtureArgs {
+                    command: FixtureCommand::Record { transaction_encoding, .. },
+                }) => assert_eq!(transaction_encoding, expected, "encoding {name}"),
+                other => panic!("unexpected command {other:?}"),
+            }
+        }
+
+        assert!(
+            Cli::try_parse_from([
+                "hpsvm",
+                "fixture",
+                "record",
+                "--transaction",
+                "tx",
+                "--transaction-encoding",
+                "cbor",
+                "--accounts",
+                "a",
+                "-o",
+                "o.json",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn sigverify_accepts_an_explicit_true() {
+        let cli = Cli::try_parse_from([
+            "hpsvm",
+            "fixture",
+            "record",
+            "--transaction",
+            "tx",
+            "--accounts",
+            "a",
+            "-o",
+            "o.json",
+            "--sigverify",
+            "true",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Fixture(FixtureArgs { command: FixtureCommand::Record { sigverify, .. } }) => {
+                assert!(sigverify)
+            }
+            other => panic!("unexpected command {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_malformed_loader_address_is_rejected_at_parse_time() {
+        assert!(
+            Cli::try_parse_from([
+                "hpsvm",
+                "fixture",
+                "record",
+                "--transaction",
+                "tx",
+                "--accounts",
+                "a",
+                "-o",
+                "o.json",
+                "--loader",
+                "not-an-address",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn non_numeric_slot_and_limit_values_are_rejected() {
+        let base = [
+            "hpsvm",
+            "fixture",
+            "record",
+            "--transaction",
+            "tx",
+            "--accounts",
+            "a",
+            "-o",
+            "o.json",
+        ];
+        let with = |extra: &[&str]| -> Vec<String> {
+            base.iter().chain(extra.iter()).map(|arg| (*arg).to_string()).collect()
+        };
+
+        assert!(Cli::try_parse_from(with(&["--slot", "abc"])).is_err());
+        assert!(Cli::try_parse_from(with(&["--compute-unit-limit", "lots"])).is_err());
+        assert!(Cli::try_parse_from(with(&["--log-bytes-limit", "-1"])).is_err());
+        // The same command with valid values still parses.
+        assert!(Cli::try_parse_from(with(&["--slot", "1", "--log-bytes-limit", "0"])).is_ok());
+    }
+
+    /// Parses a base58 Solana address for the loader-arg assertions above.
+    fn parse_address(value: &str) -> Address {
+        use std::str::FromStr;
+        Address::from_str(value).expect("test address must be valid base58")
     }
 }

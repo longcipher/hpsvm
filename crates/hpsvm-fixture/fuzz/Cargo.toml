@@ -1,0 +1,52 @@
+[package]
+name = "hpsvm-fixture-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+# This crate is its own workspace root so `cargo fuzz` does not pull the
+# SBF-heavy parent workspace into the fuzz build.
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "decode_binary_fixture"
+path = "fuzz_targets/decode_binary_fixture.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_json_fixture"
+path = "fuzz_targets/decode_json_fixture.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_firedancer_fixture"
+path = "fuzz_targets/decode_firedancer_fixture.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "binary_fixture_idempotence"
+path = "fuzz_targets/binary_fixture_idempotence.rs"
+test = false
+doc = false
+bench = false
+
+[dependencies]
+hpsvm-fixture = { path = "..", features = ["bin-codec", "json-codec", "fd-codec"] }
+libfuzzer-sys = "0.4"
+# The Firedancer adapter exposes only `FiredancerFixture`, so the fuzz target
+# needs the protobuf crate directly. This is its own workspace, so the version
+# is literal.
+mollusk-svm-fuzz-fixture-firedancer = "0.15.1"
+prost = "0.14"
+serde_json = "1"
+wincode = "0.6"

@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use hpsvm::{HPSVM, Inspector};
 use solana_account::{Account, ReadableAccount};
 use solana_address::{Address, address};
@@ -217,9 +215,10 @@ fn commit_transaction_charges_failed_transaction_fees_for_transacted_outcomes() 
     let mut svm = HPSVM::new();
     let payer = Keypair::new();
     let program_id = address!("HvrRMSshMx3itvsyWDnWg2E3cy5h57iMaR7oVxSZJDSA");
-    let mut so_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    so_path.push("test_programs/target/deploy/failure.so");
-    svm.add_program_from_file(program_id, &so_path).unwrap();
+    let Some(failure) = hpsvm_test_support::read_program(hpsvm_test_support::FAILURE) else {
+        return;
+    };
+    svm.add_program(program_id, &failure).unwrap();
 
     let initial_balance = 1_000_000_000;
     svm.airdrop(&payer.pubkey(), initial_balance).unwrap();

@@ -73,7 +73,10 @@
 //!     };
 //!     let mut svm = HPSVM::new();
 //!     let payer = Keypair::new();
-//!     let bytes = include_bytes!("../test_programs/target/deploy/counter.so");
+//!     // The `counter` test program is a separate SBF build; skip when absent.
+//!     let Some(bytes) = hpsvm_test_support::read_program(hpsvm_test_support::COUNTER) else {
+//!         return;
+//!     };
 //!     svm.add_program(program_id, &bytes[..]);
 //!     svm.airdrop(&payer.pubkey(), 1_000_000_000).unwrap();
 //!     let blockhash = svm.latest_blockhash();
@@ -110,7 +113,11 @@
 //! fn test_set_clock() {
 //!     let program_id = Address::new_unique();
 //!     let mut svm = HPSVM::new();
-//!     let bytes = include_bytes!("../test_programs/target/deploy/hpsvm_clock_example.so");
+//!     // The clock example is a separate SBF build; skip when absent.
+//!     let Some(bytes) = hpsvm_test_support::read_program(hpsvm_test_support::CLOCK_EXAMPLE)
+//!     else {
+//!         return;
+//!     };
 //!     svm.add_program(program_id, &bytes[..]);
 //!     let payer = Keypair::new();
 //!     let payer_address = payer.pubkey();

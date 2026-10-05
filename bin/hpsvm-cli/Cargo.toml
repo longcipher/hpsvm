@@ -37,6 +37,7 @@ wincode = { workspace = true }
 [dev-dependencies]
 mollusk-svm-fuzz-fixture-firedancer.workspace = true
 solana-account.workspace = true
+solana-instruction.workspace = true
 solana-keypair.workspace = true
 solana-message.workspace = true
 solana-sdk-ids.workspace = true

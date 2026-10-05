@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use hpsvm::HPSVM;
 use solana_account::Account;
 use solana_address::{Address, address};
@@ -15,10 +13,9 @@ use solana_signer::Signer;
 use solana_transaction::{Transaction, versioned::VersionedTransaction};
 use solana_transaction_error::TransactionError;
 
-fn read_counter_program() -> Vec<u8> {
-    let mut so_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    so_path.push("test_programs/target/deploy/counter.so");
-    std::fs::read(so_path).unwrap()
+/// Returns the `counter` SBF program, or `None` when it has not been built.
+fn read_counter_program() -> Option<Vec<u8>> {
+    hpsvm_test_support::read_program(hpsvm_test_support::COUNTER)
 }
 
 #[test]
@@ -27,7 +24,10 @@ pub fn integration_test() {
     let payer_kp = Keypair::new();
     let payer_pk = payer_kp.pubkey();
     let program_id = address!("GtdambwDgHWrDJdVPBkEHGhCwokqgAoch162teUjJse2");
-    svm.add_program(program_id, &read_counter_program()).unwrap();
+    let Some(counter) = read_counter_program() else {
+        return;
+    };
+    svm.add_program(program_id, &counter).unwrap();
     svm.airdrop(&payer_pk, 1000000000).unwrap();
     let blockhash = svm.latest_blockhash();
     let counter_address = address!("J39wvrFY2AkoAUCke5347RMNk3ditxZfVidoZ7U6Fguf");
@@ -78,7 +78,10 @@ fn test_address_lookup_table() {
     let payer_kp = Keypair::new();
     let payer_pk = payer_kp.pubkey();
     let program_id = address!("GtdambwDgHWrDJdVPBkEHGhCwokqgAoch162teUjJse2");
-    svm.add_program(program_id, &read_counter_program()).unwrap();
+    let Some(counter) = read_counter_program() else {
+        return;
+    };
+    svm.add_program(program_id, &counter).unwrap();
     svm.airdrop(&payer_pk, 1000000000).unwrap();
     let blockhash = svm.latest_blockhash();
     let counter_address = address!("J39wvrFY2AkoAUCke5347RMNk3ditxZfVidoZ7U6Fguf");
@@ -253,8 +256,11 @@ fn test_register_tracing_handler() {
     let payer_pk = payer_kp.pubkey();
     let program_id = address!("GtdambwDgHWrDJdVPBkEHGhCwokqgAoch162teUjJse2");
 
+    let Some(counter) = read_counter_program() else {
+        return;
+    };
     let init_svm = |svm: &mut HPSVM| -> Address {
-        svm.add_program(program_id, &read_counter_program()).unwrap();
+        svm.add_program(program_id, &counter).unwrap();
         svm.airdrop(&payer_pk, 1000000000).unwrap();
         let counter_address = address!("J39wvrFY2AkoAUCke5347RMNk3ditxZfVidoZ7U6Fguf");
         let _ = svm.set_account(

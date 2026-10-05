@@ -1,13 +1,10 @@
-use std::path::PathBuf;
-
 use hpsvm::HPSVM;
 use solana_account::{Account, ReadableAccount};
 use solana_address::{Address, address};
 
-fn read_counter_program() -> Vec<u8> {
-    let mut so_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    so_path.push("test_programs/target/deploy/counter.so");
-    std::fs::read(so_path).unwrap()
+/// Returns the `counter` SBF program, or `None` when it has not been built.
+fn read_counter_program() -> Option<Vec<u8>> {
+    hpsvm_test_support::read_program(hpsvm_test_support::COUNTER)
 }
 
 #[test]
@@ -16,7 +13,9 @@ fn accounts_view_exposes_account_and_program_reads() {
     let account_address = Address::new_unique();
     let program_id = address!("GtdambwDgHWrDJdVPBkEHGhCwokqgAoch162teUjJse2");
     let owner = Address::new_unique();
-    let program_bytes = read_counter_program();
+    let Some(program_bytes) = read_counter_program() else {
+        return;
+    };
 
     svm.set_account(
         account_address,

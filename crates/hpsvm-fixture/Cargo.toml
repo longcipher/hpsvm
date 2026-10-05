@@ -37,7 +37,9 @@ thiserror.workspace = true
 wincode = { workspace = true, optional = true, features = ["derive"] }
 
 [dev-dependencies]
+hpsvm-test-support.workspace = true
 mollusk-svm-fuzz-fixture-firedancer.workspace = true
+proptest.workspace = true
 prost.workspace = true
 solana-account.workspace = true
 solana-keypair.workspace = true

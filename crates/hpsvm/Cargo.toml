@@ -120,7 +120,9 @@ tracing.workspace = true
 [dev-dependencies]
 criterion.workspace = true
 ed25519-dalek.workspace = true
+hpsvm-test-support.workspace = true
 k256.workspace = true
+proptest.workspace = true
 serde.workspace = true
 solana-clock.workspace = true
 solana-compute-budget-interface.workspace = true
@@ -171,6 +173,10 @@ required-features = ["token", "token-2022"]
 
 [[test]]
 name = "token_one_owner"
+required-features = ["token"]
+
+[[test]]
+name = "token_builders"
 required-features = ["token"]
 
 [[bench]]

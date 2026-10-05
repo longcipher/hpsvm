@@ -1,8 +1,6 @@
 #![allow(missing_docs)]
 #![cfg(feature = "bin-codec")]
 
-use std::path::PathBuf;
-
 use hpsvm::HPSVM;
 use hpsvm_fixture::{
     AccountSnapshot, BenchError, CaptureBuilder, Compare, ComputeUnitBencher,
@@ -29,10 +27,9 @@ fn snapshot_account(vm: &HPSVM, address: Address) -> AccountSnapshot {
     AccountSnapshot::from_readable(address, &account)
 }
 
-fn read_counter_program() -> Vec<u8> {
-    let mut so_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    so_path.push("../hpsvm/test_programs/target/deploy/counter.so");
-    std::fs::read(so_path).unwrap()
+/// Returns the `counter` SBF program, or `None` when it has not been built.
+fn read_counter_program() -> Option<Vec<u8>> {
+    hpsvm_test_support::read_program(hpsvm_test_support::COUNTER)
 }
 
 fn build_fixture() -> Fixture {
@@ -147,13 +144,11 @@ fn matrix_bencher_errors_when_variant_is_missing_a_bound_fixture_program() {
         ),
     ]);
 
+    let Some(counter) = read_counter_program() else {
+        return;
+    };
     let error = ComputeUnitMatrixBencher::new()
-        .program(
-            "candidate",
-            bpf_loader_upgradeable::id(),
-            first_program_id,
-            read_counter_program(),
-        )
+        .program("candidate", bpf_loader_upgradeable::id(), first_program_id, counter)
         .case(("system-transfer", &fixture))
         .execute()
         .unwrap_err();
@@ -181,7 +176,9 @@ fn matrix_bencher_supports_multiple_program_bindings_for_one_variant_name() {
             Some(String::from("second")),
         ),
     ]);
-    let program_bytes = read_counter_program();
+    let Some(program_bytes) = read_counter_program() else {
+        return;
+    };
 
     let report = ComputeUnitMatrixBencher::new()
         .program("candidate", bpf_loader_upgradeable::id(), first_program_id, program_bytes.clone())

@@ -1,0 +1,11 @@
+[package]
+name = "hpsvm-test-support"
+description = "Shared SBF test-program fixture lookup for hpsvm tests, benches, and doctests"
+license.workspace = true
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true

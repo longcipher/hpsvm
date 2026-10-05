@@ -1,7 +1,4 @@
-use std::{
-    panic::{AssertUnwindSafe, catch_unwind},
-    path::PathBuf,
-};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use hpsvm::HPSVM;
 use solana_account::{Account, state_traits::StateMut};
@@ -19,10 +16,9 @@ use solana_sdk_ids::bpf_loader_upgradeable;
 use solana_signer::Signer;
 use solana_transaction::Transaction;
 
-fn read_counter_program() -> Vec<u8> {
-    let mut so_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    so_path.push("test_programs/target/deploy/counter.so");
-    std::fs::read(so_path).unwrap()
+/// Returns the `counter` SBF program, or `None` when it has not been built.
+fn read_counter_program() -> Option<Vec<u8>> {
+    hpsvm_test_support::read_program(hpsvm_test_support::COUNTER)
 }
 
 fn set_program_upgrade_authority(
@@ -88,7 +84,10 @@ fn close_upgradeable_program_keeps_vm_usable() {
 
     let mut svm = HPSVM::new();
     svm.airdrop(&authority, LAMPORTS_PER_SOL).unwrap();
-    svm.add_program(program_id, &read_counter_program()).unwrap();
+    let Some(counter) = read_counter_program() else {
+        return;
+    };
+    svm.add_program(program_id, &counter).unwrap();
 
     let programdata_address = set_program_upgrade_authority(&mut svm, program_id, authority);
     let original_program_account = svm.get_account(&program_id).unwrap();

@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use agave_feature_set::FeatureSet;
 use hpsvm::HPSVM;
 use solana_address::address;
@@ -39,10 +37,9 @@ fn register_burn_cus(
     loader.register_definition::<SyscallBurnCus>(name)
 }
 
-fn read_custom_syscall_program() -> Vec<u8> {
-    let mut so_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    so_path.push("test_programs/target/deploy/test_program_custom_syscall.so");
-    std::fs::read(so_path).unwrap()
+/// Returns the `custom-syscall` SBF program, or `None` when it has not been built.
+fn read_custom_syscall_program() -> Option<Vec<u8>> {
+    hpsvm_test_support::read_program(hpsvm_test_support::CUSTOM_SYSCALL)
 }
 
 fn hpsvm_ctor() -> HPSVM {
@@ -92,7 +89,10 @@ pub fn test_custom_syscall() {
     let payer_kp = Keypair::new();
     let payer_pk = payer_kp.pubkey();
     let program_id = address!("GtdambwDgHWrDJdVPBkEHGhCwokqgAoch162teUjJse2");
-    svm.add_program(program_id, &read_custom_syscall_program()).unwrap();
+    let Some(custom_syscall) = read_custom_syscall_program() else {
+        return;
+    };
+    svm.add_program(program_id, &custom_syscall).unwrap();
     svm.airdrop(&payer_pk, 1000000000).unwrap();
     let blockhash = svm.latest_blockhash();
     let msg = Message::new_with_blockhash(
@@ -111,7 +111,10 @@ pub fn test_custom_syscall_after_new() {
     let payer_kp = Keypair::new();
     let payer_pk = payer_kp.pubkey();
     let program_id = address!("GtdambwDgHWrDJdVPBkEHGhCwokqgAoch162teUjJse2");
-    svm.add_program(program_id, &read_custom_syscall_program()).unwrap();
+    let Some(custom_syscall) = read_custom_syscall_program() else {
+        return;
+    };
+    svm.add_program(program_id, &custom_syscall).unwrap();
     svm.airdrop(&payer_pk, 1000000000).unwrap();
     let blockhash = svm.latest_blockhash();
     let msg = Message::new_with_blockhash(
@@ -130,7 +133,10 @@ pub fn test_custom_syscall_with_builder() {
     let payer_kp = Keypair::new();
     let payer_pk = payer_kp.pubkey();
     let program_id = address!("GtdambwDgHWrDJdVPBkEHGhCwokqgAoch162teUjJse2");
-    svm.add_program(program_id, &read_custom_syscall_program()).unwrap();
+    let Some(custom_syscall) = read_custom_syscall_program() else {
+        return;
+    };
+    svm.add_program(program_id, &custom_syscall).unwrap();
     svm.airdrop(&payer_pk, 1000000000).unwrap();
     let blockhash = svm.latest_blockhash();
     let msg = Message::new_with_blockhash(

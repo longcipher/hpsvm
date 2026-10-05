@@ -45,10 +45,24 @@ test-coverage:
 mutants:
   cargo mutants --workspace
 
-# Run mutation testing only on changes vs. master (fast feedback)
+# Run mutation testing on everything not yet merged into master (fast feedback)
+#
+# The diff must be produced with `--no-ext-diff --no-textconv`: a global
+# `diff.external` (difftastic, delta, ...) makes `git diff` emit its own tool
+# output instead of a patch, and cargo-mutants then reads an empty diff, mutates
+# nothing and still exits 0. That silently turns this gate off.
+#
+# Three-dot covers committed work on the branch; the appended `git diff HEAD`
+# covers uncommitted work, so the gate is still useful before a commit.
 mutants-quick:
   mkdir -p target/mutants
-  git diff origin/master...HEAD > target/mutants/branch.diff
+  git diff --no-ext-diff --no-textconv origin/master...HEAD > target/mutants/branch.diff
+  git diff --no-ext-diff --no-textconv HEAD >> target/mutants/branch.diff
+  @if ! grep -q '^diff --git ' target/mutants/branch.diff; then \
+    echo 'error: target/mutants/branch.diff contains no file headers, so there is nothing to mutate.' >&2; \
+    echo '       This usually means the base ref is wrong or an external diff driver is active.' >&2; \
+    exit 1; \
+  fi
   cargo mutants --workspace --in-diff target/mutants/branch.diff
 
 # List the mutants that would be generated without running them

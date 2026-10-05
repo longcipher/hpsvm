@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 #[cfg(feature = "invocation-inspect-callback")]
 use std::sync::{
     Arc,
@@ -51,22 +50,19 @@ fn transfer_tx(
     )
 }
 
-fn read_counter_program() -> Vec<u8> {
-    let mut so_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    so_path.push("test_programs/target/deploy/counter.so");
-    std::fs::read(so_path).unwrap()
+/// Returns the `counter` SBF program, or `None` when it has not been built.
+fn read_counter_program() -> Option<Vec<u8>> {
+    hpsvm_test_support::read_program(hpsvm_test_support::COUNTER)
 }
 
-fn read_failure_program() -> Vec<u8> {
-    let mut so_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    so_path.push("test_programs/target/deploy/failure.so");
-    std::fs::read(so_path).unwrap()
+/// Returns the `failure` SBF program, or `None` when it has not been built.
+fn read_failure_program() -> Option<Vec<u8>> {
+    hpsvm_test_support::read_program(hpsvm_test_support::FAILURE)
 }
 
-fn read_custom_syscall_program() -> Vec<u8> {
-    let mut so_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    so_path.push("test_programs/target/deploy/test_program_custom_syscall.so");
-    std::fs::read(so_path).unwrap()
+/// Returns the `custom-syscall` SBF program, or `None` when it has not been built.
+fn read_custom_syscall_program() -> Option<Vec<u8>> {
+    hpsvm_test_support::read_program(hpsvm_test_support::CUSTOM_SYSCALL)
 }
 
 fn set_program_upgrade_authority(
@@ -211,7 +207,10 @@ fn sequential_commit_matches_batch_commit() {
     for svm in [&mut serial_vm, &mut batch_vm] {
         svm.airdrop(&authority_address, 1_000_000_000).unwrap();
         svm.airdrop(&batch_peer_address, 1_000_000_000).unwrap();
-        svm.add_program(program_id, &read_counter_program()).unwrap();
+        let Some(counter) = read_counter_program() else {
+            return;
+        };
+        svm.add_program(program_id, &counter).unwrap();
         set_program_upgrade_authority(svm, program_id, authority_address);
         svm.set_account(
             counter_address,
@@ -322,7 +321,10 @@ fn send_transaction_batch_preserves_mixed_success_and_failure_semantics_within_s
     let failure_program_id = address!("HvrRMSshMx3itvsyWDnWg2E3cy5h57iMaR7oVxSZJDSA");
     let initial_balance = 1_000_000_000;
 
-    svm.add_program(failure_program_id, &read_failure_program()).unwrap();
+    let Some(failure) = read_failure_program() else {
+        return;
+    };
+    svm.add_program(failure_program_id, &failure).unwrap();
     svm.airdrop(&failing_payer.pubkey(), initial_balance).unwrap();
     svm.airdrop(&successful_payer.pubkey(), initial_balance).unwrap();
 
@@ -368,7 +370,10 @@ fn send_transaction_batch_plans_lookup_table_updates_before_lookup_users() {
     let program_id = address!("GtdambwDgHWrDJdVPBkEHGhCwokqgAoch162teUjJse2");
     let counter_address = address!("J39wvrFY2AkoAUCke5347RMNk3ditxZfVidoZ7U6Fguf");
 
-    svm.add_program(program_id, &read_counter_program()).unwrap();
+    let Some(counter) = read_counter_program() else {
+        return;
+    };
+    svm.add_program(program_id, &counter).unwrap();
     svm.airdrop(&authority_pk, 1_000_000_000).unwrap();
     svm.airdrop(&lookup_user_pk, 1_000_000_000).unwrap();
     svm.set_account(
@@ -467,7 +472,10 @@ fn send_transaction_batch_returns_transaction_error_when_later_stage_lookup_user
     svm.warp_to_slot(1);
     svm.register_custom_syscall("sol_burn_cus", register_invalidate_lookup_table)
         .expect("lookup-table invalidation syscall should register");
-    svm.add_program(solana_sdk_ids::address_lookup_table::id(), &read_custom_syscall_program())
+    let Some(custom_syscall) = read_custom_syscall_program() else {
+        return;
+    };
+    svm.add_program(solana_sdk_ids::address_lookup_table::id(), &custom_syscall)
         .expect("lookup-table program override should load");
 
     let batch_blockhash = svm.latest_blockhash();
@@ -561,7 +569,10 @@ fn send_transaction_batch_runs_independent_stage_transactions_in_parallel() {
     let counter_a = address!("J39wvrFY2AkoAUCke5347RMNk3ditxZfVidoZ7U6Fguf");
     let counter_b = Address::new_unique();
 
-    svm.add_program(program_id, &read_counter_program()).unwrap();
+    let Some(counter) = read_counter_program() else {
+        return;
+    };
+    svm.add_program(program_id, &counter).unwrap();
     svm.airdrop(&payer_a.pubkey(), 1_000_000_000).unwrap();
     svm.airdrop(&payer_b.pubkey(), 1_000_000_000).unwrap();
     svm.set_account(

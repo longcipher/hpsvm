@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use hpsvm::HPSVM;
 use solana_address::{Address, address};
 use solana_instruction::{Instruction, error::InstructionError};
@@ -44,9 +42,10 @@ fn test_fees_failed_transaction() {
 
     let mut svm = HPSVM::new();
     let program_id = address!("HvrRMSshMx3itvsyWDnWg2E3cy5h57iMaR7oVxSZJDSA");
-    let mut so_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    so_path.push("test_programs/target/deploy/failure.so");
-    svm.add_program_from_file(program_id, &so_path).unwrap();
+    let Some(failure) = hpsvm_test_support::read_program(hpsvm_test_support::FAILURE) else {
+        return;
+    };
+    svm.add_program(program_id, &failure).unwrap();
     let initial_balance = 1_000_000_000;
     svm.airdrop(&from, initial_balance).unwrap();
     let instruction = Instruction { program_id, accounts: vec![], data: vec![] };

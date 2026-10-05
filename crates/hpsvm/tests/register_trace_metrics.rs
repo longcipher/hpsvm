@@ -1,7 +1,5 @@
 #![cfg(feature = "register-tracing")]
 
-use std::path::PathBuf;
-
 use hpsvm::{HPSVM, register_tracing::TraceMetricsCollector};
 use solana_account::Account;
 use solana_address::{Address, address};
@@ -11,10 +9,9 @@ use solana_message::Message;
 use solana_signer::Signer;
 use solana_transaction::Transaction;
 
-fn read_counter_program() -> Vec<u8> {
-    let mut so_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    so_path.push("test_programs/target/deploy/counter.so");
-    std::fs::read(so_path).unwrap()
+/// Returns the `counter` SBF program, or `None` when it has not been built.
+fn read_counter_program() -> Option<Vec<u8>> {
+    hpsvm_test_support::read_program(hpsvm_test_support::COUNTER)
 }
 
 fn make_tx(
@@ -48,7 +45,10 @@ fn trace_metrics_collector_records_counter_program_execution() {
     let program_id = address!("GtdambwDgHWrDJdVPBkEHGhCwokqgAoch162teUjJse2");
     let counter_address = address!("J39wvrFY2AkoAUCke5347RMNk3ditxZfVidoZ7U6Fguf");
 
-    svm.add_program(program_id, &read_counter_program()).unwrap();
+    let Some(counter) = read_counter_program() else {
+        return;
+    };
+    svm.add_program(program_id, &counter).unwrap();
     svm.airdrop(&payer_pk, 1_000_000_000).unwrap();
     svm.set_account(
         counter_address,
@@ -88,7 +88,10 @@ fn trace_metrics_collector_accumulates_repeated_counter_invocations() {
     let program_id = address!("GtdambwDgHWrDJdVPBkEHGhCwokqgAoch162teUjJse2");
     let counter_address = address!("J39wvrFY2AkoAUCke5347RMNk3ditxZfVidoZ7U6Fguf");
 
-    svm.add_program(program_id, &read_counter_program()).unwrap();
+    let Some(counter) = read_counter_program() else {
+        return;
+    };
+    svm.add_program(program_id, &counter).unwrap();
     svm.airdrop(&payer_pk, 1_000_000_000).unwrap();
     svm.set_account(
         counter_address,

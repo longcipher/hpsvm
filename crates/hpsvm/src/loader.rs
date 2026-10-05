@@ -134,3 +134,152 @@ pub fn deploy_upgradeable_program(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::TransactionMetadata;
+
+    /// Builds a VM that can deploy SBPF v0 programs.
+    ///
+    /// `HPSVM::new()` enables every feature, including
+    /// `disable_sbpf_v0_v1_v2_deployment`, which blocks the v0 deployments the
+    /// loader helpers exist to exercise, so these tests build against the default
+    /// feature set instead.
+    fn deployable_vm() -> HPSVM {
+        HPSVM::builder()
+            .with_feature_set(agave_feature_set::FeatureSet::default())
+            .with_builtins()
+            .with_lamports(1_000_000_000_000_000)
+            .with_sysvars()
+            .build()
+            .expect("the default builder configuration must succeed")
+    }
+
+    fn funded(lamports: u64) -> (HPSVM, Keypair) {
+        let mut svm = deployable_vm();
+        let payer = Keypair::new();
+        svm.airdrop(&payer.pubkey(), lamports).unwrap();
+        (svm, payer)
+    }
+
+    fn is_instruction_error(error: &FailedTransactionMetadata) -> bool {
+        matches!(error.err, TransactionError::InstructionError(..))
+    }
+
+    #[test]
+    fn the_write_chunk_size_is_the_loader_maximum() {
+        // The upgradeable loader rejects `write` chunks larger than 512 bytes, so
+        // this constant is a protocol limit rather than a tunable.
+        assert_eq!(CHUNK_SIZE, 512);
+    }
+
+    /// Every loader failure is reported as an instruction error at index 0 with
+    /// the underlying cause preserved.
+    #[test]
+    fn loader_instruction_error_wraps_the_cause_at_index_zero() {
+        let meta = loader_instruction_error(InstructionError::InvalidAccountData);
+        assert!(matches!(
+            meta.err,
+            TransactionError::InstructionError(0, InstructionError::InvalidAccountData)
+        ));
+        assert_eq!(meta.meta, TransactionMetadata::default());
+    }
+
+    #[test]
+    fn loader_instruction_error_preserves_a_custom_code() {
+        let meta = loader_instruction_error(InstructionError::Custom(9));
+        match meta.err {
+            TransactionError::InstructionError(0, InstructionError::Custom(code)) => {
+                assert_eq!(code, 9);
+            }
+            other => panic!("expected Custom(9), got {other:?}"),
+        }
+    }
+
+    /// An empty ELF must be rejected by the loader without panicking.
+    #[test]
+    fn deploying_an_empty_program_fails() {
+        let (mut svm, payer) = funded(10_000_000_000);
+        let program_kp = Keypair::new();
+
+        let error = deploy_upgradeable_program(&mut svm, &payer, &program_kp, &[])
+            .expect_err("an empty ELF must be rejected");
+        assert!(is_instruction_error(&error), "expected an instruction error, got {:?}", error.err);
+    }
+
+    /// A zeroed ELF passes buffer creation and the chunk writes but fails at
+    /// deploy time, when the loader parses the ELF header.
+    #[test]
+    fn deploying_a_garbage_elf_fails() {
+        let (mut svm, payer) = funded(10_000_000_000);
+        let program_kp = Keypair::new();
+
+        let error = deploy_upgradeable_program(&mut svm, &payer, &program_kp, &[0u8; 1024])
+            .expect_err("a zeroed ELF must be rejected");
+        assert!(is_instruction_error(&error), "expected an instruction error, got {:?}", error.err);
+    }
+
+    /// An unfunded payer cannot create the buffer, so the failure must be
+    /// reported rather than swallowed.
+    #[test]
+    fn deploying_without_funds_fails() {
+        let mut svm = deployable_vm();
+        let payer = Keypair::new();
+        let program_kp = Keypair::new();
+
+        let error = deploy_upgradeable_program(&mut svm, &payer, &program_kp, &[0u8; 16])
+            .expect_err("an unfunded payer must be rejected");
+        assert!(
+            matches!(error.err, TransactionError::AccountNotFound),
+            "expected AccountNotFound, got {:?}",
+            error.err
+        );
+    }
+
+    /// Changing the authority of an address that holds no program must fail.
+    #[test]
+    fn set_upgrade_authority_on_an_unknown_program_fails() {
+        let (mut svm, payer) = funded(10_000_000_000);
+        let program_id = Address::new_unique();
+
+        let error = set_upgrade_authority(
+            &mut svm,
+            &payer,
+            &program_id,
+            &payer,
+            Some(&Address::new_unique()),
+        )
+        .expect_err("an address with no program data must be rejected");
+        assert!(is_instruction_error(&error), "expected an instruction error, got {:?}", error.err);
+    }
+
+    /// A `from` keypair that is not the current authority has to sign as well;
+    /// without its signature the transfer must be rejected.
+    #[test]
+    fn set_upgrade_authority_rejects_a_missing_authority_signature() {
+        let (mut svm, payer) = funded(10_000_000_000);
+        let program_id = Address::new_unique();
+        let stranger = Keypair::new();
+        svm.airdrop(&stranger.pubkey(), 10_000_000_000).unwrap();
+
+        // The authority is only named, never signed, so the loader rejects it
+        // before it can complain about the missing program data.
+        let error = set_upgrade_authority(
+            &mut svm,
+            &stranger,
+            &program_id,
+            &payer,
+            Some(&stranger.pubkey()),
+        )
+        .expect_err("an unsigned authority must be rejected");
+        assert!(
+            matches!(
+                error.err,
+                TransactionError::InstructionError(..) | TransactionError::AccountNotFound
+            ),
+            "expected an instruction or lookup failure, got {:?}",
+            error.err
+        );
+    }
+}

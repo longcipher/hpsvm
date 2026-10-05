@@ -12,7 +12,6 @@ use solana_keypair::Keypair;
 use solana_message::Message;
 use solana_transaction::Transaction;
 
-const COUNTER_PROGRAM_RELATIVE_PATH: &str = "test_programs/target/deploy/counter.so";
 const HOTPATH_ENV_VAR: &str = "HPSVM_HOTPATH";
 const HOTPATH_LIMIT_ENV_VAR: &str = "HPSVM_HOTPATH_LIMIT";
 const TRACE_METRICS_ENV_VAR: &str = "HPSVM_TRACE_METRICS";
@@ -134,14 +133,18 @@ pub fn new_benchmark_vm() -> HPSVM {
     svm
 }
 
+/// Path to the `counter` SBF program.
+///
+/// Panics when it is unavailable. Benches deliberately do not skip: a
+/// benchmark that silently measured nothing is worse than a loud failure.
 pub fn counter_program_path() -> PathBuf {
-    let mut so_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    so_path.push(COUNTER_PROGRAM_RELATIVE_PATH);
-    so_path
+    hpsvm_test_support::find_program(hpsvm_test_support::COUNTER)
+        .expect("counter program should be built or vendored in test_programs/prebuilt")
 }
 
+/// Bytes of the `counter` SBF program; panics when it is unavailable.
 pub fn read_counter_program() -> Vec<u8> {
-    std::fs::read(counter_program_path()).expect("counter program bytes should be available")
+    hpsvm_test_support::read_program_or_panic(hpsvm_test_support::COUNTER)
 }
 
 pub fn make_counter_tx(
