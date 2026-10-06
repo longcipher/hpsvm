@@ -17,6 +17,12 @@ report-io = ["dep:serde_json", "serde"]
 # Human-readable Markdown rendering of a compute-unit report. Write-only:
 # baselines always round-trip through the `report-io` JSON sidecar.
 markdown = ["report-io"]
+# FireDancer fixture codec. Unavailable while the workspace tracks the agave
+# 4.4.0-beta.0 / solana 5.x line: every published
+# `mollusk-svm-fuzz-fixture-firedancer` requires `agave-feature-set = "4.3.0"`,
+# which Cargo cannot unify with 4.4.0-beta.0. The features are kept so downstream
+# manifests keep resolving; enabling them fails with an explanatory
+# `compile_error!` in `src/fd.rs` rather than an unresolved import.
 fd-codec = ["dep:prost", "dep:mollusk-svm-fuzz-fixture-firedancer", "instruction-fixture"]
 fd-json = ["fd-codec", "json-codec", "dep:serde_json"]
 

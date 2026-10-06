@@ -3,12 +3,12 @@ use solana_account::{Account, ReadableAccount};
 use solana_address::{Address, address};
 use solana_compute_budget::compute_budget::ComputeBudget;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
-use solana_instruction::{Instruction, error::InstructionError};
+use solana_instruction::Instruction;
 use solana_keypair::Keypair;
 use solana_message::Message;
 use solana_signer::Signer;
 use solana_system_interface::instruction::transfer;
-use solana_transaction::Transaction;
+use solana_transaction::{InstructionError, Transaction};
 use solana_transaction_error::TransactionError;
 
 type VmConfigMutator = fn(&mut HPSVM);

@@ -1,0 +1,88 @@
+# VENDORED AND PATCHED — see `PATCHES.md` in this directory.
+#
+# This is `mollusk-svm-fuzz-fixture-firedancer` 0.16.0, copied verbatim from
+# crates.io, with one change: the Solana requirements below were widened.
+#
+# Upstream pins `agave-feature-set`, `solana-account`, and
+# `solana-transaction-context` to `4.3.0`, which is the newest *stable* agave.
+# This workspace tracks agave 4.4.0-beta.0 (the first line built against the
+# solana 5.x types), so those requirements cannot resolve: `4.3.0` is
+# semver-compatible with `4.4.0-beta.0` but excludes prereleases, and Cargo
+# refuses to keep two semver-compatible copies of one crate.
+#
+# The code itself needs no changes. Every symbol this crate uses survives in the
+# newer releases:
+#   * `agave_feature_set::FeatureSet` and its `all_enabled()`
+#   * `agave_feature_set::{disable,reenable}_sbpf_v0_execution::id()`
+#   * `solana_transaction_context::instruction_accounts::InstructionAccount`
+#   * `solana_account::Account`
+#
+# Drop this directory and the `[patch.crates-io]` entry in the workspace
+# `Cargo.toml` once upstream publishes a build against agave 4.4.
+
+[package]
+edition = "2021"
+name = "mollusk-svm-fuzz-fixture-firedancer"
+version = "0.16.0"
+authors = ["Anza Technology Maintainers <maintainers@anza.xyz>"]
+build = "build.rs"
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+description = "Mollusk-compatible Firedancer fuzz fixture for SVM programs."
+documentation = "https://docs.rs/mollusk-svm-fuzz-fixture-firedancer"
+readme = false
+license-file = "LICENSE"
+repository = "https://github.com/anza-xyz/mollusk"
+
+[lib]
+name = "mollusk_svm_fuzz_fixture_firedancer"
+path = "src/lib.rs"
+
+[dependencies.agave-feature-set]
+# PATCHED: was "4.3.0".
+#
+# The bound must name the agave prerelease line explicitly. Cargo only lets a
+# prerelease satisfy a requirement that itself carries a prerelease of the same
+# major.minor.patch, so "4.3.0" rejects 4.5.0-alpha.1, ">=4.3.0-0" admits only
+# 4.3.0-*, and ">=4.4.0-beta.0" admits only 4.4.0-*.
+#
+# Consequence: moving the workspace to a different agave prerelease line requires
+# re-pointing this bound too. See PATCHES.md.
+version = ">=4.5.0-alpha.1, <5.0.0"
+features = ["agave-unstable-api"]
+
+[dependencies.mollusk-svm-fuzz-fs]
+version = "0.16.0"
+
+[dependencies.prost]
+version = "0.14"
+
+[dependencies.serde]
+version = "1.0.203"
+features = ["derive"]
+
+[dependencies.serde_json]
+version = "1.0.150"
+
+[dependencies.solana-account]
+# PATCHED: was "4.3.0". The workspace resolves the solana 5.x account type (5.1.0).
+version = ">=5.0.0, <6.0.0"
+
+[dependencies.solana-keccak-hasher]
+version = "3.1.0"
+features = ["sha3"]
+
+[dependencies.solana-pubkey]
+version = "4.1.0"
+
+[dependencies.solana-transaction-context]
+# PATCHED: was "4.3.0". Must name the agave prerelease line explicitly; see the
+# note on `agave-feature-set` above.
+version = ">=4.5.0-alpha.1, <5.0.0"
+features = ["agave-unstable-api"]
+
+[build-dependencies.prost-build]
+version = "0.14"

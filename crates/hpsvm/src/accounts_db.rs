@@ -9,7 +9,6 @@ use solana_address::Address;
 use solana_address_lookup_table_interface::{error::AddressLookupError, state::AddressLookupTable};
 use solana_builtins::BUILTINS;
 use solana_clock::Clock;
-use solana_instruction::error::InstructionError;
 use solana_loader_v3_interface::state::UpgradeableLoaderState;
 use solana_loader_v4_interface::state::LoaderV4State;
 use solana_message::{
@@ -33,6 +32,7 @@ use solana_sdk_ids::{
         stake_history::ID as STAKE_HISTORY_ID,
     },
 };
+use solana_transaction::InstructionError;
 use solana_transaction_error::AddressLoaderError;
 
 use crate::{
@@ -419,7 +419,7 @@ impl AccountsDb {
         // second lookup inside `replenish` that the old pattern incurred.
         for builtin in BUILTINS {
             if self.inner.contains_key(&builtin.program_id) {
-                let loaded_program = ProgramCacheEntry::new_builtin(0, builtin.register_fn);
+                let loaded_program = ProgramCacheEntry::new_builtin(builtin.register_fn);
                 cache.replenish(builtin.program_id, Arc::new(loaded_program));
             }
         }

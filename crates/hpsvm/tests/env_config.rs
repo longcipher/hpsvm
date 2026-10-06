@@ -1,8 +1,6 @@
 use hpsvm::HPSVM;
 use solana_account::Account;
 use solana_clock::Clock;
-#[expect(deprecated)]
-use solana_sysvar::SysvarSerialize;
 use solana_sysvar_id::SysvarId;
 
 #[test]
@@ -21,9 +19,8 @@ fn set_account_keeps_block_env_in_sync_with_clock_sysvar() {
     let mut clock = svm.get_sysvar::<Clock>();
     clock.slot = 99;
 
-    #[expect(deprecated)]
-    let mut clock_account = Account::new(1, Clock::size_of(), &solana_sdk_ids::sysvar::id());
-    clock_account.serialize_data(&clock).unwrap();
+    let clock_account =
+        Account::new_data(1, &clock, &solana_sdk_ids::sysvar::id()).expect("clock serializes");
 
     svm.set_account(Clock::id(), clock_account).unwrap();
 

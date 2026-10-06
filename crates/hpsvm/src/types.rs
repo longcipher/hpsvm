@@ -1,9 +1,10 @@
 use solana_account::{Account, AccountSharedData};
 use solana_address::Address;
-use solana_instruction::{Instruction, account_meta::AccountMeta, error::InstructionError};
+use solana_instruction::{Instruction, account_meta::AccountMeta};
 use solana_message::inner_instruction::InnerInstructionsList;
 use solana_program_error::ProgramError;
 use solana_signature::Signature;
+use solana_transaction::InstructionError;
 use solana_transaction_context::transaction::TransactionReturnData;
 use solana_transaction_error::{TransactionError, TransactionResult as Result};
 

@@ -7,7 +7,7 @@ use agave_feature_set::{FeatureSet, raise_cpi_nesting_limit_to_8};
 #[cfg(feature = "precompiles")]
 use agave_precompiles::get_precompiles;
 use agave_reserved_account_keys::ReservedAccountKeys;
-use serde::de::DeserializeOwned;
+use serde::{Serialize, de::DeserializeOwned};
 use solana_account::{
     Account, AccountSharedData, ReadableAccount, WritableAccount, state_traits::StateMut,
 };
@@ -34,13 +34,12 @@ use solana_rent::Rent;
 use solana_sdk_ids::{bpf_loader, bpf_loader_deprecated, bpf_loader_upgradeable, system_program};
 use solana_signature::Signature;
 use solana_signer::Signer;
-use solana_slot_hashes::SlotHashes;
+use solana_slot_hashes::{SlotHash, SlotHashes};
 use solana_slot_history::SlotHistory;
 use solana_stake_interface::stake_history::StakeHistory;
 use solana_svm_log_collector::LogCollector;
 use solana_svm_transaction::svm_message::{SVMMessage, SVMStaticMessage};
-#[expect(deprecated)]
-use solana_sysvar::{Sysvar, SysvarSerialize};
+use solana_sysvar::Sysvar;
 #[expect(deprecated)]
 use solana_sysvar::{
     fees::Fees,
@@ -80,6 +79,34 @@ use crate::{
 };
 #[cfg(feature = "invocation-inspect-callback")]
 use crate::{EmptyInvocationInspectCallback, InvocationInspectCallback};
+
+/// Size of the account buffer that holds a serialized sysvar.
+///
+/// Programs read sysvars through the `sol_get_sysvar` syscall using the sysvar's
+/// *canonical* account size, not the length of the value currently being written.
+/// Three sysvars have a canonical size that differs from the bincode length of their
+/// default value, so they need their published `SIZE` constant; every other sysvar is
+/// a fixed-layout struct whose default value already serializes to the right length.
+///
+/// This replaces `solana_sysvar::SysvarSerialize::size_of`, which was removed along
+/// with the rest of that trait in solana-sysvar 5.0.0.
+fn sysvar_account_size<T>(sysvar_id: &Address) -> usize
+where
+    T: Default + Serialize + SysvarId,
+{
+    if solana_sysvar::recent_blockhashes::check_id(sysvar_id) {
+        solana_sysvar::recent_blockhashes::SIZE
+    } else if solana_sysvar::slot_hashes::check_id(sysvar_id) {
+        solana_sysvar::slot_hashes::SIZE
+    } else if solana_sysvar::slot_history::check_id(sysvar_id) {
+        solana_sysvar::slot_history::SIZE
+    } else {
+        // Measure with the runtime's own bincode codec so the result always matches
+        // what `AccountSharedData::serialize_data` is about to write.
+        AccountSharedData::new_data(0, &T::default(), &solana_sdk_ids::sysvar::id())
+            .map_or(0, |account| account.data_clone().len())
+    }
+}
 
 impl HPSVM {
     pub(crate) fn default_register_tracing_enabled() -> bool {
@@ -391,7 +418,7 @@ impl HPSVM {
             }
             self.set_sysvar_internal(&rent_account);
         }
-        self.set_sysvar_internal(&SlotHashes::new(&[(
+        self.set_sysvar_internal(&SlotHashes::new(&[SlotHash::new(
             self.accounts.current_slot(),
             latest_blockhash,
         )]));
@@ -463,7 +490,7 @@ impl HPSVM {
         self.refresh_runtime_environments();
         for builtint in BUILTINS {
             if builtint.enable_feature_id.is_none_or(|x| self.cfg.feature_set.is_active(&x)) {
-                let loaded_program = ProgramCacheEntry::new_builtin(0, builtint.register_fn);
+                let loaded_program = ProgramCacheEntry::new_builtin(builtint.register_fn);
                 self.accounts
                     .replenish_program_cache(builtint.program_id, Arc::new(loaded_program));
                 self.accounts.add_builtin_account(
@@ -625,10 +652,9 @@ impl HPSVM {
     ///
     /// Returns an error if serialization fails or if the sysvar account update
     /// is rejected by the internal accounts database.
-    #[expect(deprecated)]
     pub fn set_sysvar<T>(&mut self, sysvar: &T) -> Result<(), HPSVMError>
     where
-        T: Sysvar + SysvarId + SysvarSerialize,
+        T: Default + Serialize + SysvarId,
     {
         self.try_set_sysvar(sysvar)?;
         self.sync_block_env_slot();
@@ -636,16 +662,17 @@ impl HPSVM {
         Ok(())
     }
 
-    #[expect(deprecated)]
     pub(crate) fn try_set_sysvar<T>(&mut self, sysvar: &T) -> Result<(), HPSVMError>
     where
-        T: Sysvar + SysvarId + SysvarSerialize,
+        T: Default + Serialize + SysvarId,
     {
-        // `SysvarSerialize` is deprecated, but it is still the correct codec here:
-        // the read path (`AccountSharedData::deserialize_data`) decodes bincode, and
-        // sysvars such as `RecentBlockhashes` require a fixed-size buffer
-        // (`T::size_of()` returns `RecentBlockhashes::SIZE`, not the serialized length).
-        let mut account = AccountSharedData::new(1, T::size_of(), &solana_sdk_ids::sysvar::id());
+        // The buffer is sized to the sysvar's canonical on-chain length, then the value
+        // is encoded into it with the same bincode codec the read path decodes.
+        let mut account = AccountSharedData::new(
+            1,
+            sysvar_account_size::<T>(&T::id()),
+            &solana_sdk_ids::sysvar::id(),
+        );
         account.serialize_data(sysvar).map_err(|error| HPSVMError::SysvarSerialization {
             sysvar: std::any::type_name::<T>(),
             reason: error.to_string(),
@@ -653,10 +680,9 @@ impl HPSVM {
         self.accounts.add_account(T::id(), account)
     }
 
-    #[expect(deprecated)]
     pub(crate) fn set_sysvar_internal<T>(&mut self, sysvar: &T)
     where
-        T: Sysvar + SysvarId + SysvarSerialize,
+        T: Default + Serialize + SysvarId,
     {
         self.try_set_sysvar(sysvar)
             .expect("internal sysvar setup should never fail for supported sysvars");
@@ -737,7 +763,7 @@ impl HPSVM {
 
     /// Adds a builtin program to the test environment.
     pub fn add_builtin(&mut self, program_id: Address, entrypoint: BuiltinFunctionRegisterer) {
-        let builtin = ProgramCacheEntry::new_builtin(self.accounts.current_slot(), entrypoint);
+        let builtin = ProgramCacheEntry::new_builtin(entrypoint);
 
         self.accounts.replenish_program_cache(program_id, Arc::new(builtin));
 
@@ -969,7 +995,7 @@ impl HPSVM {
                 return Err(FailedTransactionMetadata {
                     err: TransactionError::InstructionError(
                         0,
-                        solana_instruction::error::InstructionError::InvalidAccountData,
+                        solana_transaction::InstructionError::InvalidAccountData,
                     ),
                     meta: TransactionMetadata::default(),
                 });
@@ -1022,7 +1048,7 @@ impl HPSVM {
                 return Err(FailedTransactionMetadata {
                     err: TransactionError::InstructionError(
                         0,
-                        solana_instruction::error::InstructionError::InvalidAccountData,
+                        solana_transaction::InstructionError::InvalidAccountData,
                     ),
                     meta: TransactionMetadata::default(),
                 });
@@ -1414,11 +1440,11 @@ fn fee_payer_for_instruction_case(case: &InstructionCase) -> Address {
 
 #[cfg(test)]
 mod tests {
-    use solana_instruction::{Instruction, account_meta::AccountMeta, error::InstructionError};
+    use solana_instruction::{Instruction, account_meta::AccountMeta};
     use solana_message::{Message, VersionedMessage};
     use solana_signer::Signer;
     use solana_system_interface::{instruction::transfer, program as system_program};
-    use solana_transaction::Transaction;
+    use solana_transaction::{InstructionError, Transaction};
 
     use super::*;
 

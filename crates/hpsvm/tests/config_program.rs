@@ -7,14 +7,14 @@ use solana_config_interface::{
     instruction::{create_account_with_max_config_space, store},
     state::{ConfigKeys, get_config_data},
 };
-use solana_instruction::{AccountMeta, error::InstructionError};
+use solana_instruction::AccountMeta;
 use solana_keypair::Keypair;
 use solana_rent::Rent;
 use solana_signer::Signer;
-use solana_transaction::Transaction;
+use solana_transaction::{InstructionError, Transaction};
 use solana_transaction_error::TransactionError;
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, wincode::SchemaWrite)]
 struct MyConfig {
     pub item: u64,
 }

@@ -17,7 +17,7 @@ use solana_address_lookup_table_interface::instruction::{
     create_lookup_table, deactivate_lookup_table, extend_lookup_table,
 };
 use solana_hash::Hash;
-use solana_instruction::{Instruction, account_meta::AccountMeta, error::InstructionError};
+use solana_instruction::{Instruction, account_meta::AccountMeta};
 use solana_keypair::Keypair;
 use solana_loader_v3_interface::{
     get_program_data_address, instruction::UpgradeableLoaderInstruction,
@@ -32,7 +32,7 @@ use solana_signer::Signer;
 use solana_system_interface::instruction::transfer;
 #[cfg(feature = "invocation-inspect-callback")]
 use solana_transaction::sanitized::SanitizedTransaction;
-use solana_transaction::{Transaction, versioned::VersionedTransaction};
+use solana_transaction::{InstructionError, Transaction, versioned::VersionedTransaction};
 #[cfg(feature = "invocation-inspect-callback")]
 use solana_transaction_context::IndexOfAccount;
 use solana_transaction_error::TransactionError;
@@ -236,7 +236,7 @@ fn sequential_commit_matches_batch_commit() {
     let blockhash = serial_vm.latest_blockhash();
     let close_ix = Instruction::new_with_bincode(
         bpf_loader_upgradeable::id(),
-        &UpgradeableLoaderInstruction::Close { tombstone: false },
+        &UpgradeableLoaderInstruction::Close,
         vec![
             AccountMeta::new(programdata_address, false),
             AccountMeta::new(authority_address, false),

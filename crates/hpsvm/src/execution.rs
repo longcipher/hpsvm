@@ -15,7 +15,7 @@ use solana_transaction::{
     sanitized::{MessageHash, SanitizedTransaction},
     versioned::VersionedTransaction,
 };
-use solana_transaction_context::{IndexOfAccount, transaction::TransactionContext};
+use solana_transaction_context::{DropOnBailOut, IndexOfAccount, transaction::TransactionContext};
 use solana_transaction_error::TransactionError;
 
 use crate::{
@@ -150,12 +150,17 @@ impl HPSVM {
         number_of_top_level_instructions: usize,
         rent: solana_rent::Rent,
     ) -> TransactionContext<'_> {
-        TransactionContext::new(
+        // `DropOnBailOut::Disabled` matches how `solana-program-runtime` builds its
+        // own contexts: an `InstructionError::BailOut` surfaces to the caller as an
+        // error instead of silently dropping the transaction, which is what a
+        // simulator needs so tests observe the failure.
+        TransactionContext::new_with_feature_flags(
             accounts,
             rent,
             compute_budget.max_instruction_stack_depth,
             compute_budget.max_instruction_trace_length,
             number_of_top_level_instructions,
+            DropOnBailOut::Disabled,
         )
     }
 

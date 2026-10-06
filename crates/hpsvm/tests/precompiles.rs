@@ -2,7 +2,6 @@ use ed25519_dalek::Signer;
 use hpsvm::HPSVM;
 use k256::{SecretKey, elliptic_curve::sec1::ToSec1Point};
 use solana_ed25519_program::{self as ed25519_instruction, new_ed25519_instruction_with_signature};
-use solana_instruction::error::InstructionError;
 use solana_keypair::Keypair;
 use solana_message::Message;
 use solana_secp256k1_program::{
@@ -10,7 +9,7 @@ use solana_secp256k1_program::{
     new_secp256k1_instruction_with_signature, sign_message,
 };
 use solana_signer::Signer as SolanaSigner;
-use solana_transaction::Transaction;
+use solana_transaction::{InstructionError, Transaction};
 use solana_transaction_error::TransactionError;
 
 #[test_log::test]

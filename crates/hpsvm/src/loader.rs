@@ -4,13 +4,12 @@
 //! when constructing tests with [`crate::HPSVM`]. Enable via the `loader` feature.
 
 use solana_address::Address;
-use solana_instruction::error::InstructionError;
 use solana_keypair::Keypair;
 use solana_loader_v3_interface::{
     instruction as bpf_loader_upgradeable, state::UpgradeableLoaderState,
 };
 use solana_signer::Signer;
-use solana_transaction::Transaction;
+use solana_transaction::{InstructionError, Transaction};
 use solana_transaction_error::TransactionError;
 
 use crate::{HPSVM, types::FailedTransactionMetadata};
@@ -120,7 +119,6 @@ pub fn deploy_upgradeable_program(
         &payer_pk,
         lamports,
         program_bytes.len() * 2,
-        false,
     )
     .map_err(loader_instruction_error)?;
     let tx = Transaction::new_signed_with_payer(

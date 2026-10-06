@@ -2,14 +2,13 @@ use hpsvm::HPSVM;
 use solana_address::Address;
 use solana_compute_budget::compute_budget::ComputeBudget;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
-use solana_instruction::error::InstructionError;
 use solana_keypair::Keypair;
 use solana_message::Message;
 use solana_native_token::LAMPORTS_PER_SOL;
 use solana_rent::Rent;
 use solana_signer::Signer;
 use solana_system_interface::instruction::transfer;
-use solana_transaction::Transaction;
+use solana_transaction::{InstructionError, Transaction};
 use solana_transaction_error::TransactionError;
 
 #[test_log::test]

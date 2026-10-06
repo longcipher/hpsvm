@@ -1,5 +1,5 @@
 use solana_address::Address;
-use solana_instruction::error::InstructionError;
+use solana_transaction::InstructionError;
 use thiserror::Error;
 
 use crate::AccountSourceError;
@@ -86,7 +86,7 @@ impl From<Box<dyn std::error::Error>> for HPSVMError {
 
 #[cfg(test)]
 mod tests {
-    use solana_instruction::error::InstructionError;
+    use solana_transaction::InstructionError;
 
     use super::*;
     use crate::account_source::AccountSourceErrorKind;

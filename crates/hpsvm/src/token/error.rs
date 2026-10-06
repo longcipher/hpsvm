@@ -1,6 +1,7 @@
 //! Error types for the token helper crate.
 
 use solana_address::Address;
+use solana_transaction::InstructionError;
 use solana_transaction_error::TransactionError;
 
 use crate::types::FailedTransactionMetadata;
@@ -39,10 +40,7 @@ impl From<TokenError> for FailedTransactionMetadata {
                 Self { err: TransactionError::AccountNotFound, meta: Default::default() }
             }
             TokenError::AccountDataTooSmall { .. } => Self {
-                err: TransactionError::InstructionError(
-                    0,
-                    solana_instruction::error::InstructionError::AccountDataTooSmall,
-                ),
+                err: TransactionError::InstructionError(0, InstructionError::AccountDataTooSmall),
                 meta: Default::default(),
             },
             TokenError::UnpackError(e) => Self::from(e),
@@ -60,8 +58,8 @@ impl From<FailedTransactionMetadata> for TokenError {
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;
-    use solana_instruction::error::InstructionError;
     use solana_program_error::ProgramError;
+    use solana_transaction::InstructionError;
 
     use super::*;
 
