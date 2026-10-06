@@ -33,13 +33,15 @@ jobs:
         run: cargo install cargo-sort cargo-shear cargo-workspace-inheritance-check
 
       # The SBF test programs are compiled by this toolchain and then executed by
-      # the `agave-*` crates the workspace depends on, so the two have to track
-      # the same release. Keep this in step with the `agave-feature-set` pin in
-      # the workspace `Cargo.toml`; a skew here shows up as vendored ELFs
-      # behaving differently under the runtime than they do locally.
+      # the `agave-*` crates the workspace depends on, so the two should track the
+      # same release. They cannot yet: `v4.5.0-alpha.1` installs but fails to link
+      # the test programs with `undefined symbol: sol_burn_cus`, because
+      # `crates/hpsvm/test_programs` still pins `solana-program-entrypoint 3.1.1`
+      # and that syscall is not in its link set. Raising the toolchain therefore
+      # needs the test-program SDK bumped in the same change.
       - name: Install Solana CLI
         run: |
-          sh -c "$(curl -sSfL https://release.anza.xyz/v4.5.0-alpha.1/install)"
+          sh -c "$(curl -sSfL https://release.anza.xyz/v4.0.0-rc.0/install)"
           echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
           export PATH="$GITHUB_PATH:$PATH"
 
