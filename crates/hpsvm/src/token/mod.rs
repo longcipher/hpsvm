@@ -187,7 +187,7 @@ mod tests {
         let mut data = vec![0u8; spl_token::state::Mint::LEN + 32];
         // `pack` demands an exactly-sized slice, so pack into the leading window.
         let (head, _padding) = data.split_at_mut(spl_token::state::Mint::LEN);
-        spl_token::state::Mint::pack(mint_state.clone(), head).unwrap();
+        spl_token::state::Mint::pack(mint_state, head).unwrap();
         let account = solana_account::Account {
             lamports: 1,
             owner: TOKEN_ID,
@@ -227,7 +227,7 @@ mod tests {
         let mut svm = HPSVM::new();
         let address = Address::new_unique();
         let mint_state = sample_mint();
-        set_keyed(&mut svm, keyed_mint_account(address, mint_state.clone()));
+        set_keyed(&mut svm, keyed_mint_account(address, mint_state));
 
         let unpacked = get_spl_account::<spl_token::state::Mint>(&svm, &address).unwrap();
         assert_eq!(unpacked, mint_state);
@@ -248,7 +248,7 @@ mod tests {
             state: spl_token::state::AccountState::Initialized,
             ..Default::default()
         };
-        set_keyed(&mut svm, keyed_token_account(address, token.clone()));
+        set_keyed(&mut svm, keyed_token_account(address, token));
 
         assert_eq!(get_spl_account::<spl_token::state::Account>(&svm, &address).unwrap(), token);
     }
@@ -272,7 +272,7 @@ mod tests {
         let mut svm = HPSVM::new();
         let address = Address::new_unique();
         let mint_state = sample_mint();
-        let (key, account) = keyed_mint_account(address, mint_state.clone());
+        let (key, account) = keyed_mint_account(address, mint_state);
         svm.set_account(key, solana_account::Account { owner: Address::new_unique(), ..account })
             .unwrap();
 

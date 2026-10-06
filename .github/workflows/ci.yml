@@ -32,9 +32,14 @@ jobs:
       - name: Install cargo-sort, cargo-shear and cargo-workspace-inheritance-check
         run: cargo install cargo-sort cargo-shear cargo-workspace-inheritance-check
 
+      # The SBF test programs are compiled by this toolchain and then executed by
+      # the `agave-*` crates the workspace depends on, so the two have to track
+      # the same release. Keep this in step with the `agave-feature-set` pin in
+      # the workspace `Cargo.toml`; a skew here shows up as vendored ELFs
+      # behaving differently under the runtime than they do locally.
       - name: Install Solana CLI
         run: |
-          sh -c "$(curl -sSfL https://release.anza.xyz/v4.0.0-rc.0/install)"
+          sh -c "$(curl -sSfL https://release.anza.xyz/v4.5.0-alpha.1/install)"
           echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
           export PATH="$GITHUB_PATH:$PATH"
 

@@ -566,7 +566,6 @@ mod tests {
         #[test]
         fn any_single_mismatching_predicate_rejects_the_account(
             lamports in any::<u64>(),
-            executable in any::<bool>(),
             data_len in 0usize..64,
         ) {
             let snapshot = ExecutionSnapshot {
@@ -574,8 +573,9 @@ mod tests {
                 ..snapshot()
             };
             // `account` always produces a non-executable snapshot, so the
-            // matching expectation asks for `false`.
-            prop_assert!(executable == false || true);
+            // matching expectation asks for `false`. Each remaining check flips
+            // exactly one predicate, which is what makes the conjunction claim
+            // above testable.
             let base =
                 Check::account(&address(1)).lamports(lamports).executable(false).build();
             prop_assert!(snapshot.run_checks(&[base], &config()));

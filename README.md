@@ -137,6 +137,8 @@ assert_eq!(svm.block_env().latest_blockhash, svm.latest_blockhash());
 `hpsvm` can read missing accounts through a configured account source. The `fork` feature provides an RPC-backed source with a bounded, TTL-aware local cache:
 
 ```rust
+# #[cfg(feature = "fork")]
+# fn main() {
 use hpsvm::{HPSVM, fork::RpcForkSource};
 
 let source = RpcForkSource::builder()
@@ -145,6 +147,9 @@ let source = RpcForkSource::builder()
     .build();
 
 let svm = HPSVM::builder().with_account_source(source).build().unwrap();
+# }
+# #[cfg(not(feature = "fork"))]
+# fn main() {}
 ```
 
 ### Top-Level Instruction Inspection

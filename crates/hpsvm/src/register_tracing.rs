@@ -127,8 +127,7 @@ pub fn write_trace_metrics_json(
     metrics: &[ProgramTraceMetrics],
 ) -> io::Result<()> {
     let output = TraceMetricsJson { programs: metrics };
-    serde_json::to_writer_pretty(writer, &output)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+    serde_json::to_writer_pretty(writer, &output).map_err(io::Error::other)
 }
 
 #[derive(Debug)]
@@ -185,14 +184,14 @@ impl DefaultRegisterTracingCallback {
         let sbf_trace_dir = current_dir.join(&self.sbf_trace_dir);
 
         // Reject paths that escape the working directory.
-        if let Ok(canonical) = sbf_trace_dir.canonicalize() {
-            if !canonical.starts_with(&current_dir) {
-                return Err(format!(
-                    "SBF_TRACE_DIR resolves outside working directory: {}",
-                    canonical.display()
-                )
-                .into());
-            }
+        if let Ok(canonical) = sbf_trace_dir.canonicalize() &&
+            !canonical.starts_with(&current_dir)
+        {
+            return Err(format!(
+                "SBF_TRACE_DIR resolves outside working directory: {}",
+                canonical.display()
+            )
+            .into());
         }
 
         std::fs::create_dir_all(&sbf_trace_dir)?;

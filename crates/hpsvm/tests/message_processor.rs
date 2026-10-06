@@ -408,7 +408,19 @@ fn top_level_frames_all_have_stack_height_one() {
     let outcome = svm.transact(tx);
     let frames: &[ExecutedInstruction] = &outcome.meta().diagnostics.execution_trace.instructions;
 
-    assert_eq!(frames.len(), 2, "only the two transfers run: {frames:?}");
+    // Three frames, not two: the trace records every instruction the message
+    // processor dispatches, including the one whose program failed. The third
+    // transfer never runs, but the failing program is still an instruction that
+    // was invoked, and `a_failing_program_contributes_a_trace_frame_with_its_error`
+    // above pins that behaviour deliberately - an invocation is recorded whether
+    // or not it succeeded.
+    //
+    // This assertion previously expected only the two successful transfers,
+    // which contradicted that sibling test and only surfaced in CI: both tests
+    // return early when `failure.so` is missing, so a host that cannot run
+    // `cargo build-sbf` never executed either one.
+    assert_eq!(frames.len(), 3, "both transfers plus the failing program are recorded: {frames:?}");
+    assert_eq!(frames[1].program_id, program_id, "the failing program is the middle frame");
     assert!(frames.iter().all(|frame| frame.stack_height == 1));
 }
 

@@ -114,7 +114,7 @@ impl HPSVM {
         // changes to their code provided `SBF_TRACE_DIR` is set.
         #[cfg(feature = "register-tracing")]
         {
-            return std::env::var("SBF_TRACE_DIR").is_ok();
+            std::env::var("SBF_TRACE_DIR").is_ok()
         }
         #[cfg(not(feature = "register-tracing"))]
         {

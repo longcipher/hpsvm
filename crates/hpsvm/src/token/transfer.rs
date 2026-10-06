@@ -3,9 +3,7 @@ use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signer::{Signer, signers::Signers};
 
-use super::get_multisig_signers;
-#[cfg_attr(feature = "token-2022", allow(deprecated))]
-use super::{TOKEN_ID, spl_token::instruction::transfer};
+use super::{TOKEN_ID, get_multisig_signers, spl_token::instruction::transfer};
 use crate::{HPSVM, types::FailedTransactionMetadata};
 
 /// ### Description
@@ -95,7 +93,6 @@ impl<'a> Transfer<'a> {
             )
         };
 
-        #[cfg_attr(feature = "token-2022", allow(deprecated))]
         let ix = transfer(
             token_program_id,
             &source_pk,

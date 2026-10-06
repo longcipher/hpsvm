@@ -225,7 +225,7 @@ fn replaying_the_same_fixture_twice_is_stable() {
 fn a_fixture_compute_unit_limit_is_applied_to_the_vm() {
     let fixture = build_fixture();
 
-    let mut tight = fixture.clone();
+    let mut tight = fixture;
     let FixtureInput::Transaction(transaction) = &mut tight.input else {
         panic!("fixture input should be a transaction")
     };

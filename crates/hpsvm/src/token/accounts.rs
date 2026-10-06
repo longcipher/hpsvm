@@ -180,7 +180,7 @@ mod tests {
     #[test]
     fn mint_account_is_rent_exempt_and_round_trips() {
         let mint_state = sample_mint();
-        let account = mint_account(mint_state.clone());
+        let account = mint_account(mint_state);
 
         assert_eq!(account.owner, TOKEN_ID);
         assert_eq!(account.data.len(), Mint::LEN);
@@ -202,14 +202,11 @@ mod tests {
     fn keyed_mint_account_variants_key_the_snapshot() {
         let address = Address::new_unique();
         let mint = sample_mint();
-        assert_eq!(
-            keyed_mint_account(address, mint.clone()),
-            (address, mint_account(mint.clone()))
-        );
+        assert_eq!(keyed_mint_account(address, mint), (address, mint_account(mint)));
 
         let token_program_id = Address::new_unique();
         assert_eq!(
-            keyed_mint_account_with_program(address, mint.clone(), token_program_id),
+            keyed_mint_account_with_program(address, mint, token_program_id),
             (address, mint_account_with_program(mint, token_program_id))
         );
     }
@@ -218,7 +215,7 @@ mod tests {
     fn token_account_is_rent_exempt_and_round_trips() {
         let mint = Address::new_unique();
         let token_state = sample_token(mint);
-        let account = token_account(token_state.clone());
+        let account = token_account(token_state);
 
         assert_eq!(account.owner, TOKEN_ID);
         assert_eq!(account.data.len(), TokenAccount::LEN);
@@ -240,8 +237,8 @@ mod tests {
         let address = Address::new_unique();
         let token_state = sample_token(Address::new_unique());
         assert_eq!(
-            keyed_token_account(address, token_state.clone()),
-            (address, token_account(token_state.clone()))
+            keyed_token_account(address, token_state),
+            (address, token_account(token_state))
         );
 
         let token_program_id = Address::new_unique();
@@ -306,7 +303,7 @@ mod tests {
 
         set_keyed_account(&mut svm, (key, expected.clone())).unwrap();
 
-        assert_eq!(svm.get_account(&address), Some(expected.into()));
+        assert_eq!(svm.get_account(&address), Some(expected));
     }
 
     #[test]
@@ -336,7 +333,7 @@ mod tests {
                 is_initialized: true,
                 ..Default::default()
             };
-            let account = mint_account(mint.clone());
+            let account = mint_account(mint);
 
             prop_assert_eq!(account.data.len(), Mint::LEN);
             prop_assert_eq!(account.lamports, Rent::default().minimum_balance(Mint::LEN));
@@ -365,7 +362,7 @@ mod tests {
                 delegated_amount: 0,
                 close_authority: COption::from(close.map(Address::new_from_array)),
             };
-            let account = token_account(token.clone());
+            let account = token_account(token);
 
             prop_assert_eq!(account.data.len(), TokenAccount::LEN);
             prop_assert_eq!(account.lamports, Rent::default().minimum_balance(TokenAccount::LEN));

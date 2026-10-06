@@ -482,7 +482,7 @@ fn test_stake_initialize() {
     // check that we see what we expect
     let account = get_account(&mut svm, &stake);
     let stake_state: StakeStateV2 = account.state().unwrap();
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     let expected = StakeStateV2::Initialized(Meta { authorized, rent_exempt_reserve, lockup });
     assert_eq!(stake_state, expected);
 

@@ -47,7 +47,7 @@ impl HotpathGuard {
                 .limit(limit)
                 .build();
 
-            return Self { _inner: Some(guard) };
+            Self { _inner: Some(guard) }
         }
 
         #[cfg(not(feature = "hotpath"))]
@@ -81,10 +81,10 @@ impl TraceMetricsGuard {
                     .expect("trace metrics output directory should be creatable");
             }
 
-            return Self {
+            Self {
                 collector: Some(TraceMetricsCollector::default()),
                 output_path: Some(output_path),
-            };
+            }
         }
 
         #[cfg(not(feature = "register-tracing"))]
