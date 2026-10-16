@@ -118,7 +118,7 @@ solana-slot-history = "3.2.0"
 # between it and the BPF ELF. Raise this to 5.x once the vendored stake ELF is
 # rebuilt against the 5.1.1 interface — see `delegate_is_blocked_by_the_stale_vendored_stake_elf`
 # in `crates/hpsvm/tests/stake_program.rs`, which already tracks the ELF's staleness.
-solana-stake-interface = "4.4.0"
+solana-stake-interface = "5.1.1"
 solana-svm-callback = "4.5.0-alpha.2"
 solana-svm-log-collector = "4.5.0-alpha.1"
 solana-svm-timings = "4.5.0-alpha.2"
