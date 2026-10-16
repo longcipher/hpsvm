@@ -133,18 +133,18 @@ pub fn new_benchmark_vm() -> HPSVM {
     svm
 }
 
-/// Path to the `counter` SBF program.
+/// Path to the `counter` SBF program, or `None` when it is unavailable.
 ///
-/// Panics when it is unavailable. Benches deliberately do not skip: a
-/// benchmark that silently measured nothing is worse than a loud failure.
-pub fn counter_program_path() -> PathBuf {
+/// Benches skip when the program is missing rather than panic: on hosts where
+/// the SBF toolchain is broken (e.g. macOS) the benches cannot run, and a
+/// loud failure would block the rest of the suite.
+pub fn counter_program_path() -> Option<PathBuf> {
     hpsvm_test_support::find_program(hpsvm_test_support::COUNTER)
-        .expect("counter program should be built or vendored in test_programs/prebuilt")
 }
 
-/// Bytes of the `counter` SBF program; panics when it is unavailable.
-pub fn read_counter_program() -> Vec<u8> {
-    hpsvm_test_support::read_program_or_panic(hpsvm_test_support::COUNTER)
+/// Bytes of the `counter` SBF program, or `None` when it is unavailable.
+pub fn read_counter_program() -> Option<Vec<u8>> {
+    hpsvm_test_support::read_program(hpsvm_test_support::COUNTER)
 }
 
 pub fn make_counter_tx(

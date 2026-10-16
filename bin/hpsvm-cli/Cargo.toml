@@ -13,7 +13,7 @@ doc = false
 
 [features]
 default = []
-fd-compat = ["hpsvm-fixture/fd-json", "dep:mollusk-svm-fuzz-fixture-firedancer"]
+fd-compat = ["hpsvm-fixture/fd-json"]
 hotpath = ["dep:hotpath"]
 
 [dependencies]
@@ -26,7 +26,6 @@ hpsvm-fixture = { workspace = true, default-features = false, features = [
     "json-codec",
     "markdown",
 ] }
-mollusk-svm-fuzz-fixture-firedancer = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 solana-account.workspace = true
@@ -37,6 +36,7 @@ thiserror.workspace = true
 wincode = { workspace = true }
 
 [dev-dependencies]
+mollusk-svm-fuzz-fixture-firedancer.workspace = true
 solana-account.workspace = true
 solana-instruction.workspace = true
 solana-keypair.workspace = true

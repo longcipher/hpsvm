@@ -13,6 +13,10 @@ use common::{
 const NUM_GREETINGS: u8 = 255;
 
 fn criterion_benchmark(c: &mut Criterion) {
+    let Some(program_bytes) = read_counter_program() else {
+        eprintln!("skipping: SBF program `counter.so` is unavailable");
+        return;
+    };
     let _hotpath = HotpathGuard::new("simple_bench");
     let _trace_metrics = TraceMetricsGuard::new("simple_bench");
     let mut svm = new_benchmark_vm();
@@ -21,7 +25,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     let payer_pk = payer_kp.pubkey();
     let program_id = Address::new_unique();
 
-    svm.add_program(program_id, &read_counter_program()).unwrap();
+    svm.add_program(program_id, &program_bytes).unwrap();
     svm.airdrop(&payer_pk, 1000000000).unwrap();
     let counter_address = Address::new_unique();
     c.bench_function("simple_bench", |b| {

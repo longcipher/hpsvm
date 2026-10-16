@@ -3,16 +3,16 @@ resolver = "3"
 members = ["bin/*", "crates/*"]
 
 [workspace.package]
-version = "0.1.19"
+version = "0.1.20"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/longcipher/hpsvm"
 
 [workspace.dependencies]
 # local crates
-hpsvm = { path = "crates/hpsvm", version = "0.1.19" }
-hpsvm-fixture = { path = "crates/hpsvm-fixture", version = "0.1.19", default-features = false }
-hpsvm-test-support = { path = "crates/hpsvm-test-support", version = "0.1.19" }
+hpsvm = { path = "crates/hpsvm", version = "0.1.20" }
+hpsvm-fixture = { path = "crates/hpsvm-fixture", version = "0.1.20", default-features = false }
+hpsvm-test-support = { path = "crates/hpsvm-test-support", version = "0.1.20" }
 
 # external crates
 #
@@ -119,22 +119,22 @@ solana-slot-history = "3.2.0"
 # rebuilt against the 5.1.1 interface — see `delegate_is_blocked_by_the_stale_vendored_stake_elf`
 # in `crates/hpsvm/tests/stake_program.rs`, which already tracks the ELF's staleness.
 solana-stake-interface = "4.4.0"
-solana-svm-callback = "4.5.0-alpha.1"
+solana-svm-callback = "4.5.0-alpha.2"
 solana-svm-log-collector = "4.5.0-alpha.1"
-solana-svm-timings = "4.5.0-alpha.1"
+solana-svm-timings = "4.5.0-alpha.2"
 # Held at 6.0.0 even though 7.0.0 is published: agave 4.5.0-alpha.1 is built
 # against 6.0.0, so taking 7.0.0 would put two incompatible copies of the SVM
 # transaction types in one build. Move both together when agave moves.
 solana-svm-transaction = "6.0.0"
-solana-syscalls = "4.5.0-alpha.1"
+solana-syscalls = "4.5.0-alpha.2"
 solana-system-interface = "3.3.0"
-solana-system-program = "4.5.0-alpha.1"
+solana-system-program = "4.5.0-alpha.2"
 solana-sysvar = "5.0.0"
 solana-sysvar-id = "3.1.0"
 solana-transaction = "5.1.0"
 solana-transaction-context = { version = "4.5.0-alpha.2", features = ["agave-unstable-api"] }
 solana-transaction-error = "4.1.0"
-solana-vote-interface = "7.1.0"
+solana-vote-interface = "7.2.0"
 solana-wincode-varint = "1.1.0"
 spl-associated-token-account-interface = "2.0.0"
 spl-token-2022-interface = "3.1.2"
@@ -144,7 +144,7 @@ test-log = "0.2.21"
 thiserror = "2.0.21"
 tracing = "0.1.44"
 trybuild = "1.0.122"
-wincode = "0.6.2"
+wincode = "0.6.3"
 
 [workspace.metadata.cargo-shear]
 ignored = ["solana-short-vec", "solana-wincode-varint"]

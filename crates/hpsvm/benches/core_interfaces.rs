@@ -48,7 +48,8 @@ fn build_counter_case(deduper: u8) -> (HPSVM, Transaction) {
     let program_id = Address::new_unique();
     let counter_address = Address::new_unique();
 
-    svm.add_program(program_id, &read_counter_program()).unwrap();
+    let program_bytes = read_counter_program().expect("counter program should be available");
+    svm.add_program(program_id, &program_bytes).unwrap();
     svm.airdrop(&payer_pk, 1_000_000_000).unwrap();
     svm.set_account(counter_address, counter_account(program_id)).unwrap();
     let tx = make_counter_tx(
@@ -86,8 +87,12 @@ fn build_batch_case() -> (HPSVM, Vec<Transaction>) {
 
 fn criterion_benchmark(c: &mut Criterion) {
     let _hotpath = HotpathGuard::new("core_interfaces");
-    let program_bytes = read_counter_program();
-    let program_path = counter_program_path();
+    let (Some(program_bytes), Some(program_path)) =
+        (read_counter_program(), counter_program_path())
+    else {
+        eprintln!("skipping: SBF program `counter.so` is unavailable");
+        return;
+    };
 
     let mut group = c.benchmark_group("core_interfaces");
 
