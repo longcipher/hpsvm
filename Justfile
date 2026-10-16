@@ -127,7 +127,6 @@ publish:
   sleep 20
   cargo publish -p hpsvm --registry crates-io --no-verify
   sleep 20
-  cargo publish -p hpsvm-fixture --registry crates-io --allow-dirty --no-verify
   cargo publish -p hpsvm-inspectors --registry crates-io --allow-dirty --no-verify
 
 # Check for Chinese characters

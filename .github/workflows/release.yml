@@ -130,7 +130,10 @@ jobs:
           sleep 20
           publish_one hpsvm
           sleep 20
-          publish_one hpsvm-fixture
+          # hpsvm-fixture is skipped here: its optional `fd-codec` transitive
+          # dependency on `mollusk-svm-fuzz-fixture-firedancer` cannot be resolved
+          # on crates.io (the vendored patch is not published), so publishing
+          # would block the release. The crate ships on git checkouts instead.
           publish_one hpsvm-inspectors
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
