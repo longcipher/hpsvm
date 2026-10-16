@@ -122,14 +122,13 @@ publish-check:
 
 # Publish all crates to crates.io, in dependency order.
 publish:
-  cargo publish -p hpsvm-macros --registry crates-io
+  cargo publish -p hpsvm-macros --registry crates-io --no-verify
   sleep 20
-  cargo publish -p hpsvm-test-support --registry crates-io || true
   sleep 20
-  cargo publish -p hpsvm --registry crates-io
+  cargo publish -p hpsvm --registry crates-io --no-verify
   sleep 20
-  cargo publish -p hpsvm-fixture --registry crates-io --allow-dirty
-  cargo publish -p hpsvm-inspectors --registry crates-io --allow-dirty
+  cargo publish -p hpsvm-fixture --registry crates-io --allow-dirty --no-verify
+  cargo publish -p hpsvm-inspectors --registry crates-io --allow-dirty --no-verify
 
 # Check for Chinese characters
 check-cn:

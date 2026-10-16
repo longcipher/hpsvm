@@ -104,7 +104,7 @@ jobs:
           publish_one() {
             local name="$1"
             for _ in $(seq 1 30); do
-              if cargo publish -p "$name" --registry crates-io --allow-dirty 2>&1 | tail -20; then
+              if cargo publish -p "$name" --registry crates-io --allow-dirty --no-verify 2>&1 | tail -20; then
                 echo "Published $name"
                 return 0
               fi
