@@ -2743,7 +2743,7 @@ dependencies = [
 
 [[package]]
 name = "mollusk-svm-fuzz-fixture-firedancer"
-version = "0.16.0"
+version = "0.16.2"
 dependencies = [
  "agave-feature-set",
  "mollusk-svm-fuzz-fs",
@@ -2759,9 +2759,9 @@ dependencies = [
 
 [[package]]
 name = "mollusk-svm-fuzz-fs"
-version = "0.16.0"
+version = "0.16.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8924c75283bbc56de02b47df4f09919e0649b1b87874f8e323c4cea354459d15"
+checksum = "f8e77b871198a4d7aa1b6a1c3aff128a16e99111d30c1876cde933f1e19874fb"
 dependencies = [
  "bs58",
  "prost",

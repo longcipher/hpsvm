@@ -43,7 +43,7 @@ hotpath = "0.28.6"
 hpsvm-macros = { path = "crates/hpsvm-macros", version = "0.1.19" }
 k256 = { version = "0.14.0", features = ["arithmetic"] }
 lru = "0.18.5"
-mollusk-svm-fuzz-fixture-firedancer = "0.16.0"
+mollusk-svm-fuzz-fixture-firedancer = "0.16.2"
 nu-ansi-term = "0.50.3"
 parking_lot = "0.12.5"
 # Proc-macro toolchain for `hpsvm-macros`, the future home of
@@ -132,7 +132,7 @@ solana-system-program = "4.5.0-alpha.1"
 solana-sysvar = "5.0.0"
 solana-sysvar-id = "3.1.0"
 solana-transaction = "5.1.0"
-solana-transaction-context = "4.5.0-alpha.1"
+solana-transaction-context = "4.5.0-alpha.2"
 solana-transaction-error = "4.1.0"
 solana-vote-interface = "7.1.0"
 solana-wincode-varint = "1.1.0"
