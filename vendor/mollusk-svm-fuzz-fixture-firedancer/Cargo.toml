@@ -31,7 +31,7 @@ name = "mollusk_svm_fuzz_fixture_firedancer"
 path = "src/lib.rs"
 
 [dependencies.agave-feature-set]
-version = "4.5.0-alpha.2"
+version = "*"
 features = ["agave-unstable-api"]
 
 [dependencies.mollusk-svm-fuzz-fs]
@@ -48,7 +48,7 @@ features = ["derive"]
 version = "1.0.150"
 
 [dependencies.solana-account]
-version = ">=4.5.0-alpha.2"
+version = "*"
 
 [dependencies.solana-keccak-hasher]
 version = "3.1.0"
@@ -58,7 +58,7 @@ features = ["sha3"]
 version = "4.1.0"
 
 [dependencies.solana-transaction-context]
-version = ">=4.5.0-alpha.2"
+version = "*"
 features = ["agave-unstable-api"]
 
 [build-dependencies.prost-build]
