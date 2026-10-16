@@ -104,8 +104,18 @@ jobs:
           publish_one() {
             local name="$1"
             for _ in $(seq 1 30); do
-              if cargo publish -p "$name" --registry crates-io --allow-dirty --no-verify 2>&1 | tail -20; then
+              local out
+              set +e
+              out="$(cargo publish -p "$name" --registry crates-io --allow-dirty --no-verify 2>&1)"
+              local rc=$?
+              set -e
+              printf '%s\n' "$out" | tail -20
+              if [ "$rc" -eq 0 ]; then
                 echo "Published $name"
+                return 0
+              fi
+              if echo "$out" | grep -qE "already exists on crates.io index"; then
+                echo "$name is already published on crates.io; skipping"
                 return 0
               fi
               echo "Publish of $name not yet ready, waiting for index..."
