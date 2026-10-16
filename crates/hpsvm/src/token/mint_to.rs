@@ -4,7 +4,7 @@ use solana_keypair::Keypair;
 use solana_signer::{Signer, signers::Signers};
 
 use super::{TOKEN_ID, get_multisig_signers, spl_token::instruction::mint_to};
-use crate::{HPSVM, types::FailedTransactionMetadata};
+use crate::{Svm, SvmTypesHost, types::FailedTransactionMetadata};
 
 /// ### Description
 /// Builder for the [`mint_to`] instruction.
@@ -13,8 +13,8 @@ use crate::{HPSVM, types::FailedTransactionMetadata};
 /// - `owner`: payer by default.
 /// - `token_program_id`: [`TOKEN_ID`] by default.
 #[derive(Debug)]
-pub struct MintTo<'a> {
-    svm: &'a mut HPSVM,
+pub struct MintTo<'a, 's, T: SvmTypesHost> {
+    svm: &'a mut Svm<'s, T>,
     payer: &'a Keypair,
     mint: &'a Address,
     destination: &'a Address,
@@ -24,10 +24,10 @@ pub struct MintTo<'a> {
     amount: u64,
 }
 
-impl<'a> MintTo<'a> {
+impl<'a, 's, T: SvmTypesHost> MintTo<'a, 's, T> {
     /// Creates a new instance of [`mint_to`] instruction.
     pub fn new(
-        svm: &'a mut HPSVM,
+        svm: &'a mut Svm<'s, T>,
         payer: &'a Keypair,
         mint: &'a Address,
         destination: &'a Address,

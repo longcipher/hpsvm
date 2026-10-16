@@ -12,7 +12,7 @@ use super::{
     TOKEN_ID,
     spl_token::{instruction::initialize_account3, state::Account},
 };
-use crate::{HPSVM, types::FailedTransactionMetadata};
+use crate::{Svm, SvmTypesHost, types::FailedTransactionMetadata};
 
 /// ### Description
 /// Builder for the [`initialize_account3`] instruction.
@@ -21,8 +21,8 @@ use crate::{HPSVM, types::FailedTransactionMetadata};
 /// - `owner`: `payer` by default.
 /// - `account_kp`: [`Keypair::new()`] by default.
 #[derive(Debug)]
-pub struct CreateAccount<'a> {
-    svm: &'a mut HPSVM,
+pub struct CreateAccount<'a, 's, T: SvmTypesHost> {
+    svm: &'a mut Svm<'s, T>,
     payer: &'a Keypair,
     mint: &'a Address,
     owner: Option<&'a Address>,
@@ -32,9 +32,9 @@ pub struct CreateAccount<'a> {
     extensions: Vec<ExtensionType>,
 }
 
-impl<'a> CreateAccount<'a> {
+impl<'a, 's, T: SvmTypesHost> CreateAccount<'a, 's, T> {
     /// Creates a new instance of the [`initialize_account3`] instruction.
-    pub const fn new(svm: &'a mut HPSVM, payer: &'a Keypair, mint: &'a Address) -> Self {
+    pub const fn new(svm: &'a mut Svm<'s, T>, payer: &'a Keypair, mint: &'a Address) -> Self {
         CreateAccount {
             svm,
             payer,

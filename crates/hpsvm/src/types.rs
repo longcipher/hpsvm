@@ -138,60 +138,6 @@ impl ExecutedInstruction {
     }
 }
 
-/// Result of [`crate::HPSVM::transact`].
-///
-/// Each outcome is tied to the VM instance and state version that produced it.
-/// [`crate::HPSVM::commit_transaction`] only accepts outcomes from that same
-/// instance before any intervening state or config mutation. Otherwise commit
-/// returns `ResanitizationNeeded`.
-///
-/// The provenance fields stay internal and are skipped from serialization, so
-/// serialized outcomes are observational only and cannot be committed on a
-/// foreign or later-mutated VM.
-#[must_use = "call HPSVM::commit_transaction to apply this outcome to the VM"]
-#[derive(Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize))]
-pub struct ExecutionOutcome {
-    pub(crate) meta: TransactionMetadata,
-    pub(crate) post_accounts: Vec<(Address, AccountSharedData)>,
-    pub(crate) status: Result<()>,
-    pub(crate) included: bool,
-    #[cfg_attr(feature = "serde", serde(skip_serializing))]
-    pub(crate) origin_vm_instance_id: u64,
-    #[cfg_attr(feature = "serde", serde(skip_serializing))]
-    pub(crate) origin_state_version: u64,
-    #[cfg_attr(feature = "serde", serde(skip_serializing, skip_deserializing))]
-    pub(crate) fee_payer: Option<Address>,
-}
-
-impl ExecutionOutcome {
-    /// Returns the transaction metadata captured during execution.
-    pub fn meta(&self) -> &TransactionMetadata {
-        &self.meta
-    }
-
-    /// Returns the writable post-execution account snapshot captured by `transact`.
-    pub fn post_accounts(&self) -> &[(Address, AccountSharedData)] {
-        &self.post_accounts
-    }
-
-    /// Returns the execution status that `commit_transaction` will commit if
-    /// the outcome provenance still matches the target VM.
-    pub fn status(&self) -> &Result<()> {
-        &self.status
-    }
-
-    /// Returns whether this outcome is eligible for commit-time side effects.
-    pub fn included(&self) -> bool {
-        self.included
-    }
-
-    /// Returns the fee payer address, if one was validated for this transaction.
-    pub fn fee_payer(&self) -> Option<Address> {
-        self.fee_payer
-    }
-}
-
 /// Simulated transaction information including metadata and post-execution accounts.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -242,6 +188,14 @@ pub(crate) struct ExecutionResult {
     pub(crate) fee_payer: Option<Address>,
     pub(crate) account_source_failures: Vec<AccountSourceFailure>,
     pub(crate) fatal_error: Option<HPSVMError>,
+    /// Whether the installed inspector accepted this execution, so staged
+    /// commit paths know without consulting it a second time.
+    ///
+    /// A plain `bool`, not the `InspectMode` const the execution ran under:
+    /// the const is gone once execution returns, and re-consulting at commit
+    /// would be wrong (the inspector could have changed between `transact`
+    /// and `commit`). Set from `MODE.is_live()` at the mode-selected entry.
+    pub(crate) inspector_live: bool,
 }
 
 impl Default for ExecutionResult {
@@ -259,6 +213,7 @@ impl Default for ExecutionResult {
             fee_payer: None,
             account_source_failures: Default::default(),
             fatal_error: None,
+            inspector_live: false,
         }
     }
 }

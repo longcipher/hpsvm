@@ -152,7 +152,7 @@ fn memo_fixture(name: &str, baseline_elf: &Path) -> (Fixture, Address) {
         Message::new(&[invoke], Some(&payer.pubkey())),
         svm.latest_blockhash(),
     ));
-    let baseline = ExecutionSnapshot::from_outcome(&svm.transact(tx.clone()));
+    let baseline = ExecutionSnapshot::from_outcome(&svm.transact_detached(tx.clone()));
     let pre_accounts = vec![
         AccountSnapshot::from_readable(payer.pubkey(), &svm.get_account(&payer.pubkey()).unwrap()),
         AccountSnapshot::from_readable(memo_id, &svm.get_account(&memo_id).unwrap()),
@@ -184,7 +184,7 @@ fn transfer_fixture(name: &str) -> Fixture {
         Message::new(&[transfer(&payer.pubkey(), &recipient, 64)], Some(&payer.pubkey())),
         svm.latest_blockhash(),
     ));
-    let baseline = ExecutionSnapshot::from_outcome(&svm.transact(tx.clone()));
+    let baseline = ExecutionSnapshot::from_outcome(&svm.transact_detached(tx.clone()));
 
     CaptureBuilder::new(name)
         .runtime(RuntimeFixtureConfig::new(svm.block_env().slot, None, true, false))

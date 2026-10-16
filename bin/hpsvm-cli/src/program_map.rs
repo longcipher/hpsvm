@@ -82,7 +82,7 @@ mod tests {
             Message::new(&[transfer(&payer.pubkey(), &recipient, 64)], Some(&payer.pubkey())),
             svm.latest_blockhash(),
         ));
-        let baseline = ExecutionSnapshot::from_outcome(&svm.transact(tx.clone()));
+        let baseline = ExecutionSnapshot::from_outcome(&svm.transact_detached(tx.clone()));
 
         let snapshot = |svm: &HPSVM, address: Address| {
             AccountSnapshot::from_readable(address, &svm.get_account(&address).unwrap())
@@ -114,7 +114,7 @@ mod tests {
             Message::new(&[transfer(&payer.pubkey(), &recipient, 64)], Some(&payer.pubkey())),
             svm.latest_blockhash(),
         ));
-        let baseline = ExecutionSnapshot::from_outcome(&svm.transact(tx.clone()));
+        let baseline = ExecutionSnapshot::from_outcome(&svm.transact_detached(tx.clone()));
 
         CaptureBuilder::new("minimal")
             .runtime(RuntimeFixtureConfig::new(svm.block_env().slot, None, true, false))

@@ -88,12 +88,14 @@ pub(crate) fn fee_payer_for_instructions(
         .unwrap_or(fallback)
 }
 
+#[inline]
 pub(crate) fn public_account_from_shared(account: &AccountSharedData) -> Option<Account> {
     (account.lamports() != 0).then(|| account.clone().into())
 }
 
 /// Compare two `AccountSharedData` references without cloning.
 /// Returns `true` if they differ. Checks lamports first (cheapest, most common diff).
+#[inline]
 pub(crate) fn accounts_differ(pre: &AccountSharedData, post: &AccountSharedData) -> bool {
     // ponytail: lamports is a single u64 load and the most common mutation;
     // short-circuit before touching the data slice.

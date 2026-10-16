@@ -42,7 +42,7 @@ fn mint_payer_owned(svm: &mut HPSVM, payer: &Keypair) -> Address {
 }
 
 fn balance(svm: &HPSVM, address: &Address) -> u64 {
-    get_spl_account::<Account>(svm, address).unwrap().amount
+    get_spl_account::<Account, _>(svm, address).unwrap().amount
 }
 
 fn is_instruction_error(error: &hpsvm::types::FailedTransactionMetadata) -> bool {
@@ -400,7 +400,7 @@ fn create_ata_for_another_wallet_derives_that_wallet_ata() {
             &hpsvm::token::TOKEN_ID,
         )
     );
-    assert_eq!(get_spl_account::<Account>(&svm, &ata).unwrap().owner, wallet);
+    assert_eq!(get_spl_account::<Account, _>(&svm, &ata).unwrap().owner, wallet);
 }
 
 // ---------------------------------------------------------------------
@@ -418,8 +418,8 @@ fn create_account_accepts_an_explicit_account_keypair() {
         CreateAccount::new(&mut svm, &payer, &mint).account_kp(account_kp).send().unwrap();
 
     assert_eq!(created, expected);
-    assert_eq!(get_spl_account::<Account>(&svm, &expected).unwrap().mint, mint);
-    assert_eq!(get_spl_account::<Account>(&svm, &expected).unwrap().amount, 0);
+    assert_eq!(get_spl_account::<Account, _>(&svm, &expected).unwrap().mint, mint);
+    assert_eq!(get_spl_account::<Account, _>(&svm, &expected).unwrap().amount, 0);
 }
 
 #[test]
@@ -430,7 +430,7 @@ fn create_account_honours_an_explicit_owner() {
 
     let account = CreateAccount::new(&mut svm, &payer, &mint).owner(&owner).send().unwrap();
 
-    assert_eq!(get_spl_account::<Account>(&svm, &account).unwrap().owner, owner);
+    assert_eq!(get_spl_account::<Account, _>(&svm, &account).unwrap().owner, owner);
 }
 
 // ---------------------------------------------------------------------

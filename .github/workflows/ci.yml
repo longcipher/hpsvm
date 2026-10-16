@@ -51,6 +51,9 @@ jobs:
       - name: CI
         run: just ci
 
+      - name: Run custom_svm example
+        run: cargo run -p hpsvm --example custom_svm --all-features
+
       # - name: Run hotpath benchmark baselines
       #   run: just bench-hotpath
 

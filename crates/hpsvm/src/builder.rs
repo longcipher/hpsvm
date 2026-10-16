@@ -6,8 +6,8 @@ use solana_native_token::LAMPORTS_PER_SOL;
 use solana_program_runtime::invoke_context::BuiltinFunctionRegisterer;
 
 use crate::{
-    AccountSource, CustomSyscallRegistration, HPSVM, Inspector, error::HPSVMError,
-    inspector::NoopInspector,
+    AccountSource, BaseSvmTypes, CustomSyscallRegistration, Hpsvm, Inspector, Svm,
+    error::HPSVMError, precompile_registry::PrecompileProvider,
 };
 
 mod private {
@@ -50,10 +50,11 @@ struct BuildPlan {
     include_default_programs: bool,
     #[cfg(feature = "precompiles")]
     include_precompiles: bool,
+    precompile_provider: Option<Arc<dyn PrecompileProvider<BaseSvmTypes>>>,
     transaction_history: Option<usize>,
     account_source: Option<Arc<dyn AccountSource>>,
     log_bytes_limit: LogBytesLimitPlan,
-    inspector: Arc<dyn Inspector>,
+    inspector: Option<Box<dyn Inspector<BaseSvmTypes>>>,
     custom_syscalls: Vec<CustomSyscallRegistration>,
     enable_register_tracing: bool,
 }
@@ -74,12 +75,13 @@ impl BuildPlan {
             include_default_programs: false,
             #[cfg(feature = "precompiles")]
             include_precompiles: false,
+            precompile_provider: None,
             transaction_history: None,
             account_source: None,
             log_bytes_limit: LogBytesLimitPlan::Inherit,
-            inspector: Arc::new(NoopInspector),
+            inspector: None,
             custom_syscalls: Vec::new(),
-            enable_register_tracing: HPSVM::default_register_tracing_enabled(),
+            enable_register_tracing: Hpsvm::default_register_tracing_enabled(),
         }
     }
 
@@ -98,7 +100,7 @@ impl BuildPlan {
     }
 }
 
-/// Typed builder for [`HPSVM`].
+/// Typed builder for [`Hpsvm`].
 ///
 /// The builder deliberately keeps feature selection open until the first
 /// feature-dependent surface is requested. Once the build plan starts
@@ -109,17 +111,17 @@ impl BuildPlan {
 ///
 /// ```compile_fail
 /// use agave_feature_set::FeatureSet;
-/// use hpsvm::HPSVM;
+/// use hpsvm::Hpsvm;
 ///
-/// let _ = HPSVM::builder()
+/// let _ = Hpsvm::builder()
 ///     .with_default_programs()
 ///     .with_feature_set(FeatureSet::default());
 /// ```
 ///
 /// ```compile_fail
-/// use hpsvm::HPSVM;
+/// use hpsvm::Hpsvm;
 ///
-/// let _ = HPSVM::new().with_sigverify(false);
+/// let _ = Hpsvm::new().with_sigverify(false);
 /// ```
 #[must_use = "builders do nothing unless you call build()"]
 pub struct HpsvmBuilder<State = FeatureConfigOpen> {
@@ -176,7 +178,19 @@ impl HpsvmBuilder<FeatureConfigOpen> {
         self.seal()
     }
 
-    /// Queue the same materialized runtime surfaces used by [`HPSVM::new()`].
+    /// Install a custom precompile provider and seal the feature selection window.
+    ///
+    /// Replaces the default native dispatch set; account installation for the
+    /// provider's ids happens at build time against the selected feature set.
+    pub fn with_precompile_provider(
+        mut self,
+        provider: Arc<dyn PrecompileProvider<BaseSvmTypes>>,
+    ) -> HpsvmBuilder<FeatureConfigSealed> {
+        self.plan.precompile_provider = Some(provider);
+        self.seal()
+    }
+
+    /// Queue the same materialized runtime surfaces used by [`Hpsvm::new()`].
     ///
     /// If the caller has not chosen a feature set yet, this helper opts into the
     /// fully-enabled feature set so the resulting VM matches the legacy test
@@ -224,6 +238,18 @@ impl HpsvmBuilder<FeatureConfigSealed> {
         self
     }
 
+    /// Install a custom precompile provider after the feature set has been locked in.
+    ///
+    /// Replaces the default native dispatch set; account installation for the
+    /// provider's ids happens at build time against the selected feature set.
+    pub fn with_precompile_provider(
+        mut self,
+        provider: Arc<dyn PrecompileProvider<BaseSvmTypes>>,
+    ) -> Self {
+        self.plan.precompile_provider = Some(provider);
+        self
+    }
+
     /// Fill in the standard program-test runtime surfaces without reopening feature selection.
     pub fn with_program_test_defaults(mut self) -> Self {
         self.plan.apply_program_test_defaults();
@@ -233,8 +259,8 @@ impl HpsvmBuilder<FeatureConfigSealed> {
 
 impl<State: FeatureConfigState> HpsvmBuilder<State> {
     /// Install an execution inspector before the VM is built.
-    pub fn with_inspector<I: Inspector + 'static>(mut self, inspector: I) -> Self {
-        self.plan.inspector = Arc::new(inspector);
+    pub fn with_inspector<I: Inspector<BaseSvmTypes> + 'static>(mut self, inspector: I) -> Self {
+        self.plan.inspector = Some(Box::new(inspector));
         self
     }
 
@@ -259,7 +285,7 @@ impl<State: FeatureConfigState> HpsvmBuilder<State> {
     /// Enable or disable execution diagnostics (pre/post diffs, token balances).
     ///
     /// Defaults to `true`. When disabled, transaction outcomes return an empty
-    /// [`ExecutionDiagnostics`](hpsvm::types::ExecutionDiagnostics), skipping
+    /// [`ExecutionDiagnostics`](crate::types::ExecutionDiagnostics), skipping
     /// expensive balance and diff computation.
     pub fn with_compute_diagnostics(mut self, enabled: bool) -> Self {
         self.plan.compute_diagnostics = Some(enabled);
@@ -314,8 +340,8 @@ impl<State: FeatureConfigState> HpsvmBuilder<State> {
         self
     }
 
-    /// Materialize the build plan into a runnable [`HPSVM`].
-    pub fn build(self) -> Result<HPSVM, HPSVMError> {
+    /// Materialize the build plan into a runnable [`Hpsvm`].
+    pub fn build(self) -> Result<Hpsvm, HPSVMError> {
         let BuildPlan {
             feature_set,
             compute_budget,
@@ -330,6 +356,7 @@ impl<State: FeatureConfigState> HpsvmBuilder<State> {
             include_default_programs,
             #[cfg(feature = "precompiles")]
             include_precompiles,
+            precompile_provider,
             transaction_history,
             account_source,
             log_bytes_limit,
@@ -353,7 +380,7 @@ impl<State: FeatureConfigState> HpsvmBuilder<State> {
             return Err(HPSVMError::MissingRuntimeComponent { component: "sysvars" });
         }
 
-        let mut svm = HPSVM::new_inner(enable_register_tracing);
+        let mut svm = Svm::<BaseSvmTypes>::new_inner(enable_register_tracing);
 
         if let Some(feature_set) = feature_set {
             svm.set_feature_set(feature_set)?;
@@ -366,7 +393,6 @@ impl<State: FeatureConfigState> HpsvmBuilder<State> {
         }
         if let Some(account_source) = account_source {
             svm.accounts.set_account_source(account_source);
-            svm.invalidate_execution_outcomes();
         }
         if let LogBytesLimitPlan::Explicit(limit) = log_bytes_limit {
             svm.set_log_bytes_limit(limit);
@@ -379,7 +405,6 @@ impl<State: FeatureConfigState> HpsvmBuilder<State> {
         if needs_early_runtime_refresh {
             svm.try_refresh_runtime_environments()?;
             svm.accounts.rebuild_program_cache().map_err(HPSVMError::from)?;
-            svm.invalidate_execution_outcomes();
         }
 
         if include_builtins {
@@ -403,6 +428,9 @@ impl<State: FeatureConfigState> HpsvmBuilder<State> {
         if include_precompiles {
             svm.set_precompiles();
         }
+        if let Some(provider) = precompile_provider {
+            svm.set_precompile_provider(provider);
+        }
         if let Some(sigverify) = sigverify {
             svm.set_sigverify(sigverify);
         }
@@ -413,8 +441,9 @@ impl<State: FeatureConfigState> HpsvmBuilder<State> {
             svm.set_compute_diagnostics(compute_diagnostics);
         }
 
-        svm.inspector = inspector;
-        svm.invalidate_execution_outcomes();
+        if let Some(inspector) = inspector {
+            svm.set_boxed_inspector(inspector);
+        }
 
         Ok(svm)
     }

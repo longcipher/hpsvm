@@ -4,10 +4,10 @@ use solana_program_pack::Pack;
 use solana_rent::Rent;
 use spl_token_interface::{native_mint::DECIMALS, state::Mint};
 
-use crate::HPSVM;
+use crate::{Svm, SvmTypesHost};
 
 /// Create a native mint
-pub fn create_native_mint(svm: &mut HPSVM) {
+pub fn create_native_mint<T: SvmTypesHost>(svm: &mut Svm<'_, T>) {
     let mut data = vec![0; Mint::LEN];
     let mint = Mint {
         mint_authority: COption::None,

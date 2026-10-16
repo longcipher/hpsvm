@@ -4,7 +4,7 @@ use solana_keypair::Keypair;
 use solana_signer::{Signer, signers::Signers};
 
 use super::{TOKEN_ID, get_multisig_signers, spl_token::instruction::burn};
-use crate::{HPSVM, types::FailedTransactionMetadata};
+use crate::{Svm, SvmTypesHost, types::FailedTransactionMetadata};
 
 /// ### Description
 /// Builder for the [`burn`] instruction.
@@ -13,8 +13,8 @@ use crate::{HPSVM, types::FailedTransactionMetadata};
 /// - `authority`: `payer` by default.
 /// - `token_program_id`: [`TOKEN_ID`] by default.
 #[derive(Debug)]
-pub struct Burn<'a> {
-    svm: &'a mut HPSVM,
+pub struct Burn<'a, 's, T: SvmTypesHost> {
+    svm: &'a mut Svm<'s, T>,
     payer: &'a Keypair,
     mint: &'a Address,
     account: &'a Address,
@@ -24,10 +24,10 @@ pub struct Burn<'a> {
     owner: Option<Address>,
 }
 
-impl<'a> Burn<'a> {
+impl<'a, 's, T: SvmTypesHost> Burn<'a, 's, T> {
     /// Creates a new instance of [`burn`] instruction.
     pub fn new(
-        svm: &'a mut HPSVM,
+        svm: &'a mut Svm<'s, T>,
         payer: &'a Keypair,
         mint: &'a Address,
         account: &'a Address,

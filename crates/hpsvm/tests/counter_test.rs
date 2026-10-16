@@ -153,7 +153,7 @@ fn test_register_tracing_handler() {
         sync::{Arc, Mutex},
     };
 
-    use hpsvm::InvocationInspectCallback;
+    use hpsvm::{BaseSvmTypes, InvocationInspectCallback, Svm};
     use solana_program_runtime::invoke_context::{Executable, InvokeContext, RegisterTrace};
     use solana_transaction::{Address, sanitized::SanitizedTransaction};
     use solana_transaction_context::{IndexOfAccount, instruction::InstructionContext};
@@ -210,10 +210,10 @@ fn test_register_tracing_handler() {
         }
     }
 
-    impl InvocationInspectCallback for CustomRegisterTracingCallback {
+    impl InvocationInspectCallback<BaseSvmTypes> for CustomRegisterTracingCallback {
         fn before_invocation(
             &self,
-            _: &HPSVM,
+            _: &Svm<'_, BaseSvmTypes>,
             _: &SanitizedTransaction,
             _: &[IndexOfAccount],
             _: &InvokeContext<'_, '_>,
@@ -222,7 +222,7 @@ fn test_register_tracing_handler() {
 
         fn after_invocation(
             &self,
-            _: &HPSVM,
+            _: &Svm<'_, BaseSvmTypes>,
             invoke_context: &InvokeContext<'_, '_>,
             register_tracing_enabled: bool,
         ) {

@@ -7,7 +7,7 @@ use super::{
     TOKEN_ID, get_multisig_signers,
     spl_token::instruction::{AuthorityType, set_authority},
 };
-use crate::{HPSVM, types::FailedTransactionMetadata};
+use crate::{Svm, SvmTypesHost, types::FailedTransactionMetadata};
 
 /// ### Description
 /// Builder for the [`set_authority`] instruction.
@@ -16,8 +16,8 @@ use crate::{HPSVM, types::FailedTransactionMetadata};
 /// - `owner`: `payer` by default.
 /// - `token_program_id`: [`TOKEN_ID`] by default.
 #[derive(Debug)]
-pub struct SetAuthority<'a> {
-    svm: &'a mut HPSVM,
+pub struct SetAuthority<'a, 's, T: SvmTypesHost> {
+    svm: &'a mut Svm<'s, T>,
     payer: &'a Keypair,
     authority_type: AuthorityType,
     account: &'a Address,
@@ -27,10 +27,10 @@ pub struct SetAuthority<'a> {
     token_program_id: Option<&'a Address>,
 }
 
-impl<'a> SetAuthority<'a> {
+impl<'a, 's, T: SvmTypesHost> SetAuthority<'a, 's, T> {
     /// Creates a new instance of [`set_authority`] instruction.
     pub fn new(
-        svm: &'a mut HPSVM,
+        svm: &'a mut Svm<'s, T>,
         payer: &'a Keypair,
         account: &'a Address,
         authority_type: AuthorityType,

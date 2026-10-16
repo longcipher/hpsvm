@@ -8,9 +8,13 @@ use std::thread;
 #[cfg(feature = "invocation-inspect-callback")]
 use std::time::{Duration, Instant};
 
+#[cfg(feature = "invocation-inspect-callback")]
+use hpsvm::BaseSvmTypes;
 use hpsvm::HPSVM;
 #[cfg(feature = "invocation-inspect-callback")]
 use hpsvm::InvocationInspectCallback;
+#[cfg(feature = "invocation-inspect-callback")]
+use hpsvm::Svm;
 use solana_account::{Account, state_traits::StateMut};
 use solana_address::{Address, address};
 use solana_address_lookup_table_interface::instruction::{
@@ -251,10 +255,8 @@ fn sequential_commit_matches_batch_commit() {
     );
     let peer_tx = transfer_tx(&batch_peer, &recipient, 1, blockhash);
 
-    let close_outcome = serial_vm.transact(close_tx.clone());
-    serial_vm.commit_transaction(close_outcome).unwrap();
-    let peer_outcome = serial_vm.transact(peer_tx.clone());
-    serial_vm.commit_transaction(peer_outcome).unwrap();
+    serial_vm.transact(close_tx.clone()).expect("transact should stage").commit().unwrap();
+    serial_vm.transact(peer_tx.clone()).expect("transact should stage").commit().unwrap();
 
     let batch = batch_vm
         .send_transaction_batch([close_tx, peer_tx])
@@ -533,10 +535,10 @@ fn send_transaction_batch_runs_independent_stage_transactions_in_parallel() {
         max_seen: Arc<AtomicUsize>,
     }
 
-    impl InvocationInspectCallback for ConcurrentInvocationCallback {
+    impl InvocationInspectCallback<BaseSvmTypes> for ConcurrentInvocationCallback {
         fn before_invocation(
             &self,
-            _: &HPSVM,
+            _: &Svm<'_, BaseSvmTypes>,
             _: &SanitizedTransaction,
             _: &[IndexOfAccount],
             _: &InvokeContext<'_, '_>,
@@ -550,7 +552,7 @@ fn send_transaction_batch_runs_independent_stage_transactions_in_parallel() {
             }
         }
 
-        fn after_invocation(&self, _: &HPSVM, _: &InvokeContext<'_, '_>, _: bool) {
+        fn after_invocation(&self, _: &Svm<'_, BaseSvmTypes>, _: &InvokeContext<'_, '_>, _: bool) {
             self.active.fetch_sub(1, Ordering::SeqCst);
         }
     }

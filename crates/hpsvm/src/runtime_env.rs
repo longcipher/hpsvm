@@ -1,7 +1,7 @@
 //! Runtime-environment construction and the process-wide default-program
 //! executable cache.
 //!
-//! `HPSVM::new()` (and the `with_program_test_defaults` builder path)
+//! `Hpsvm::new()` (and the `with_program_test_defaults` builder path)
 //! repeatedly rebuilds an identical default runtime environment and
 //! re-verifies the same built-in / SPL ELF executables on every
 //! construction. For test suites that spin up many VMs this dominates
@@ -30,7 +30,7 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
-use agave_feature_set::{FeatureSet, raise_cpi_nesting_limit_to_8};
+use agave_feature_set::FeatureSet;
 use parking_lot::RwLock;
 use solana_address::Address;
 use solana_compute_budget::compute_budget::ComputeBudget;
@@ -43,7 +43,7 @@ use solana_program_runtime::{
 };
 use solana_syscalls::create_program_runtime_environment;
 
-use crate::{HPSVM, HPSVMError};
+use crate::{FeatureGate, HPSVMError, Svm, SvmTypesHost, TxFeatureFlags};
 
 /// Shared default runtime environment, built once per process.
 pub(crate) static DEFAULT_RUNTIME_ENV: OnceLock<Arc<ProgramRuntimeEnvironments>> = OnceLock::new();
@@ -70,7 +70,7 @@ fn shared_default_env_ptr(envs: &Arc<ProgramRuntimeEnvironments>) -> Option<usiz
     Arc::ptr_eq(envs, shared).then_some(Arc::as_ptr(shared) as usize)
 }
 
-impl HPSVM {
+impl<T: SvmTypesHost> Svm<'_, T> {
     pub(crate) fn try_refresh_runtime_environments(&mut self) -> Result<(), HPSVMError> {
         #[cfg(feature = "register-tracing")]
         let enable_register_tracing = self.enable_register_tracing;
@@ -80,13 +80,13 @@ impl HPSVM {
         // The exact default configuration produces a runtime environment that
         // is identical across VMs. Reuse the process-wide shared `Arc` so the
         // first default VM pays the build cost once and every subsequent
-        // `HPSVM::new()` skips `create_program_runtime_environment` entirely,
+        // `Hpsvm::new()` skips `create_program_runtime_environment` entirely,
         // and so default-program executables can be memoized (see
         // `resolve_program_entry`).
         let is_default_config = !enable_register_tracing &&
-            self.runtime_env.compute_budget.is_none() &&
+            self.version.compute_budget.is_none() &&
             self.runtime_registry.custom_syscalls().is_empty() &&
-            self.cfg.feature_set == FeatureSet::all_enabled();
+            self.version.feature_set.as_ref() == &FeatureSet::all_enabled();
 
         if is_default_config {
             let shared = DEFAULT_RUNTIME_ENV.get();
@@ -96,13 +96,14 @@ impl HPSVM {
             }
         }
 
-        let compute_budget = self.runtime_env.compute_budget.unwrap_or_else(|| {
-            ComputeBudget::new_with_defaults(
-                self.cfg.feature_set.is_active(&raise_cpi_nesting_limit_to_8::ID),
-            )
+        // One flag load per environment refresh; the refresh runs at setup or
+        // reconfiguration time, never per transaction.
+        let flags = TxFeatureFlags::load(&self.version.feature_set);
+        let compute_budget = self.version.compute_budget.unwrap_or_else(|| {
+            ComputeBudget::new_with_defaults(flags.is_enabled(FeatureGate::RaiseCpiNestingLimitTo8))
         });
         let program_runtime = create_program_runtime_environment(
-            &self.cfg.feature_set.runtime_features(),
+            &self.version.feature_set.runtime_features(),
             &compute_budget.to_budget(),
             false,
             enable_register_tracing,
@@ -160,7 +161,7 @@ impl HPSVM {
     /// the process-wide default-program cache when eligible.
     ///
     /// Cache eligibility requires all of:
-    /// - the caller opted in via `CACHED` (only [`HPSVM::add_program_preverified`], invoked
+    /// - the caller opted in via `CACHED` (only [`Hpsvm::add_program_preverified`], invoked
     ///   exclusively with `include_bytes!` statics);
     /// - the VM is running under the shared default runtime environment (pointer identity), so the
     ///   memoized executable is valid here;

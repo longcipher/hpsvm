@@ -146,7 +146,7 @@ pub(crate) fn record_fixture(request: &RecordRequest) -> Result<(), CliError> {
         )?;
     }
 
-    let baseline = ExecutionSnapshot::from_outcome(&vm.transact(transaction.clone()));
+    let baseline = ExecutionSnapshot::from_outcome(&vm.transact_detached(transaction.clone()));
 
     let mut builder = CaptureBuilder::new(fixture_name(request))
         .runtime(runtime)

@@ -9,13 +9,13 @@ use super::{
     TOKEN_ID,
     spl_token::{instruction::initialize_multisig2, state::Multisig},
 };
-use crate::{HPSVM, types::FailedTransactionMetadata};
+use crate::{Svm, SvmTypesHost, types::FailedTransactionMetadata};
 
 /// ### Description
 /// Builder for the [`initialize_multisig2`] instruction.
 #[derive(Debug)]
-pub struct CreateMultisig<'a> {
-    svm: &'a mut HPSVM,
+pub struct CreateMultisig<'a, 's, T: SvmTypesHost> {
+    svm: &'a mut Svm<'s, T>,
     payer: &'a Keypair,
     signers: &'a [&'a Address],
     required_signatures: u8,
@@ -23,10 +23,10 @@ pub struct CreateMultisig<'a> {
     token_program_id: Option<&'a Address>,
 }
 
-impl<'a> CreateMultisig<'a> {
+impl<'a, 's, T: SvmTypesHost> CreateMultisig<'a, 's, T> {
     /// Creates a new instance of [`initialize_multisig2`] instruction.
     pub fn new(
-        svm: &'a mut HPSVM,
+        svm: &'a mut Svm<'s, T>,
         payer: &'a Keypair,
         signers: &'a [&'a Address],
         required_signatures: u8,

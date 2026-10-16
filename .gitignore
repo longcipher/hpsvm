@@ -20,3 +20,7 @@ target/
 # End of https://www.toptal.com/developers/gitignore/api/rust
 
 .rumdl_cache/
+
+# mutation-testing output
+mutants.out/
+mutants.out.old/

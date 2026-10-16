@@ -136,7 +136,7 @@ mod tests {
             Message::new(&[transfer(&payer.pubkey(), &recipient, 64)], Some(&payer.pubkey())),
             svm.latest_blockhash(),
         ));
-        let baseline = ExecutionSnapshot::from_outcome(&svm.transact(tx.clone()));
+        let baseline = ExecutionSnapshot::from_outcome(&svm.transact_detached(tx.clone()));
         let pre_accounts = vec![
             AccountSnapshot::from_readable(
                 payer.pubkey(),

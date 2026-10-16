@@ -1,3 +1,8 @@
+//! Execution fixtures for hpsvm: capture a transaction's pre-state, run it,
+//! and check the post-state against expectations.
+//!
+//! The CLI (`hpsvm-cli`) records and replays these fixtures; the `fd-codec`
+//! and `json-codec` features decode third-party fixture formats into them.
 #![allow(missing_debug_implementations, missing_docs)]
 #![deny(rustdoc::broken_intra_doc_links)]
 

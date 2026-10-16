@@ -93,7 +93,7 @@ impl FixtureRunner {
 
             let tx: VersionedTransaction = wincode::deserialize(&fixture.transaction_bytes)
                 .map_err(FixtureError::DecodeTransaction)?;
-            Ok(ExecutionSnapshot::from_outcome(&vm.transact(tx)))
+            Ok(ExecutionSnapshot::from_outcome(&vm.transact_detached(tx)))
         }
     }
 

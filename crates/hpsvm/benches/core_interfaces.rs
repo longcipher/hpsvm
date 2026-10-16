@@ -231,8 +231,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter_batched(
             || build_transfer_case(10_000),
             |(mut svm, tx)| {
-                let outcome = svm.transact(tx);
-                black_box(svm.commit_transaction(outcome).unwrap());
+                black_box(svm.transact(tx).expect("transact should stage").commit().unwrap());
             },
             BatchSize::SmallInput,
         );

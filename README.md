@@ -97,7 +97,7 @@ For more advanced usage, including custom configurations, program deployment, an
 
 `hpsvm` keeps the `HPSVM` facade stable while exposing a few sharper seams for advanced test harnesses:
 
-- `transact` computes an `ExecutionOutcome` without mutating the VM, and `commit_transaction` applies it explicitly when you want to persist the result.
+- `transact` stages a transaction in the live overlay and returns an `ExecutedTx`: `commit` keeps the post-state, `discard` rolls it back. `transact_detached` computes an owned `DetachedTx` without touching VM state.
 - `with_account_source` lets the VM read missing accounts from an external source while keeping local writes in the in-memory overlay.
 - `block_env` exposes the current blockhash and slot snapshot, and `with_inspector` installs lightweight top-level execution observers.
 
@@ -122,11 +122,10 @@ let tx = Transaction::new(
     svm.latest_blockhash(),
 );
 
-let outcome = svm.transact(tx);
-assert!(outcome.status().is_ok());
-assert_eq!(svm.get_balance(&recipient), None);
+let staged = svm.transact(tx).unwrap();
+assert!(staged.result().is_ok());
 
-let commit = svm.commit_transaction(outcome);
+let commit = staged.commit();
 assert!(commit.is_ok());
 assert_eq!(svm.get_balance(&recipient), Some(64));
 assert_eq!(svm.block_env().latest_blockhash, svm.latest_blockhash());
@@ -162,7 +161,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use hpsvm::{HPSVM, Inspector};
+use hpsvm::{BaseSvmTypes, HPSVM, Inspector};
 use solana_address::Address;
 
 #[derive(Default)]
@@ -170,8 +169,16 @@ struct CountingInspector {
     seen: Arc<AtomicUsize>,
 }
 
-impl Inspector for CountingInspector {
-    fn on_instruction(&self, _svm: &HPSVM, _index: usize, _program_id: &Address) {
+impl Inspector<BaseSvmTypes> for CountingInspector {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+
+    fn instruction_start(&mut self, _index: usize, _program_id: &Address) {
         self.seen.fetch_add(1, Ordering::SeqCst);
     }
 }
@@ -345,7 +352,7 @@ just bench-hotpath-trace
 
 `core_interfaces` covers the main public APIs: `new`, `set_account`, `get_account`,
 `expire_blockhash`, `add_program`, `add_program_from_file`, `airdrop`,
-`send_transaction`, `simulate_transaction`, `transact` + `commit_transaction`,
+`send_transaction`, `simulate_transaction`, `transact` + `commit`/`discard`,
 `plan_transaction_batch`, and `send_transaction_batch`.
 
 When `HPSVM_HOTPATH=1` is set, hotpath reports are written to `target/hotpath/*.json`.

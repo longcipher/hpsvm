@@ -1,12 +1,11 @@
-//! Core [`HPSVM`] behaviour: transaction execution entry points, account and
+//! Core [`Svm`] behaviour: transaction execution entry points, account and
 //! sysvar state management, program loading, and the public transaction API.
 
-use std::{cell::RefCell, path::Path, rc::Rc, sync::Arc};
+use std::{cell::RefCell, marker::PhantomData, path::Path, rc::Rc, sync::Arc};
 
 use agave_feature_set::{FeatureSet, raise_cpi_nesting_limit_to_8};
-#[cfg(feature = "precompiles")]
-use agave_precompiles::get_precompiles;
 use agave_reserved_account_keys::ReservedAccountKeys;
+use parking_lot::Mutex;
 use serde::{Serialize, de::DeserializeOwned};
 use solana_account::{
     Account, AccountSharedData, ReadableAccount, WritableAccount, state_traits::StateMut,
@@ -25,13 +24,16 @@ use solana_keypair::Keypair;
 use solana_last_restart_slot::LastRestartSlot;
 use solana_loader_v3_interface::{get_program_data_address, state::UpgradeableLoaderState};
 use solana_message::{Message, SanitizedMessage, VersionedMessage};
+use solana_native_token::LAMPORTS_PER_SOL;
 use solana_nonce::{NONCED_TX_MARKER_IX_INDEX, state::DurableNonce};
 use solana_nonce_account::verify_nonce_account;
 use solana_program_runtime::{
     invoke_context::BuiltinFunctionRegisterer, program_cache_entry::ProgramCacheEntry,
 };
 use solana_rent::Rent;
-use solana_sdk_ids::{bpf_loader, bpf_loader_deprecated, bpf_loader_upgradeable, system_program};
+use solana_sdk_ids::{
+    bpf_loader, bpf_loader_deprecated, bpf_loader_upgradeable, native_loader, system_program,
+};
 use solana_signature::Signature;
 use solana_signer::Signer;
 use solana_slot_hashes::{SlotHash, SlotHashes};
@@ -50,29 +52,35 @@ use solana_transaction::{sanitized::SanitizedTransaction, versioned::VersionedTr
 use solana_transaction_error::TransactionError;
 
 #[cfg(feature = "precompiles")]
+use crate::precompile_registry::NativePrecompiles;
+#[cfg(not(feature = "precompiles"))]
+use crate::precompile_registry::NoPrecompiles;
+#[cfg(feature = "precompiles")]
 use crate::precompiles::load_precompiles;
 #[cfg(feature = "register-tracing")]
 use crate::register_tracing::DefaultRegisterTracingCallback;
 use crate::{
-    AccountSource, AccountSourceError, AccountsView, BlockEnv, CustomSyscallRegistration, HPSVM,
-    HpsvmBuilder, Inspector, RuntimeEnv, SvmCfg, TransactionOrigin,
+    AccountSource, AccountSourceError, AccountsView, BlockEnv, ClusterInfo, ClusterSpecId,
+    CustomSyscallRegistration, Hpsvm, HpsvmBuilder, InspectMode, Inspector, RuntimeLimits, Svm,
+    SvmTypesHost, TransactionOrigin, Version,
     account_source::EmptyAccountSource,
     batch::{
         TransactionBatchError, TransactionBatchExecutionResult, TransactionBatchPlan,
         plan_transaction_batch, send_transaction_batch,
     },
-    commit::commit_execution_outcome,
+    commit::detached_into_result_and_delta,
     error::HPSVMError,
+    executed::{DetachedTx, ExecutedTx, StagedFailure, staging_touches_caches},
     helpers::*,
     history::TransactionHistory,
-    inspector::NoopInspector,
     instruction::InstructionCase,
-    next_vm_instance_id,
+    precompile_registry::PrecompileProvider,
     programs::{DEFAULT_PROGRAM_IDS, SPL_PROGRAM_IDS, load_default_programs, load_spl_programs},
     runtime_registry::RuntimeExtensionRegistry,
+    tx_registry::{TxHandler, TxRegistryError, TxTag, tag_of},
     types::{
-        AccountDiff, AccountSourceFailure, ExecutionDiagnostics, ExecutionOutcome, ExecutionResult,
-        ExecutionTrace, FailedTransactionMetadata, SimulatedTransactionInfo, TransactionMetadata,
+        AccountDiff, AccountSourceFailure, ExecutionDiagnostics, ExecutionResult, ExecutionTrace,
+        FailedTransactionMetadata, SimulatedTransactionInfo, TransactionMetadata,
         TransactionResult,
     },
     utils::create_blockhash,
@@ -108,135 +116,19 @@ where
     }
 }
 
-impl HPSVM {
-    pub(crate) fn default_register_tracing_enabled() -> bool {
-        // Allow users to virtually get register tracing data without doing any
-        // changes to their code provided `SBF_TRACE_DIR` is set.
-        #[cfg(feature = "register-tracing")]
-        {
-            std::env::var("SBF_TRACE_DIR").is_ok()
-        }
-        #[cfg(not(feature = "register-tracing"))]
-        {
-            false
-        }
-    }
-
-    pub(crate) const fn invalidate_execution_outcomes(&mut self) {
-        self.state_version = self.state_version.wrapping_add(1);
-    }
-
-    pub(crate) fn sync_block_env_slot(&mut self) {
-        self.block_env.slot = self.accounts.current_slot();
-    }
-
-    pub(crate) fn new_inner(_enable_register_tracing: bool) -> Self {
-        let feature_set = FeatureSet::default();
-        let latest_blockhash = create_blockhash(b"genesis");
-
-        Self {
-            accounts: Default::default(),
-            airdrop_kp: Keypair::new().to_bytes(),
-            builtins_loaded: false,
-            default_programs_loaded: false,
-            spl_programs_loaded: false,
-            reserved_account_keys: Self::reserved_account_keys_for_feature_set(&feature_set),
-            cfg: SvmCfg {
-                feature_set,
-                sigverify: false,
-                blockhash_check: false,
-                fee_structure: FeeStructure::default(),
-                compute_diagnostics: true,
-            },
-            feature_accounts_loaded: false,
-            inspector: Arc::new(NoopInspector),
-            inspection_origin: TransactionOrigin::User,
-            runtime_registry: RuntimeExtensionRegistry::default(),
-            instance_id: next_vm_instance_id(),
-            state_version: 0,
-            block_env: BlockEnv { latest_blockhash, slot: 0 },
-            history: TransactionHistory::new(),
-            runtime_env: RuntimeEnv { compute_budget: None, log_bytes_limit: Some(10_000) },
-            sysvars_loaded: false,
-            #[cfg(feature = "invocation-inspect-callback")]
-            enable_register_tracing: _enable_register_tracing,
-            #[cfg(feature = "invocation-inspect-callback")]
-            invocation_inspect_callback: {
-                #[cfg(feature = "register-tracing")]
-                if _enable_register_tracing {
-                    Arc::new(DefaultRegisterTracingCallback::default())
-                } else {
-                    Arc::new(EmptyInvocationInspectCallback {})
-                }
-                #[cfg(not(feature = "register-tracing"))]
-                Arc::new(EmptyInvocationInspectCallback {})
-            },
-        }
-    }
-
+impl Hpsvm {
     /// Creates the basic test environment.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn new() -> Self {
         Self::builder()
             .with_program_test_defaults()
             .build()
-            .expect("standard HPSVM construction should remain infallible")
+            .expect("standard Svm construction should remain infallible")
     }
 
     /// Create a typed builder for explicit, compile-time-checked environment assembly.
     pub fn builder() -> HpsvmBuilder {
         HpsvmBuilder::new()
-    }
-
-    /// Installs an execution inspector that observes top-level transaction activity.
-    pub fn with_inspector<I: Inspector + 'static>(mut self, inspector: I) -> Self {
-        self.inspector = Arc::new(inspector);
-        self.invalidate_execution_outcomes();
-        self
-    }
-
-    pub(crate) fn on_transaction_start(&self, tx: &SanitizedTransaction) {
-        self.inspector.on_transaction_start_with_origin(self.inspection_origin, self, tx);
-    }
-
-    pub(crate) fn on_instruction(&self, index: usize, program_id: &Address) {
-        self.inspector.on_instruction_with_origin(self.inspection_origin, self, index, program_id);
-    }
-
-    pub(crate) fn on_transaction_end(
-        &self,
-        result: &solana_transaction_error::TransactionResult<()>,
-    ) {
-        self.inspector.on_transaction_end_with_origin(self.inspection_origin, self, result);
-    }
-
-    pub(crate) fn with_transaction_origin<T>(
-        &mut self,
-        origin: TransactionOrigin,
-        op: impl FnOnce(&mut Self) -> T,
-    ) -> T {
-        let previous_origin = self.inspection_origin;
-        self.inspection_origin = origin;
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| op(self)));
-        self.inspection_origin = previous_origin;
-        match result {
-            Ok(result) => result,
-            Err(payload) => std::panic::resume_unwind(payload),
-        }
-    }
-
-    pub(crate) fn with_temporary_account_source<T>(
-        &mut self,
-        source: Arc<dyn AccountSource>,
-        op: impl FnOnce(&mut Self) -> T,
-    ) -> T {
-        let previous_source = self.accounts.replace_account_source(source);
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| op(self)));
-        self.accounts.set_account_source(previous_source);
-        match result {
-            Ok(result) => result,
-            Err(payload) => std::panic::resume_unwind(payload),
-        }
     }
 
     #[cfg(feature = "register-tracing")]
@@ -255,7 +147,269 @@ impl HPSVM {
             .with_register_tracing(enable_register_tracing)
             .with_program_test_defaults()
             .build()
-            .expect("standard debuggable HPSVM construction should remain infallible")
+            .expect("standard debuggable Svm construction should remain infallible")
+    }
+}
+
+impl<'a, T: SvmTypesHost> Svm<'a, T> {
+    pub(crate) fn default_register_tracing_enabled() -> bool {
+        // Allow users to virtually get register tracing data without doing any
+        // changes to their code provided `SBF_TRACE_DIR` is set.
+        #[cfg(feature = "register-tracing")]
+        {
+            std::env::var("SBF_TRACE_DIR").is_ok()
+        }
+        #[cfg(not(feature = "register-tracing"))]
+        {
+            false
+        }
+    }
+
+    pub(crate) fn sync_block_env_slot(&mut self) {
+        self.block_env.slot = self.accounts.current_slot();
+    }
+
+    pub(crate) fn new_inner(_enable_register_tracing: bool) -> Self {
+        let feature_set = FeatureSet::default();
+        let latest_blockhash = create_blockhash(b"genesis");
+
+        Self {
+            accounts: Default::default(),
+            airdrop_kp: Keypair::new().to_bytes(),
+            builtins_loaded: false,
+            default_programs_loaded: false,
+            spl_programs_loaded: false,
+            reserved_account_keys: Self::reserved_account_keys_for_feature_set(&feature_set),
+            version: Version {
+                feature_set: Arc::new(feature_set),
+                sigverify: false,
+                blockhash_check: false,
+                fee_structure: FeeStructure::default(),
+                compute_diagnostics: true,
+                compute_budget: None,
+                rent: Rent::default(),
+                limits: RuntimeLimits::default(),
+                cluster: ClusterInfo {
+                    spec_id: ClusterSpecId::MainnetBeta,
+                    name: ClusterSpecId::MainnetBeta.name(),
+                },
+            },
+            feature_accounts_loaded: false,
+            inspector: Mutex::new(None),
+            inspection_origin: TransactionOrigin::User,
+            runtime_registry: RuntimeExtensionRegistry::default(),
+            registry: crate::tx_registry::TxRegistry::with_defaults(),
+            block_env: BlockEnv {
+                latest_blockhash,
+                slot: 0,
+                // `Default::default()` is `()` for the base family, so the
+                // base path keeps constructing exactly the old value.
+                ext: T::BlockEnvExt::default(),
+            },
+            history: TransactionHistory::new(),
+            sysvars_loaded: false,
+            #[cfg(feature = "precompiles")]
+            precompiles: Arc::new(NativePrecompiles::new()),
+            #[cfg(not(feature = "precompiles"))]
+            precompiles: Arc::new(NoPrecompiles),
+            _type_family: PhantomData,
+            #[cfg(feature = "invocation-inspect-callback")]
+            enable_register_tracing: _enable_register_tracing,
+            #[cfg(feature = "invocation-inspect-callback")]
+            invocation_inspect_callback: {
+                #[cfg(feature = "register-tracing")]
+                if _enable_register_tracing {
+                    Arc::new(DefaultRegisterTracingCallback::default())
+                } else {
+                    Arc::new(EmptyInvocationInspectCallback {})
+                }
+                #[cfg(not(feature = "register-tracing"))]
+                Arc::new(EmptyInvocationInspectCallback {})
+            },
+        }
+    }
+
+    /// Creates a fully-initialized test environment for any type family.
+    ///
+    /// Mirrors [`Hpsvm::new`] (program-test defaults: every feature on, a
+    /// funded airdrop account, sysvars, builtins, default programs, and —
+    /// with the `precompiles` feature — the native precompile set) for an
+    /// arbitrary `T`, so a custom family stands up in one call instead of
+    /// replaying the builder steps (the builder only builds `BaseSvmTypes`).
+    /// Signature verification and blockhash checks stay on, exactly like
+    /// `Hpsvm::new`.
+    pub fn new_with_defaults() -> Self {
+        let mut svm = Self::new_inner(false);
+        svm.set_feature_set(FeatureSet::all_enabled())
+            .expect("enabling every feature should succeed on a fresh VM");
+        svm.set_builtins();
+        svm.set_lamports(1_000_000 * LAMPORTS_PER_SOL);
+        svm.set_sysvars();
+        svm.set_feature_accounts();
+        svm.set_default_programs();
+        #[cfg(feature = "precompiles")]
+        svm.set_precompiles();
+        svm.set_sigverify(true);
+        svm.set_blockhash_check(true);
+        svm
+    }
+
+    /// Installs an execution inspector that observes transaction activity.
+    ///
+    /// Builder-style sugar over [`set_inspector`](Svm::set_inspector): moves
+    /// `inspector` into the VM after firing its `initialize` hook.
+    pub fn with_inspector<I: Inspector<T> + 'a>(mut self, inspector: I) -> Self {
+        self.set_inspector(inspector);
+        self
+    }
+
+    /// Installs `inspector`, firing its `initialize` hook first.
+    ///
+    /// Replaces any previously installed inspector (use
+    /// [`clear_inspector`](Svm::clear_inspector) first to recover it).
+    pub fn set_inspector(&mut self, inspector: impl Inspector<T> + 'a) {
+        self.set_boxed_inspector(Box::new(inspector));
+    }
+
+    /// Installs an already-boxed inspector, firing its `initialize` hook
+    /// first. Used by the builder, which holds the plan-time inspector boxed.
+    pub(crate) fn set_boxed_inspector(&mut self, mut inspector: Box<dyn Inspector<T> + 'a>) {
+        inspector.initialize(self);
+        *self.inspector.lock() = Some(inspector);
+    }
+
+    /// Removes the installed inspector and returns it, if any.
+    ///
+    /// State the inspector accumulated stays observable through the returned
+    /// box; downcast it back with `downcast_ref` to read the concrete type.
+    pub fn clear_inspector(&mut self) -> Option<Box<dyn Inspector<T> + 'a>> {
+        self.inspector.lock().take()
+    }
+
+    /// Returns whether the installed inspector accepts the current
+    /// [`TransactionOrigin`].
+    ///
+    /// Consulted once per execution, at the [`InspectMode`] selection point
+    /// (`execute_readonly`), which monomorphizes the whole execution below it
+    /// over the answer — so an origin-observing inspector still sees exactly
+    /// one consultation per execution, and no hook dispatcher consults again.
+    #[inline]
+    pub(crate) fn inspector_live(&self) -> bool {
+        let origin = self.inspection_origin;
+        self.inspector.lock().as_ref().is_some_and(|inspector| inspector.accepts_origin(origin))
+    }
+
+    /// Runs `op` against the installed inspector, if any.
+    ///
+    /// Takes the box out, runs the hook with the lock released, and puts the
+    /// box back — restoring it even when the hook panics. A hook that
+    /// re-enters execution therefore observes no inspector rather than
+    /// deadlocking on the lock.
+    fn fire_inspector(&self, op: impl FnOnce(&mut (dyn Inspector<T> + '_), &Self)) {
+        let Some(mut inspector) = self.inspector.lock().take() else { return };
+        let outcome =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| op(&mut *inspector, self)));
+        *self.inspector.lock() = Some(inspector);
+        if let Err(payload) = outcome {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
+    pub(crate) fn on_transaction_start<const MODE: InspectMode>(&self, tx: &SanitizedTransaction) {
+        match MODE {
+            InspectMode::DynInspector => {
+                self.fire_inspector(|inspector, svm| inspector.transaction_start(svm, tx));
+            }
+            InspectMode::NoInspector => {}
+        }
+    }
+
+    pub(crate) fn on_instruction_start<const MODE: InspectMode>(
+        &self,
+        index: usize,
+        program_id: &Address,
+    ) {
+        match MODE {
+            InspectMode::DynInspector => {
+                self.fire_inspector(|inspector, _| inspector.instruction_start(index, program_id));
+            }
+            InspectMode::NoInspector => {}
+        }
+    }
+
+    pub(crate) fn on_instruction_end<const MODE: InspectMode>(
+        &self,
+        index: usize,
+        program_id: &Address,
+    ) {
+        match MODE {
+            InspectMode::DynInspector => {
+                self.fire_inspector(|inspector, _| inspector.instruction_end(index, program_id));
+            }
+            InspectMode::NoInspector => {}
+        }
+    }
+
+    pub(crate) fn on_log<const MODE: InspectMode>(&self, message: &str) {
+        match MODE {
+            InspectMode::DynInspector => {
+                self.fire_inspector(|inspector, _| inspector.log(message));
+            }
+            InspectMode::NoInspector => {}
+        }
+    }
+
+    pub(crate) fn on_account_change<const MODE: InspectMode>(
+        &self,
+        change: crate::state_change_sink::AccountChange<'_>,
+    ) {
+        match MODE {
+            InspectMode::DynInspector => {
+                self.fire_inspector(|inspector, _| inspector.account_change(change));
+            }
+            InspectMode::NoInspector => {}
+        }
+    }
+
+    pub(crate) fn on_transaction_end<const MODE: InspectMode>(
+        &self,
+        result: &solana_transaction_error::TransactionResult<()>,
+    ) {
+        match MODE {
+            InspectMode::DynInspector => {
+                self.fire_inspector(|inspector, svm| inspector.transaction_end(svm, result));
+            }
+            InspectMode::NoInspector => {}
+        }
+    }
+
+    pub(crate) fn with_transaction_origin<O>(
+        &mut self,
+        origin: TransactionOrigin,
+        op: impl FnOnce(&mut Self) -> O,
+    ) -> O {
+        let previous_origin = self.inspection_origin;
+        self.inspection_origin = origin;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| op(self)));
+        self.inspection_origin = previous_origin;
+        match result {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
+
+    pub(crate) fn with_temporary_account_source<O>(
+        &mut self,
+        source: Arc<dyn AccountSource>,
+        op: impl FnOnce(&mut Self) -> O,
+    ) -> O {
+        let previous_source = self.accounts.replace_account_source(source);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| op(self)));
+        self.accounts.set_account_source(previous_source);
+        match result {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
     }
 
     pub(crate) fn clear_feature_accounts(&mut self, previous_feature_set: &FeatureSet) {
@@ -298,9 +452,9 @@ impl HPSVM {
 
     #[cfg(feature = "precompiles")]
     pub(crate) fn clear_precompile_accounts(&mut self) {
-        get_precompiles().iter().for_each(|precompile| {
-            self.accounts.remove_account(&precompile.program_id);
-        });
+        for program_id in self.precompiles.program_ids() {
+            self.accounts.remove_account(&program_id);
+        }
     }
 
     pub(crate) fn reconfigure_materialized_feature_state(
@@ -344,18 +498,18 @@ impl HPSVM {
         self.accounts.rebuild_program_cache().map_err(HPSVMError::from)
     }
 
-    /// **Advanced reconfiguration.** Replaces the runtime compute budget and invalidates any
-    /// previously transacted but uncommitted outcomes.
+    /// **Advanced reconfiguration.** Replaces the runtime compute budget.
     pub const fn set_compute_budget(&mut self, compute_budget: ComputeBudget) {
-        self.runtime_env.compute_budget = Some(compute_budget);
-        self.invalidate_execution_outcomes();
+        self.version.compute_budget = Some(compute_budget);
     }
 
     /// **Advanced reconfiguration.** Replaces only the runtime compute unit limit.
     pub fn set_compute_unit_limit(&mut self, compute_unit_limit: u64) {
-        let mut compute_budget = self.runtime_env.compute_budget.unwrap_or_else(|| {
+        let mut compute_budget = self.version.compute_budget.unwrap_or_else(|| {
+            // Setup-time one-shot query, not on the per-transaction path:
+            // keep the direct `is_active` instead of a `TxFeatureFlags` load.
             ComputeBudget::new_with_defaults(
-                self.cfg.feature_set.is_active(&raise_cpi_nesting_limit_to_8::ID),
+                self.version.feature_set.is_active(&raise_cpi_nesting_limit_to_8::ID),
             )
         });
         compute_budget.compute_unit_limit = compute_unit_limit;
@@ -363,28 +517,25 @@ impl HPSVM {
     }
 
     /// **Advanced reconfiguration.** Enables or disables signature verification for future
-    /// transactions and invalidates any previously transacted but uncommitted outcomes.
+    /// transactions.
     pub const fn set_sigverify(&mut self, sigverify: bool) {
-        self.cfg.sigverify = sigverify;
-        self.invalidate_execution_outcomes();
+        self.version.sigverify = sigverify;
     }
 
     /// **Advanced reconfiguration.** Enables or disables blockhash checking for future
-    /// transactions and invalidates any previously transacted but uncommitted outcomes.
+    /// transactions.
     pub const fn set_blockhash_check(&mut self, check: bool) {
-        self.cfg.blockhash_check = check;
-        self.invalidate_execution_outcomes();
+        self.version.blockhash_check = check;
     }
 
     /// **Advanced reconfiguration.** Enables or disables execution diagnostics for future
-    /// transactions and invalidates any previously transacted but uncommitted outcomes.
+    /// transactions.
     ///
     /// When diagnostics are disabled, `send_transaction` / `transact` returns an empty
-    /// [`ExecutionDiagnostics`](types::ExecutionDiagnostics) instead of computing pre/post
+    /// [`ExecutionDiagnostics`] instead of computing pre/post
     /// account diffs and token balances.
     pub const fn set_compute_diagnostics(&mut self, enabled: bool) {
-        self.cfg.compute_diagnostics = enabled;
-        self.invalidate_execution_outcomes();
+        self.version.compute_diagnostics = enabled;
     }
 
     pub(crate) fn set_sysvars(&mut self) {
@@ -404,12 +555,15 @@ impl HPSVM {
             fees.fee_calculator.lamports_per_signature,
         )]));
 
-        // Rent account differs based off feature gating
+        // Rent account differs based off feature gating.
+        // Setup-time one-shot query (sysvar initialization, not per
+        // transaction): keep the direct `is_active` instead of a
+        // `TxFeatureFlags` load.
         #[expect(deprecated)]
         {
             let mut rent_account = Rent::default();
             if self
-                .cfg
+                .version
                 .feature_set
                 .is_active(&agave_feature_set::deprecate_rent_exemption_threshold::id())
             {
@@ -436,35 +590,41 @@ impl HPSVM {
                 .add_account(StakeHistory::id(), account)
                 .expect("add StakeHistory account");
         }
-        self.invalidate_execution_outcomes();
     }
 
-    /// **Advanced reconfiguration.** Replaces the active feature set, rebuilds any materialized
-    /// feature-dependent state, and invalidates previously transacted but uncommitted outcomes.
+    /// **Advanced reconfiguration.** Replaces the active feature set and rebuilds any
+    /// materialized feature-dependent state.
     pub fn set_feature_set(&mut self, feature_set: FeatureSet) -> Result<(), HPSVMError> {
-        let previous_feature_set = self.cfg.feature_set.clone();
+        let previous_feature_set = Arc::clone(&self.version.feature_set);
         let previous_accounts = self.accounts.clone();
         let previous_reserved_account_keys = self.reserved_account_keys.clone();
-        let previous_state_version = self.state_version;
 
-        self.cfg.feature_set = feature_set;
+        self.version.feature_set = Arc::new(feature_set);
         self.reserved_account_keys =
-            Self::reserved_account_keys_for_feature_set(&self.cfg.feature_set);
+            Self::reserved_account_keys_for_feature_set(&self.version.feature_set);
         if let Err(error) = self.reconfigure_materialized_feature_state(&previous_feature_set) {
-            self.cfg.feature_set = previous_feature_set;
+            self.version.feature_set = previous_feature_set;
             self.reserved_account_keys = previous_reserved_account_keys;
             self.accounts = previous_accounts;
-            self.state_version = previous_state_version;
+            // The program cache is shared through an `Arc`, so the failed
+            // reconfigure may have mutated it through the backup's handle.
+            // The cache is derived from the overlay, so rebuild it from the
+            // restored accounts to recover the pre-call contents.
+            if let Err(rebuild_error) = self.accounts.rebuild_program_cache() {
+                tracing::error!(
+                    ?rebuild_error,
+                    "failed to restore program cache after set_feature_set rollback"
+                );
+            }
             return Err(error);
         }
 
-        self.invalidate_execution_outcomes();
         Ok(())
     }
 
     pub(crate) fn materialize_feature_accounts(&mut self) {
         self.feature_accounts_loaded = true;
-        for (feature_id, activation_slot) in self.cfg.feature_set.active() {
+        for (feature_id, activation_slot) in self.version.feature_set.active() {
             let feature_account = Feature { activated_at: Some(*activation_slot) };
             let lamports = self.minimum_balance_for_rent_exemption(Feature::size_of());
             let account = feature_gate::create_account(&feature_account, lamports);
@@ -474,7 +634,6 @@ impl HPSVM {
 
     pub(crate) fn set_feature_accounts(&mut self) {
         self.materialize_feature_accounts();
-        self.invalidate_execution_outcomes();
     }
 
     pub(crate) fn reserved_account_keys_for_feature_set(
@@ -489,7 +648,10 @@ impl HPSVM {
         self.builtins_loaded = true;
         self.refresh_runtime_environments();
         for builtint in BUILTINS {
-            if builtint.enable_feature_id.is_none_or(|x| self.cfg.feature_set.is_active(&x)) {
+            // Dynamic id: each builtin carries its own `enable_feature_id`,
+            // which cannot be enumerated into the fixed `TxFeatureFlags` set.
+            // Setup-time only, so the direct query stays.
+            if builtint.enable_feature_id.is_none_or(|x| self.version.feature_set.is_active(&x)) {
                 let loaded_program = ProgramCacheEntry::new_builtin(builtint.register_fn);
                 self.accounts
                     .replenish_program_cache(builtint.program_id, Arc::new(loaded_program));
@@ -503,7 +665,6 @@ impl HPSVM {
 
     pub(crate) fn set_builtins(&mut self) {
         self.load_builtins();
-        self.invalidate_execution_outcomes();
     }
 
     pub fn set_lamports(&mut self, lamports: u64) {
@@ -513,7 +674,6 @@ impl HPSVM {
                 .pubkey(),
             AccountSharedData::new(lamports, 0, &system_program::id()),
         );
-        self.invalidate_execution_outcomes();
     }
 
     pub(crate) fn load_default_programs(&mut self) {
@@ -528,33 +688,26 @@ impl HPSVM {
 
     pub(crate) fn set_default_programs(&mut self) {
         self.load_default_programs();
-        self.invalidate_execution_outcomes();
     }
 
     pub(crate) fn set_spl_programs(&mut self) {
         self.load_spl_programs();
-        self.invalidate_execution_outcomes();
     }
 
     /// **Advanced reconfiguration.** Changes the transaction history capacity. Set this to 0 to
     /// disable history and allow duplicate transactions.
     pub fn set_transaction_history(&mut self, capacity: usize) {
         self.history.set_capacity(capacity);
-        self.invalidate_execution_outcomes();
     }
 
-    /// **Advanced reconfiguration.** Installs a read-through account source for future lookups and
-    /// invalidates previously transacted but uncommitted outcomes.
+    /// **Advanced reconfiguration.** Installs a read-through account source for future lookups.
     pub fn set_account_source(&mut self, source: impl AccountSource + 'static) {
         self.accounts.set_account_source(Arc::new(source));
-        self.invalidate_execution_outcomes();
     }
 
-    /// **Advanced reconfiguration.** Adjusts the log truncation limit for future execution and
-    /// invalidates previously transacted but uncommitted outcomes.
+    /// **Advanced reconfiguration.** Adjusts the log truncation limit for future execution.
     pub const fn set_log_bytes_limit(&mut self, limit: Option<usize>) {
-        self.runtime_env.log_bytes_limit = limit;
-        self.invalidate_execution_outcomes();
+        self.version.limits.log_bytes_limit = limit;
     }
 
     #[cfg(feature = "precompiles")]
@@ -566,7 +719,26 @@ impl HPSVM {
     pub(crate) fn set_precompiles(&mut self) {
         self.runtime_registry.enable_standard_precompiles();
         self.load_precompiles();
-        self.invalidate_execution_outcomes();
+    }
+
+    /// Installs a custom precompile provider, replacing the default dispatch set.
+    ///
+    /// [`is_precompile`](solana_svm_callback::InvokeContextCallback::is_precompile)
+    /// and dispatch consult the new provider from this call on. When the
+    /// `precompiles` feature is on, accounts for the provider's enabled ids
+    /// are installed too, so entries under brand-new program ids work out of
+    /// the box; previously installed precompile accounts are left in place.
+    /// With the feature off the swap is inert: nothing dispatches as a
+    /// precompile either way, exactly as before.
+    pub fn set_precompile_provider(&mut self, provider: Arc<dyn PrecompileProvider<T>>) {
+        self.precompiles = provider;
+        #[cfg(feature = "precompiles")]
+        self.load_precompiles();
+    }
+
+    /// Returns the active precompile provider.
+    pub fn precompile_provider(&self) -> Arc<dyn PrecompileProvider<T>> {
+        Arc::clone(&self.precompiles)
     }
 
     /// Returns minimum balance required to make an account with specified data length rent exempt.
@@ -595,14 +767,13 @@ impl HPSVM {
     /// This writes directly into the in-memory test state. It does not execute
     /// the owning program or replay the full transaction pipeline, so it is best
     /// used for fixtures, snapshots, and explicit state surgery between
-    /// transactions. Prefer [`airdrop`](HPSVM::airdrop) or
-    /// [`send_transaction`](HPSVM::send_transaction) when you want a
+    /// transactions. Prefer [`airdrop`](Hpsvm::airdrop) or
+    /// [`send_transaction`](Hpsvm::send_transaction) when you want a
     /// protocol-consistent state transition.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn set_account(&mut self, address: Address, data: Account) -> Result<(), HPSVMError> {
         self.accounts.add_account(address, data.into())?;
         self.sync_block_env_slot();
-        self.invalidate_execution_outcomes();
         Ok(())
     }
 
@@ -611,14 +782,14 @@ impl HPSVM {
     /// Returns a read-only view of the internal accounts database.
     ///
     /// This provides read-only access to the accounts database for advanced inspection.
-    /// Use [`get_account`](HPSVM::get_account) for normal account retrieval.
+    /// Use [`get_account`](Hpsvm::get_account) for normal account retrieval.
     ///
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use hpsvm::HPSVM;
+    /// use hpsvm::Hpsvm;
     ///
-    /// let svm = HPSVM::new();
+    /// let svm = Hpsvm::new();
     ///
     /// // Read-only access to accounts data
     /// let accounts = svm.accounts();
@@ -639,8 +810,29 @@ impl HPSVM {
     }
 
     /// Gets the current block environment.
-    pub const fn block_env(&self) -> BlockEnv {
+    pub const fn block_env(&self) -> BlockEnv<T::BlockEnvExt> {
         self.block_env
+    }
+
+    /// **Advanced reconfiguration.** Replaces the block-environment extension slot.
+    ///
+    /// The core `latest_blockhash`/`slot` are untouched; only the
+    /// family-selected `T::BlockEnvExt` changes. Custom families use this to
+    /// publish chain-specific block data, which then reads back through
+    /// [`block_env`](Svm::block_env) and [`Host::block_env`](crate::Host::block_env).
+    pub fn set_block_env_ext(&mut self, ext: T::BlockEnvExt) {
+        self.block_env.ext = ext;
+    }
+
+    /// Returns the execution-shaping protocol configuration this VM runs under.
+    ///
+    /// Custom environments start from [`Version::base`] and install overrides
+    /// (notably via [`Version::with_feature`]) through
+    /// [`set_feature_set`](Svm::set_feature_set); this accessor makes the
+    /// installed configuration observable.
+    #[inline]
+    pub fn version(&self) -> &Version {
+        &self.version
     }
 
     /// **⚠️ ADVANCED USE ONLY ⚠️**
@@ -652,37 +844,36 @@ impl HPSVM {
     ///
     /// Returns an error if serialization fails or if the sysvar account update
     /// is rejected by the internal accounts database.
-    pub fn set_sysvar<T>(&mut self, sysvar: &T) -> Result<(), HPSVMError>
+    pub fn set_sysvar<S>(&mut self, sysvar: &S) -> Result<(), HPSVMError>
     where
-        T: Default + Serialize + SysvarId,
+        S: Default + Serialize + SysvarId,
     {
         self.try_set_sysvar(sysvar)?;
         self.sync_block_env_slot();
-        self.invalidate_execution_outcomes();
         Ok(())
     }
 
-    pub(crate) fn try_set_sysvar<T>(&mut self, sysvar: &T) -> Result<(), HPSVMError>
+    pub(crate) fn try_set_sysvar<S>(&mut self, sysvar: &S) -> Result<(), HPSVMError>
     where
-        T: Default + Serialize + SysvarId,
+        S: Default + Serialize + SysvarId,
     {
         // The buffer is sized to the sysvar's canonical on-chain length, then the value
         // is encoded into it with the same bincode codec the read path decodes.
         let mut account = AccountSharedData::new(
             1,
-            sysvar_account_size::<T>(&T::id()),
+            sysvar_account_size::<S>(&S::id()),
             &solana_sdk_ids::sysvar::id(),
         );
         account.serialize_data(sysvar).map_err(|error| HPSVMError::SysvarSerialization {
-            sysvar: std::any::type_name::<T>(),
+            sysvar: std::any::type_name::<S>(),
             reason: error.to_string(),
         })?;
-        self.accounts.add_account(T::id(), account)
+        self.accounts.add_account(S::id(), account)
     }
 
-    pub(crate) fn set_sysvar_internal<T>(&mut self, sysvar: &T)
+    pub(crate) fn set_sysvar_internal<S>(&mut self, sysvar: &S)
     where
-        T: Default + Serialize + SysvarId,
+        S: Default + Serialize + SysvarId,
     {
         self.try_set_sysvar(sysvar)
             .expect("internal sysvar setup should never fail for supported sysvars");
@@ -690,24 +881,24 @@ impl HPSVM {
     }
 
     /// Gets a sysvar from the test environment.
-    pub fn get_sysvar<T>(&self) -> T
+    pub fn get_sysvar<S>(&self) -> S
     where
-        T: Sysvar + SysvarId + DeserializeOwned,
+        S: Sysvar + SysvarId + DeserializeOwned,
     {
         self.try_get_sysvar().expect("sysvar account should exist and deserialize")
     }
 
-    pub(crate) fn try_get_sysvar<T>(&self) -> Result<T, HPSVMError>
+    pub(crate) fn try_get_sysvar<S>(&self) -> Result<S, HPSVMError>
     where
-        T: Sysvar + SysvarId + DeserializeOwned,
+        S: Sysvar + SysvarId + DeserializeOwned,
     {
         let account = self
             .accounts
-            .get_account_ref(&T::id())
+            .get_account_ref(&S::id())
             .ok_or(HPSVMError::MissingRuntimeComponent { component: "sysvars" })?;
 
         account.deserialize_data().map_err(|error| HPSVMError::SysvarSerialization {
-            sysvar: std::any::type_name::<T>(),
+            sysvar: std::any::type_name::<S>(),
             reason: error.to_string(),
         })
     }
@@ -734,7 +925,7 @@ impl HPSVM {
 
     /// Airdrops lamports by submitting an internal system transfer transaction.
     ///
-    /// Unlike [`set_account`](HPSVM::set_account), this goes through the normal
+    /// Unlike [`set_account`](Hpsvm::set_account), this goes through the normal
     /// execution pipeline instead of mutating balances directly.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn airdrop(&mut self, address: &Address, lamports: u64) -> TransactionResult {
@@ -762,15 +953,18 @@ impl HPSVM {
     }
 
     /// Adds a builtin program to the test environment.
+    ///
+    /// The installed account is owned by the native loader (exactly like the
+    /// accounts installed for Agave's own builtins), so the runtime dispatches
+    /// invocations of `program_id` to `entrypoint` through the builtin path.
     pub fn add_builtin(&mut self, program_id: Address, entrypoint: BuiltinFunctionRegisterer) {
         let builtin = ProgramCacheEntry::new_builtin(entrypoint);
 
         self.accounts.replenish_program_cache(program_id, Arc::new(builtin));
 
-        let mut account = AccountSharedData::new(1, 1, &bpf_loader::id());
+        let mut account = AccountSharedData::new(1, 1, &native_loader::id());
         account.set_executable(true);
         self.accounts.add_account_no_checks(program_id, account);
-        self.invalidate_execution_outcomes();
     }
 
     /// Adds an SBF program to the test environment from the file specified.
@@ -862,7 +1056,6 @@ impl HPSVM {
             program_bytes,
             &bpf_loader_upgradeable::id(),
         )?;
-        self.invalidate_execution_outcomes();
         Ok(())
     }
 
@@ -877,7 +1070,6 @@ impl HPSVM {
         loader_id: Address,
     ) -> Result<(), HPSVMError> {
         self.add_program_internal::<false, false>(program_id, program_bytes, &loader_id)?;
-        self.invalidate_execution_outcomes();
         Ok(())
     }
 
@@ -904,24 +1096,20 @@ impl HPSVM {
     /// Sealevel-style concurrent scheduling within one instance.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn send_transaction(&mut self, tx: impl Into<VersionedTransaction>) -> TransactionResult {
-        let log_collector = Rc::new(RefCell::new(LogCollector {
-            bytes_limit: self.runtime_env.log_bytes_limit,
-            ..Default::default()
-        }));
-        let execution = if self.cfg.sigverify {
-            self.execute_transaction(tx.into(), log_collector.clone())
-        } else {
-            self.execute_transaction_no_verify(tx.into(), log_collector.clone())
-        };
-        let outcome = execution_into_outcome(self, execution, log_collector, "send_transaction");
-        self.commit_transaction(outcome)
+        match Self::transact_core(self, tx.into()) {
+            Ok(staged) => staged.commit(),
+            // Fatal errors (e.g. account-source failures) historically surfaced
+            // as an `Err` result rather than propagating, so return the
+            // prebuilt result instead of the error.
+            Err(failure) => failure.into_result(),
+        }
     }
 
     /// Executes a single instruction case against a cloned VM without mutating this instance.
     pub fn process_instruction_case(
         &self,
         case: &InstructionCase,
-    ) -> Result<ExecutionOutcome, HPSVMError> {
+    ) -> Result<DetachedTx, HPSVMError> {
         let mut working = self.clone();
         working.set_sigverify(false);
 
@@ -966,7 +1154,7 @@ impl HPSVM {
     /// Processes one instruction after first writing the provided account states.
     ///
     /// Explicit accounts are written to the VM before execution, then the
-    /// instruction post-state is committed just like [`HPSVM::process_instruction`].
+    /// instruction post-state is committed just like [`Hpsvm::process_instruction`].
     pub fn process_instruction_with_accounts(
         &mut self,
         instruction: Instruction,
@@ -980,8 +1168,18 @@ impl HPSVM {
         &mut self,
         instructions: impl IntoIterator<Item = Instruction>,
     ) -> TransactionResult {
-        let outcome = self.transact_instruction_chain_no_verify(instructions.into_iter().collect());
-        self.commit_transaction(outcome)
+        let tx = self.instruction_chain_transaction(&instructions.into_iter().collect::<Vec<_>>());
+        let sigverify = self.version.sigverify;
+        self.version.sigverify = false;
+        let outcome = Self::transact_core(self, tx);
+        // The borrow held by `outcome` ends when it is resolved below, so the
+        // sigverify flag can only be restored afterwards.
+        let result = match outcome {
+            Ok(staged) => staged.commit(),
+            Err(failure) => failure.into_result(),
+        };
+        self.version.sigverify = sigverify;
+        result
     }
 
     /// Processes multiple instructions atomically after first writing explicit account states.
@@ -1027,12 +1225,19 @@ impl HPSVM {
         instructions: impl IntoIterator<Item = Instruction>,
     ) -> Result<SimulatedTransactionInfo, FailedTransactionMetadata> {
         let mut working = self.clone();
-        let ExecutionOutcome { meta, post_accounts, status, .. } =
-            working.transact_instruction_chain_no_verify(instructions.into_iter().collect());
-        if let Err(tx_err) = status {
-            Err(FailedTransactionMetadata { err: tx_err, meta })
+        // A throwaway clone: disable sigverify permanently instead of the
+        // save/restore dance the committing path performs on live state.
+        working.version.sigverify = false;
+        let tx =
+            working.instruction_chain_transaction(&instructions.into_iter().collect::<Vec<_>>());
+        let detached = working.transact_detached(tx);
+        if let Err(tx_err) = detached.status {
+            Err(FailedTransactionMetadata { err: tx_err, meta: detached.meta })
         } else {
-            Ok(SimulatedTransactionInfo { meta, post_accounts })
+            Ok(SimulatedTransactionInfo {
+                meta: detached.meta,
+                post_accounts: detached.post_accounts,
+            })
         }
     }
 
@@ -1054,56 +1259,218 @@ impl HPSVM {
                 });
             }
         }
-        let ExecutionOutcome { meta, post_accounts, status, .. } =
-            working.transact_instruction_chain_no_verify(instructions.into_iter().collect());
-        if let Err(tx_err) = status {
-            Err(FailedTransactionMetadata { err: tx_err, meta })
+        working.version.sigverify = false;
+        let tx =
+            working.instruction_chain_transaction(&instructions.into_iter().collect::<Vec<_>>());
+        let detached = working.transact_detached(tx);
+        if let Err(tx_err) = detached.status {
+            Err(FailedTransactionMetadata { err: tx_err, meta: detached.meta })
         } else {
-            Ok(SimulatedTransactionInfo { meta, post_accounts })
+            Ok(SimulatedTransactionInfo {
+                meta: detached.meta,
+                post_accounts: detached.post_accounts,
+            })
         }
     }
 
-    /// Executes a signed transaction without committing its post-state.
+    /// Executes a signed transaction without staging or committing any state.
     ///
-    /// The returned [`ExecutionOutcome`] is bound to this VM instance and its
-    /// current state version. Commit it back to the same [`HPSVM`] before any
-    /// intervening state or config mutation. Otherwise
-    /// [`HPSVM::commit_transaction`] returns `ResanitizationNeeded`.
+    /// Returns the owned readonly outcome. Fatal errors (e.g. account-source
+    /// failures) propagate as [`HPSVMError`]; every other execution result —
+    /// including pre-execution rejections — arrives as an `Ok` detached
+    /// outcome whose [`status`](DetachedTx::status) carries the failure.
     pub fn try_transact(
         &self,
         tx: impl Into<VersionedTransaction>,
-    ) -> Result<ExecutionOutcome, HPSVMError> {
-        let log_collector = Rc::new(RefCell::new(LogCollector {
-            bytes_limit: self.runtime_env.log_bytes_limit,
-            ..Default::default()
-        }));
-        let mut execution = if self.cfg.sigverify {
-            self.execute_transaction_readonly(tx.into(), log_collector.clone())
-        } else {
-            self.execute_transaction_no_verify_readonly(tx.into(), log_collector.clone())
-        };
-
-        if let Some(error) = execution.fatal_error.take() {
+    ) -> Result<DetachedTx, HPSVMError> {
+        let mut detached = self.dispatch_detached(tx.into()).map_err(HPSVMError::from)?;
+        if let Some(error) = detached.take_fatal() {
             return Err(error);
         }
-
-        Ok(execution_into_outcome(self, execution, log_collector, "try_transact"))
+        Ok(detached)
     }
 
-    #[must_use = "call HPSVM::commit_transaction to apply the returned execution outcome"]
-    pub fn transact(&self, tx: impl Into<VersionedTransaction>) -> ExecutionOutcome {
-        self.transact_inner(tx.into())
-    }
-
-    /// Commits a previously transacted execution outcome to this VM instance.
+    /// Executes a signed transaction and stages its post-state in the live overlay.
     ///
-    /// Outcomes are valid only for the VM instance and state version that
-    /// produced them. If this VM mutated after [`HPSVM::transact`] created the
-    /// outcome, or if the outcome came from a different VM instance, this
-    /// returns `ResanitizationNeeded`.
+    /// The returned [`ExecutedTx`] borrows `self`: while it is alive no other
+    /// code can observe or mutate the VM, which replaces the old
+    /// `origin_vm_instance_id` / `origin_state_version` provenance check.
+    /// Resolve it with [`commit`](ExecutedTx::commit) to keep the staged
+    /// post-state or [`discard`](ExecutedTx::discard) to roll it back.
+    /// Fatal errors (e.g. account-source failures) stage nothing and propagate
+    /// as [`HPSVMError`].
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    pub fn commit_transaction(&mut self, outcome: ExecutionOutcome) -> TransactionResult {
-        commit_execution_outcome(self, outcome)
+    pub fn transact<'svm>(
+        &'svm mut self,
+        tx: impl Into<VersionedTransaction>,
+    ) -> Result<ExecutedTx<'svm, 'a, T>, HPSVMError> {
+        Self::transact_core(self, tx.into()).map_err(StagedFailure::into_error)
+    }
+
+    /// Executes a signed transaction without staging or committing any state.
+    ///
+    /// Infallible readonly counterpart to [`transact`](Svm::transact): fatal
+    /// errors surface as an `Err` execution status inside the returned
+    /// [`DetachedTx`], exactly as the legacy `transact` reported them.
+    pub fn transact_detached(&self, tx: impl Into<VersionedTransaction>) -> DetachedTx {
+        let tx = tx.into();
+        let signature = tx.signatures.first().copied().unwrap_or_default();
+        match self.dispatch_detached(tx) {
+            Ok(detached) => detached,
+            Err(error) => DetachedTx::for_dispatch_failure(&error, signature),
+        }
+    }
+
+    /// Registers a transaction handler for `tag`, replacing the previous entry.
+    ///
+    /// This is how tests and forks intercept execution: registering for
+    /// [`TxTag::Legacy`] reroutes every legacy
+    /// transaction through `handle`, while unmentioned tags keep their
+    /// current handlers.
+    pub fn register_tx_handler(
+        &mut self,
+        tag: TxTag,
+        handle: impl TxHandler<T, VersionedTransaction, DetachedTx> + 'static,
+    ) {
+        self.registry.register(tag, handle);
+    }
+
+    /// Routes one envelope through the handler registry without staging.
+    ///
+    /// The tag lookup borrows only the registry while the host borrows the
+    /// whole VM; both are shared borrows, so this serves `&self` and `&mut
+    /// self` entry points alike.
+    pub(crate) fn dispatch_detached(
+        &self,
+        tx: VersionedTransaction,
+    ) -> Result<DetachedTx, TxRegistryError> {
+        let tag = tag_of(&tx);
+        self.registry.dispatch(tag, tx, self)
+    }
+
+    /// Runs the current readonly execution path and converts it to the owned
+    /// detached outcome, preserving the fatal-error and inspector-liveness
+    /// transports for the entry points.
+    ///
+    /// This is what [`DefaultExecutionHandler`](crate::DefaultExecutionHandler)
+    /// invokes, so the default registry entries behave exactly as the
+    /// pre-registry hardcoded path did.
+    pub(crate) fn default_execute_detached(&self, tx: VersionedTransaction) -> DetachedTx {
+        let (execution, log_collector) = self.execute_readonly(tx);
+        execution_into_detached(self, execution, log_collector, "tx_registry::default_execute")
+    }
+
+    /// Shared staging core behind `transact`, `send_transaction`, and
+    /// `process_instruction_chain`.
+    ///
+    /// Runs the existing readonly execution, then stages `post_accounts` into
+    /// the live overlay (journaled) and splits the history entry off for
+    /// commit time. Diagnostics are built before staging so the pre-balances
+    /// still observe the pre-transaction overlay.
+    fn transact_core<'svm, 'host>(
+        svm: &'svm mut Svm<'host, T>,
+        tx: VersionedTransaction,
+    ) -> Result<ExecutedTx<'svm, 'host, T>, StagedFailure> {
+        let signature = tx.signatures.first().copied().unwrap_or_default();
+        let mut detached = match svm.dispatch_detached(tx) {
+            Ok(detached) => detached,
+            Err(error) => {
+                // No handler ran, so there is no execution data to stage:
+                // report the dispatch failure with its legacy-identical `Err`
+                // result and no history entry.
+                let detached = DetachedTx::for_dispatch_failure(&error, signature);
+                let hpsvm_error = HPSVMError::from(error);
+                let (result, _) = detached_into_result_and_delta(detached, false);
+                return Err(StagedFailure::new(hpsvm_error, result));
+            }
+        };
+        if let Some(error) = detached.take_fatal() {
+            // Nothing was staged (the readonly path never mutates the
+            // overlay), so report the fatal error with its legacy-identical
+            // `Err` result and no history entry.
+            let (result, _) = detached_into_result_and_delta(detached, false);
+            return Err(StagedFailure::new(error, result));
+        }
+
+        let checkpoint = svm.accounts.checkpoint();
+        let inspector_live = detached.inspector_live;
+        let cache_dirty = staging_touches_caches(&detached.post_accounts, &svm.accounts);
+        let history_enabled = svm.history.is_enabled();
+        let (result, delta) = crate::hotpath_block!(
+            "hpsvm::commit::detached_into_result_and_delta",
+            detached_into_result_and_delta(detached, history_enabled)
+        );
+        let (post_accounts, history_entry) = delta.into_parts();
+        // Capture the per-address before/after deltas now, while the overlay
+        // still holds the pre-staging state in `get_account` reads (post
+        // accounts are applied by sync below). Ownership moves into the
+        // staged transaction so commit_with streams without re-reading state.
+        let changes: Vec<crate::state_change_sink::AccountChangeRecord> = post_accounts
+            .iter()
+            .map(|(address, after)| crate::state_change_sink::AccountChangeRecord {
+                address: *address,
+                before: svm.accounts.get_account(address),
+                // A zero-lamport post-state is removed from the overlay by
+                // `add_account`, so report it as "removed" (None) to match the
+                // committed after-state rather than the intermediate zero entry.
+                after: if after.lamports() == 0 { None } else { Some(after.clone()) },
+            })
+            .collect();
+        if let Err(error) = crate::hotpath_block!(
+            "hpsvm::commit::sync_staged_accounts",
+            svm.accounts.sync_accounts(post_accounts)
+        ) {
+            // Practically unreachable: execution-produced accounts always pass
+            // sync validation. Roll back rather than commit partial state.
+            // (The legacy path panicked here via `expect`.)
+            svm.accounts.rollback(checkpoint);
+            return Err(StagedFailure::new(error, result));
+        }
+        Ok(ExecutedTx::new(
+            svm,
+            checkpoint,
+            result,
+            history_entry,
+            cache_dirty,
+            changes,
+            inspector_live,
+        ))
+    }
+
+    /// Runs the readonly execution for one transaction, honouring the current
+    /// sigverify setting. Never mutates the overlay.
+    ///
+    /// This is the single `InspectMode` selection point for every execution
+    /// path (`transact_core`, `try_transact`, `transact_detached`, and through
+    /// them `send_transaction`, `simulate_*`, and the batch stages): one
+    /// `inspector_live()` mutex lock decides which monomorphization runs, and
+    /// everything below it is hook-branch-free when no inspector is live.
+    pub(crate) fn execute_readonly(
+        &self,
+        tx: VersionedTransaction,
+    ) -> (ExecutionResult, Rc<RefCell<LogCollector>>) {
+        let log_collector = Rc::new(RefCell::new(LogCollector {
+            bytes_limit: self.version.limits.log_bytes_limit,
+            ..Default::default()
+        }));
+        if self.inspector_live() {
+            self.execute_readonly_impl::<{ InspectMode::DynInspector }>(tx, log_collector)
+        } else {
+            self.execute_readonly_impl::<{ InspectMode::NoInspector }>(tx, log_collector)
+        }
+    }
+
+    fn execute_readonly_impl<const MODE: InspectMode>(
+        &self,
+        tx: VersionedTransaction,
+        log_collector: Rc<RefCell<LogCollector>>,
+    ) -> (ExecutionResult, Rc<RefCell<LogCollector>>) {
+        let execution = if self.version.sigverify {
+            self.execute_transaction_readonly::<MODE>(tx, log_collector.clone())
+        } else {
+            self.execute_transaction_no_verify_readonly::<MODE>(tx, log_collector.clone())
+        };
+        (execution, log_collector)
     }
 
     /// Plans a conflict-aware transaction batch without committing any state.
@@ -1111,12 +1478,12 @@ impl HPSVM {
     /// The returned stages contain indexes into the original input order. Stages
     /// are built greedily from account read/write conflicts and form the basis
     /// for higher-level batch schedulers.
-    pub fn plan_transaction_batch<T>(
+    pub fn plan_transaction_batch<V>(
         &self,
-        txs: impl IntoIterator<Item = T>,
+        txs: impl IntoIterator<Item = V>,
     ) -> Result<TransactionBatchPlan, TransactionBatchError>
     where
-        T: Into<VersionedTransaction>,
+        V: Into<VersionedTransaction>,
     {
         let transactions = txs.into_iter().map(Into::into).collect::<Vec<_>>();
         plan_transaction_batch(self, &transactions)
@@ -1128,12 +1495,12 @@ impl HPSVM {
     /// in the same conflict-free stage are executed against cloned snapshots in
     /// parallel, then their disjoint account deltas are merged back into this VM
     /// before the next stage begins.
-    pub fn send_transaction_batch<T>(
+    pub fn send_transaction_batch<V>(
         &mut self,
-        txs: impl IntoIterator<Item = T>,
+        txs: impl IntoIterator<Item = V>,
     ) -> Result<TransactionBatchExecutionResult, TransactionBatchError>
     where
-        T: Into<VersionedTransaction>,
+        V: Into<VersionedTransaction>,
     {
         let transactions = txs.into_iter().map(Into::into).collect::<Vec<_>>();
         send_transaction_batch(self, transactions)
@@ -1145,11 +1512,14 @@ impl HPSVM {
         &self,
         tx: impl Into<VersionedTransaction>,
     ) -> Result<SimulatedTransactionInfo, FailedTransactionMetadata> {
-        let ExecutionOutcome { meta, post_accounts, status, .. } = self.transact(tx);
-        if let Err(tx_err) = status {
-            Err(FailedTransactionMetadata { err: tx_err, meta })
+        let detached = self.transact_detached(tx);
+        if let Err(tx_err) = detached.status {
+            Err(FailedTransactionMetadata { err: tx_err, meta: detached.meta })
         } else {
-            Ok(SimulatedTransactionInfo { meta, post_accounts })
+            Ok(SimulatedTransactionInfo {
+                meta: detached.meta,
+                post_accounts: detached.post_accounts,
+            })
         }
     }
 
@@ -1162,9 +1532,8 @@ impl HPSVM {
         self.set_sysvar_internal(&RecentBlockhashes::from_iter([IterItem(
             0,
             &self.block_env.latest_blockhash,
-            self.cfg.fee_structure.lamports_per_signature,
+            self.version.fee_structure.lamports_per_signature,
         )]));
-        self.invalidate_execution_outcomes();
     }
 
     /// Warps the clock to the specified slot.
@@ -1172,22 +1541,21 @@ impl HPSVM {
         let mut clock = self.get_sysvar::<Clock>();
         clock.slot = slot;
         self.set_sysvar_internal(&clock);
-        self.invalidate_execution_outcomes();
     }
 
     /// Gets the current compute budget.
     pub const fn get_compute_budget(&self) -> Option<ComputeBudget> {
-        self.runtime_env.compute_budget
+        self.version.compute_budget
     }
 
     /// Returns whether signature verification is enabled.
     pub const fn get_sigverify(&self) -> bool {
-        self.cfg.sigverify
+        self.version.sigverify
     }
 
     #[cfg(feature = "internal-test")]
     pub fn get_feature_set(&self) -> Arc<FeatureSet> {
-        self.cfg.feature_set.clone().into()
+        Arc::clone(&self.version.feature_set)
     }
 
     pub(crate) fn check_transaction_age(
@@ -1242,18 +1610,17 @@ impl HPSVM {
     }
 
     #[cfg(feature = "invocation-inspect-callback")]
-    pub fn set_invocation_inspect_callback<C: InvocationInspectCallback + 'static>(
+    pub fn set_invocation_inspect_callback<C: InvocationInspectCallback<T> + 'static>(
         &mut self,
         callback: C,
     ) {
         self.invocation_inspect_callback = Arc::new(callback);
-        self.invalidate_execution_outcomes();
     }
 
     /// **Advanced reconfiguration.** Registers a custom syscall in both program runtime
     /// environments (v1 and v2).
     ///
-    /// This can be called on a freshly constructed [`HPSVM::new()`] instance or on an existing
+    /// This can be called on a freshly constructed [`Hpsvm::new()`] instance or on an existing
     /// environment after programs have already been loaded. The runtime environments are refreshed
     /// and cached programs are rebuilt so subsequent executions see the new syscall.
     ///
@@ -1271,43 +1638,12 @@ impl HPSVM {
 
         self.try_refresh_runtime_environments()?;
         self.accounts.rebuild_program_cache().map_err(HPSVMError::from)?;
-        self.invalidate_execution_outcomes();
 
         Ok(())
     }
 }
 
-impl HPSVM {
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    pub(crate) fn transact_inner(&self, tx: VersionedTransaction) -> ExecutionOutcome {
-        let log_collector = Rc::new(RefCell::new(LogCollector {
-            bytes_limit: self.runtime_env.log_bytes_limit,
-            ..Default::default()
-        }));
-        let execution = if self.cfg.sigverify {
-            self.execute_transaction_readonly(tx, log_collector.clone())
-        } else {
-            self.execute_transaction_no_verify_readonly(tx, log_collector.clone())
-        };
-        execution_into_outcome(self, execution, log_collector, "transact")
-    }
-
-    pub(crate) fn transact_instruction_chain_no_verify(
-        &mut self,
-        instructions: Vec<Instruction>,
-    ) -> ExecutionOutcome {
-        let tx = self.instruction_chain_transaction(&instructions);
-        let log_collector = Rc::new(RefCell::new(LogCollector {
-            bytes_limit: self.runtime_env.log_bytes_limit,
-            ..Default::default()
-        }));
-        let sigverify = self.cfg.sigverify;
-        self.cfg.sigverify = false;
-        let execution = self.execute_transaction_no_verify(tx, log_collector.clone());
-        self.cfg.sigverify = sigverify;
-        execution_into_outcome(self, execution, log_collector, "process_instruction_chain")
-    }
-
+impl<T: SvmTypesHost> Svm<'_, T> {
     pub(crate) fn instruction_chain_transaction(
         &self,
         instructions: &[Instruction],
@@ -1324,12 +1660,12 @@ impl HPSVM {
     }
 }
 
-fn execution_into_outcome(
-    vm: &HPSVM,
+fn execution_into_detached<T: SvmTypesHost>(
+    vm: &Svm<'_, T>,
     execution: ExecutionResult,
     log_collector: Rc<RefCell<LogCollector>>,
     method_name: &str,
-) -> ExecutionOutcome {
+) -> DetachedTx {
     let ExecutionResult {
         post_accounts,
         tx_result,
@@ -1342,14 +1678,15 @@ fn execution_into_outcome(
         fee,
         fee_payer,
         account_source_failures,
-        fatal_error: _,
+        fatal_error,
+        inspector_live,
     } = execution;
     let Ok(logs) = Rc::try_unwrap(log_collector).map(|collector| collector.into_inner().messages)
     else {
         unreachable!("Log collector should not be used after {method_name} returns")
     };
 
-    ExecutionOutcome {
+    DetachedTx {
         meta: TransactionMetadata {
             signature,
             logs,
@@ -1357,8 +1694,8 @@ fn execution_into_outcome(
             compute_units_consumed,
             return_data,
             fee,
-            diagnostics: if vm.cfg.compute_diagnostics {
-                hotpath_block!("hpsvm::execution_into_outcome::diagnostics", {
+            diagnostics: if vm.version.compute_diagnostics {
+                hotpath_block!("hpsvm::execution_into_detached::diagnostics", {
                     execution_diagnostics(
                         vm,
                         &post_accounts,
@@ -1380,14 +1717,14 @@ fn execution_into_outcome(
         post_accounts,
         status: tx_result,
         included,
-        origin_vm_instance_id: vm.instance_id,
-        origin_state_version: vm.state_version,
         fee_payer,
+        fatal_error,
+        inspector_live,
     }
 }
 
-fn execution_diagnostics(
-    vm: &HPSVM,
+fn execution_diagnostics<T: SvmTypesHost>(
+    vm: &Svm<'_, T>,
     post_accounts: &[(Address, AccountSharedData)],
     execution_trace: ExecutionTrace,
     account_source_failures: Vec<AccountSourceFailure>,
@@ -1451,7 +1788,7 @@ mod tests {
     #[test]
     pub(crate) fn sysvar_accounts_are_demoted_to_readonly() {
         let payer = Keypair::new();
-        let svm = HPSVM::new();
+        let svm = Hpsvm::new();
         let rent_key = solana_sdk_ids::sysvar::rent::id();
         let ix = Instruction {
             program_id: solana_sdk_ids::system_program::id(),
@@ -1468,7 +1805,7 @@ mod tests {
 
     #[test]
     pub(crate) fn with_transaction_origin_restores_previous_origin_after_panic() {
-        let mut svm = HPSVM::new();
+        let mut svm = Hpsvm::new();
 
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             svm.with_transaction_origin(TransactionOrigin::InternalAirdrop, |_| {
@@ -1482,19 +1819,13 @@ mod tests {
 
     #[test]
     pub(crate) fn set_feature_set_rolls_back_failed_reconfiguration() {
-        let mut svm = HPSVM::new();
+        let mut svm = Hpsvm::new();
         let payer = Keypair::new();
         let recipient = Address::new_unique();
-        let original_feature_set = svm.cfg.feature_set.clone();
+        let original_feature_set = Arc::clone(&svm.version.feature_set);
         let original_reserved_account_keys = svm.reserved_account_keys.clone();
 
         svm.airdrop(&payer.pubkey(), 10_000).unwrap();
-        let tx = Transaction::new(
-            &[&payer],
-            Message::new(&[transfer(&payer.pubkey(), &recipient, 64)], Some(&payer.pubkey())),
-            svm.latest_blockhash(),
-        );
-        let outcome = svm.transact(tx);
 
         let poisoned_program = Address::new_unique();
         let mut invalid_program = AccountSharedData::new(1, 0, &system_program::id());
@@ -1506,10 +1837,17 @@ mod tests {
             .expect_err("invalid cached program should abort feature-set reconfiguration");
 
         assert!(matches!(err, HPSVMError::Instruction(InstructionError::IncorrectProgramId)));
-        assert_eq!(svm.cfg.feature_set, original_feature_set);
+        assert_eq!(svm.version.feature_set, original_feature_set);
         assert_eq!(svm.reserved_account_keys.active, original_reserved_account_keys.active);
 
-        let result = svm.commit_transaction(outcome);
+        // The staged execution API borrows the VM, so the transact necessarily
+        // happens after the failed reconfiguration rolled accounts back.
+        let tx = Transaction::new(
+            &[&payer],
+            Message::new(&[transfer(&payer.pubkey(), &recipient, 64)], Some(&payer.pubkey())),
+            svm.latest_blockhash(),
+        );
+        let result = svm.transact(tx).expect("transact should stage").commit();
 
         assert!(result.is_ok());
         assert_eq!(svm.get_balance(&recipient), Some(64));

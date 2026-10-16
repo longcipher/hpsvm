@@ -1,0 +1,5 @@
+error: `program_id` is not valid base58: provided string contained invalid character '-' at byte 3
+ --> tests/ui/bad_program_id.rs:9:32
+  |
+9 | #[svm_instruction(program_id = "not-a-valid-program-id!!", compute_units = 150)]
+  |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^

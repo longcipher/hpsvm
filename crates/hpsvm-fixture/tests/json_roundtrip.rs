@@ -43,7 +43,7 @@ fn json_fixture_roundtrip_preserves_transaction_fixture() {
         Message::new(&[transfer(&payer.pubkey(), &recipient, 64)], Some(&payer.pubkey())),
         svm.latest_blockhash(),
     ));
-    let baseline = ExecutionSnapshot::from_outcome(&svm.transact(tx.clone()));
+    let baseline = ExecutionSnapshot::from_outcome(&svm.transact_detached(tx.clone()));
 
     let fixture = CaptureBuilder::new("system-transfer")
         .runtime(RuntimeFixtureConfig::new(svm.block_env().slot, None, true, false))

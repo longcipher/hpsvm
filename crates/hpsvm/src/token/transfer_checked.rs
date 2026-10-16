@@ -7,7 +7,7 @@ use super::{
     TOKEN_ID, get_multisig_signers, get_spl_account,
     spl_token::{instruction::transfer_checked, state::Mint},
 };
-use crate::{HPSVM, types::FailedTransactionMetadata};
+use crate::{Svm, SvmTypesHost, types::FailedTransactionMetadata};
 
 /// ### Description
 /// Builder for the [`transfer_checked`] instruction.
@@ -18,8 +18,8 @@ use crate::{HPSVM, types::FailedTransactionMetadata};
 /// - `decimals`: `mint` decimals by default.
 /// - `token_program_id`: [`TOKEN_ID`] by default.
 #[derive(Debug)]
-pub struct TransferChecked<'a> {
-    svm: &'a mut HPSVM,
+pub struct TransferChecked<'a, 's, T: SvmTypesHost> {
+    svm: &'a mut Svm<'s, T>,
     payer: &'a Keypair,
     mint: &'a Address,
     source: Option<&'a Address>,
@@ -31,10 +31,10 @@ pub struct TransferChecked<'a> {
     owner: Option<Address>,
 }
 
-impl<'a> TransferChecked<'a> {
+impl<'a, 's, T: SvmTypesHost> TransferChecked<'a, 's, T> {
     /// Creates a new instance of [`transfer_checked`] instruction.
     pub fn new(
-        svm: &'a mut HPSVM,
+        svm: &'a mut Svm<'s, T>,
         payer: &'a Keypair,
         mint: &'a Address,
         destination: &'a Address,

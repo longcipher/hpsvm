@@ -12,7 +12,7 @@ use super::{
     TOKEN_ID,
     spl_token::{instruction::initialize_mint2, state::Mint},
 };
-use crate::{HPSVM, types::FailedTransactionMetadata};
+use crate::{Svm, SvmTypesHost, types::FailedTransactionMetadata};
 
 /// ### Description
 /// Builder for the [`initialize_mint2`] instruction.
@@ -23,8 +23,8 @@ use crate::{HPSVM, types::FailedTransactionMetadata};
 /// - `decimals`: 8 by default.
 /// - `token_program_id`: [`TOKEN_ID`] by default.
 #[derive(Debug)]
-pub struct CreateMint<'a> {
-    svm: &'a mut HPSVM,
+pub struct CreateMint<'a, 's, T: SvmTypesHost> {
+    svm: &'a mut Svm<'s, T>,
     payer: &'a Keypair,
     authority: Option<&'a Address>,
     freeze_authority: Option<&'a Address>,
@@ -32,9 +32,9 @@ pub struct CreateMint<'a> {
     token_program_id: Option<&'a Address>,
 }
 
-impl<'a> CreateMint<'a> {
+impl<'a, 's, T: SvmTypesHost> CreateMint<'a, 's, T> {
     /// Creates a new instance of the [`initialize_mint2`] instruction.
-    pub fn new(svm: &'a mut HPSVM, payer: &'a Keypair) -> Self {
+    pub fn new(svm: &'a mut Svm<'s, T>, payer: &'a Keypair) -> Self {
         CreateMint {
             svm,
             payer,

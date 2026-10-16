@@ -1,0 +1,19 @@
+[package]
+name = "hpsvm-macros"
+description = "Proc macros for hpsvm builtin instruction and transaction handlers"
+license.workspace = true
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+bs58.workspace = true
+proc-macro2.workspace = true
+quote.workspace = true
+syn = { workspace = true, features = ["full"] }
+
+[lints]
+workspace = true

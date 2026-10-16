@@ -1,0 +1,7 @@
+error: `#[svm_instruction]` handlers take exactly one argument; expected `fn name(ctx: &mut SvmInstructionCtx) -> Result<(), InstructionError>`
+ --> tests/ui/bad_signature.rs:9:1
+  |
+9 | #[svm_instruction(program_id = "84LtecYhx229KabnaiMixiuD5Tey4bBo6N4yzZ81Vzpz", compute_units = 150)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `svm_instruction` (in Nightly builds, run with -Z macro-backtrace for more info)

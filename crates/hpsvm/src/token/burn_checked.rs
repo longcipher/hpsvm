@@ -7,7 +7,7 @@ use super::{
     TOKEN_ID, get_multisig_signers, get_spl_account,
     spl_token::{instruction::burn_checked, state::Mint},
 };
-use crate::{HPSVM, types::FailedTransactionMetadata};
+use crate::{Svm, SvmTypesHost, types::FailedTransactionMetadata};
 
 /// ### Description
 /// Builder for the [`burn_checked`] instruction.
@@ -17,8 +17,8 @@ use crate::{HPSVM, types::FailedTransactionMetadata};
 /// - `decimals`: `mint` decimals by default.
 /// - `token_program_id`: [`TOKEN_ID`] by default.
 #[derive(Debug)]
-pub struct BurnChecked<'a> {
-    svm: &'a mut HPSVM,
+pub struct BurnChecked<'a, 's, T: SvmTypesHost> {
+    svm: &'a mut Svm<'s, T>,
     payer: &'a Keypair,
     mint: &'a Address,
     account: &'a Address,
@@ -29,10 +29,10 @@ pub struct BurnChecked<'a> {
     owner: Option<Address>,
 }
 
-impl<'a> BurnChecked<'a> {
+impl<'a, 's, T: SvmTypesHost> BurnChecked<'a, 's, T> {
     /// Creates a new instance of [`burn_checked`] instruction.
     pub fn new(
-        svm: &'a mut HPSVM,
+        svm: &'a mut Svm<'s, T>,
         payer: &'a Keypair,
         mint: &'a Address,
         account: &'a Address,

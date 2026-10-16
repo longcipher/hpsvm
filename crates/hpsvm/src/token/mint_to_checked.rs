@@ -7,7 +7,7 @@ use super::{
     TOKEN_ID, get_multisig_signers, get_spl_account,
     spl_token::{instruction::mint_to_checked, state::Mint},
 };
-use crate::{HPSVM, types::FailedTransactionMetadata};
+use crate::{Svm, SvmTypesHost, types::FailedTransactionMetadata};
 
 /// ### Description
 /// Builder for the [`mint_to_checked`] instruction.
@@ -17,8 +17,8 @@ use crate::{HPSVM, types::FailedTransactionMetadata};
 /// - `decimals`: `mint` decimals by default.
 /// - `token_program_id`: [`TOKEN_ID`] by default.
 #[derive(Debug)]
-pub struct MintToChecked<'a> {
-    svm: &'a mut HPSVM,
+pub struct MintToChecked<'a, 's, T: SvmTypesHost> {
+    svm: &'a mut Svm<'s, T>,
     payer: &'a Keypair,
     mint: &'a Address,
     destination: &'a Address,
@@ -29,10 +29,10 @@ pub struct MintToChecked<'a> {
     owner: Option<Address>,
 }
 
-impl<'a> MintToChecked<'a> {
+impl<'a, 's, T: SvmTypesHost> MintToChecked<'a, 's, T> {
     /// Creates a new instance of [`mint_to_checked`] instruction.
     pub fn new(
-        svm: &'a mut HPSVM,
+        svm: &'a mut Svm<'s, T>,
         payer: &'a Keypair,
         mint: &'a Address,
         destination: &'a Address,

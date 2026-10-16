@@ -8,7 +8,7 @@ use super::{
     TOKEN_ID,
     spl_token::state::{Account as TokenAccount, AccountState, Mint},
 };
-use crate::HPSVM;
+use crate::{Svm, SvmTypesHost};
 
 /// Create a system-owned account snapshot.
 #[must_use]
@@ -123,9 +123,9 @@ pub fn keyed_associated_token_account_with_program(
     (address, token_account_with_program(token, token_program_id))
 }
 
-/// Insert a keyed account snapshot into an HPSVM instance.
-pub fn set_keyed_account(
-    svm: &mut HPSVM,
+/// Insert a keyed account snapshot into a VM instance.
+pub fn set_keyed_account<T: SvmTypesHost>(
+    svm: &mut Svm<'_, T>,
     (address, account): (Address, Account),
 ) -> Result<(), crate::error::HPSVMError> {
     svm.set_account(address, account)
@@ -138,6 +138,7 @@ mod tests {
     use solana_program_pack::IsInitialized;
 
     use super::*;
+    use crate::{BaseSvmTypes, Svm};
 
     fn sample_mint() -> Mint {
         Mint {
@@ -297,7 +298,7 @@ mod tests {
 
     #[test]
     fn set_keyed_account_installs_the_snapshot_in_the_vm() {
-        let mut svm = HPSVM::new();
+        let mut svm = Svm::<BaseSvmTypes>::new();
         let address = Address::new_unique();
         let (key, expected) = keyed_mint_account(address, sample_mint());
 
@@ -308,7 +309,7 @@ mod tests {
 
     #[test]
     fn set_keyed_account_overwrites_a_previous_snapshot() {
-        let mut svm = HPSVM::new();
+        let mut svm = Svm::<BaseSvmTypes>::new();
         let address = Address::new_unique();
 
         set_keyed_account(&mut svm, keyed_system_account(address, 100)).unwrap();

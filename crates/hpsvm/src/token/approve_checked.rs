@@ -7,7 +7,7 @@ use super::{
     TOKEN_ID, get_multisig_signers, get_spl_account,
     spl_token::{instruction::approve_checked, state::Mint},
 };
-use crate::{HPSVM, types::FailedTransactionMetadata};
+use crate::{Svm, SvmTypesHost, types::FailedTransactionMetadata};
 
 /// ### Description
 /// Builder for the [`approve_checked`] instruction.
@@ -17,8 +17,8 @@ use crate::{HPSVM, types::FailedTransactionMetadata};
 /// - `owner`: `payer` by default.
 /// - `token_program_id`: [`TOKEN_ID`] by default.
 #[derive(Debug)]
-pub struct ApproveChecked<'a> {
-    svm: &'a mut HPSVM,
+pub struct ApproveChecked<'a, 's, T: SvmTypesHost> {
+    svm: &'a mut Svm<'s, T>,
     payer: &'a Keypair,
     delegate: &'a Address,
     mint: &'a Address,
@@ -30,10 +30,10 @@ pub struct ApproveChecked<'a> {
     decimals: Option<u8>,
 }
 
-impl<'a> ApproveChecked<'a> {
+impl<'a, 's, T: SvmTypesHost> ApproveChecked<'a, 's, T> {
     /// Creates a new instance of [`approve_checked`] instruction.
     pub fn new(
-        svm: &'a mut HPSVM,
+        svm: &'a mut Svm<'s, T>,
         payer: &'a Keypair,
         delegate: &'a Address,
         mint: &'a Address,

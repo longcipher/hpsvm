@@ -1,15 +1,15 @@
-//! ## 📍 Overview
+//! Fast, lightweight, in-process Solana VM for testing programs.
 //!
-//! `hpsvm` is a fast and lightweight library for testing Solana programs.
-//! It works by creating an in-process Solana VM optimized for program developers.
-//! This makes it much faster to run and compile than alternatives like `solana-program-test` and
-//! `solana-test-validator`. In a further break from tradition, it has an ergonomic API with sane
-//! defaults and extensive configurability for those who want it.
+//! `hpsvm` executes Solana transactions in-process against a single mutable
+//! environment: fund accounts, stage transactions, then keep or roll back
+//! their post-state. [`Hpsvm`] is the ready-made instantiation (the base type
+//! family); [`Svm`] is the generic host behind it, parameterized by a
+//! [`SvmTypesHost`] family.
 //!
-//! ### 🤖 Minimal Example
+//! # Minimal example
 //!
 //! ```rust
-//! use hpsvm::HPSVM;
+//! use hpsvm::Hpsvm;
 //! use solana_address::Address;
 //! use solana_keypair::Keypair;
 //! use solana_message::Message;
@@ -21,7 +21,7 @@
 //! let from = from_keypair.pubkey();
 //! let to = Address::new_unique();
 //!
-//! let mut svm = HPSVM::new();
+//! let mut svm = Hpsvm::new();
 //! svm.airdrop(&from, 1_000_000_000).unwrap();
 //! svm.airdrop(&to, 1_000_000_000).unwrap();
 //!
@@ -31,30 +31,109 @@
 //!     Message::new(&[instruction], Some(&from)),
 //!     svm.latest_blockhash(),
 //! );
-//! let tx_res = svm.send_transaction(tx).unwrap();
+//! svm.transact(tx).expect("transact should stage").commit().unwrap();
 //!
-//! let from_account = svm.get_account(&from);
-//! let to_account = svm.get_account(&to);
-//! assert_eq!(from_account.unwrap().lamports, 999994936);
-//! assert_eq!(to_account.unwrap().lamports, 1000000064);
+//! assert_eq!(svm.get_balance(&from).unwrap(), 999_994_936);
+//! assert_eq!(svm.get_balance(&to).unwrap(), 1_000_000_064);
+//!
+//! // A second transfer can be staged and then rolled back.
+//! let retry = transfer(&from, &to, 100);
+//! let tx2 = Transaction::new(
+//!     &[&from_keypair],
+//!     Message::new(&[retry], Some(&from)),
+//!     svm.latest_blockhash(),
+//! );
+//! svm.transact(tx2).expect("transact should stage").discard().unwrap();
+//! assert_eq!(svm.get_balance(&from).unwrap(), 999_994_936);
+//! assert_eq!(svm.get_balance(&to).unwrap(), 1_000_000_064);
 //! ```
 //!
-//! ## Deploying Programs
+//! # Architecture
 //!
-//! Most of the time we want to do more than just mess around with token transfers -
-//! we want to test our own programs.
+//! ## Type family
 //!
-//! Tip**: if you want to pull a Solana program from mainnet or devnet, use the `solana program
-//! dump` command from the Solana CLI.
+//! [`Svm`] is generic over a [`SvmTypesHost`] family selecting the spec id,
+//! transaction envelope, host, and extension slots. [`BaseSvmTypes`] is the
+//! stock family and [`Hpsvm`] names `Svm<'static, BaseSvmTypes>`. A custom
+//! family implements [`SvmTypesHost`] (plus [`SvmTypes`] for the defaulted
+//! slots) and runs anywhere the base family does.
 //!
-//! To add a compiled program to our tests we can use
-//! [`.add_program_from_file`](HPSVM::add_program_from_file).
+//! ## Execution protocol
 //!
-//! Here's an example using a [simple program](https://github.com/solana-labs/solana-program-library/tree/bd216c8103cd8eb9f5f32e742973e7afb52f3b81/examples/rust/logging)
-//! from the Solana Program Library that just does some logging:
+//! [`Version`] is the execution-shaping protocol configuration: feature set,
+//! signature verification, blockhash checks, compute budget, rent, limits, and
+//! the [`ClusterSpecId`] profile. Inspect it with [`Svm::version`]; change it
+//! with the `set_*` reconfigurers ([`Svm::set_feature_set`],
+//! [`Svm::set_sigverify`], [`Svm::set_compute_budget`]). [`Host`] is the
+//! execution-facing view of the VM that every handler receives.
+//!
+//! ## Staged execution
+//!
+//! [`Svm::transact`] executes and stages the post-state in the live overlay,
+//! returning an [`ExecutedTx`] that borrows the VM. [`ExecutedTx::commit`]
+//! keeps the staged state and records history, [`ExecutedTx::discard`] rolls
+//! it back, and [`ExecutedTx::commit_with`] streams each account change into
+//! a [`StateChangeSink`] first. [`Svm::try_transact`] and
+//! [`Svm::transact_detached`] return the owned readonly [`DetachedTx`]
+//! without staging; [`Svm::send_transaction`] is `transact` plus `commit` in
+//! one call.
+//!
+//! ## Transaction registry
+//!
+//! Every entry point dispatches through a [`TxRegistry`] keyed by [`TxTag`].
+//! [`Svm::register_tx_handler`] replaces the [`TxHandler`] for one tag, which
+//! is how tests and forks intercept execution; the [`handler`] helper builds
+//! a handler from a validate/execute pair.
+//!
+//! ## Precompiles
+//!
+//! A [`PrecompileProvider`] answers which program ids run as precompiles.
+//! [`PrecompileSet`] is the map-backed provider, [`NoPrecompiles`] disables
+//! dispatch, and [`Svm::set_precompile_provider`] swaps the active provider
+//! (plus [`Precompile`] for a single entry).
+//!
+//! ## Inspectors
+//!
+//! An [`Inspector`] observes execution through `&mut self` hooks. Install one
+//! with [`Svm::set_inspector`] (or [`Svm::with_inspector`]) and recover it
+//! with [`Svm::clear_inspector`]. [`OriginFiltered`] scopes hooks by
+//! [`TransactionOrigin`] via [`OriginFilter`]; [`InspectMode`] is the
+//! const-generic switch that compiles hook dispatch away when no inspector is
+//! live.
+//!
+//! ## Declaring instructions
+//!
+//! `hpsvm_macros::svm_instruction` declares a builtin instruction from a
+//! function, threaded through [`SvmInstructionCtx`] with declared
+//! [`SvmInstructionAccount`]s (see `examples/custom_svm.rs` below).
+//!
+//! ## Errors
+//!
+//! Setup and fatal staging failures surface as
+//! [`HPSVMError`]; per-transaction outcomes are
+//! `TransactionResult`s carrying
+//! [`TransactionMetadata`](crate::types::TransactionMetadata) or
+//! [`FailedTransactionMetadata`](crate::types::FailedTransactionMetadata),
+//! with [`ExecutionDiagnostics`](crate::types::ExecutionDiagnostics) for
+//! pre/post diffs. Handler failures use [`HandlerError`], registry misuse
+//! [`TxRegistryError`], validation [`TxValidationError`], and host violations
+//! [`HostError`].
+//!
+//! ## State model
+//!
+//! Staging journals overlay mutations behind an internal checkpoint (rolled
+//! back by `discard`); caches and history derive from the overlay. The
+//! checkpoint type and the account database are crate-internal; the public
+//! state views are [`AccountsView`] and [`StateChangeSet`].
+//!
+//! # Deploying programs
+//!
+//! Beyond transfers, add compiled programs with [`Hpsvm::add_program`] (or
+//! [`Hpsvm::add_program_from_file`]) and exercise them through staged or
+//! direct transactions. Pull released programs with `solana program dump`.
 //!
 //! ```rust
-//! use hpsvm::HPSVM;
+//! use hpsvm::Hpsvm;
 //! use solana_address::{Address, address};
 //! use solana_instruction::{Instruction, account_meta::AccountMeta};
 //! use solana_keypair::Keypair;
@@ -71,7 +150,7 @@
 //!         accounts: vec![account_meta],
 //!         data: vec![5, 10, 11, 12, 13, 14],
 //!     };
-//!     let mut svm = HPSVM::new();
+//!     let mut svm = Hpsvm::new();
 //!     let payer = Keypair::new();
 //!     // The `counter` test program is a separate SBF build; skip when absent.
 //!     let Some(bytes) = hpsvm_test_support::read_program(hpsvm_test_support::COUNTER) else {
@@ -92,16 +171,15 @@
 //! }
 //! ```
 //!
-//! ## Time travel
+//! # Time travel
 //!
-//! Many programs rely on the `Clock` sysvar: for example, a mint that doesn't become available
-//! until after a certain time. With `hpsvm` you can dynamically overwrite the `Clock` sysvar
-//! using [`svm.set_sysvar::<Clock>()`](HPSVM::set_sysvar).
-//! Here's an example using a program that panics if `clock.unix_timestamp` is greater than 100
-//! (which is on January 1st 1970):
+//! Programs reading the `Clock` sysvar can be tested across time with
+//! [`Hpsvm::set_sysvar`] / [`Hpsvm::get_sysvar`], or jumped across slots with
+//! [`Hpsvm::warp_to_slot`]. Here's an example using a program that panics if
+//! `clock.unix_timestamp` is greater than 100 (January 1st 1970):
 //!
 //! ```rust
-//! use hpsvm::HPSVM;
+//! use hpsvm::Hpsvm;
 //! use solana_address::Address;
 //! use solana_clock::Clock;
 //! use solana_instruction::Instruction;
@@ -112,7 +190,7 @@
 //!
 //! fn test_set_clock() {
 //!     let program_id = Address::new_unique();
-//!     let mut svm = HPSVM::new();
+//!     let mut svm = Hpsvm::new();
 //!     // The clock example is a separate SBF build; skip when absent.
 //!     let Some(bytes) = hpsvm_test_support::read_program(hpsvm_test_support::CLOCK_EXAMPLE)
 //!     else {
@@ -150,130 +228,43 @@
 //! }
 //! ```
 //!
-//! See also: [`warp_to_slot`](HPSVM::warp_to_slot), which lets you jump to a future slot.
+//! # Custom environments
 //!
-//! ## Writing arbitrary accounts
+//! `examples/custom_svm.rs` stands up a custom [`SvmTypesHost`] family end to
+//! end: custom spec id, block-environment extension, transaction handler,
+//! macro-declared instruction, and custom precompile, each asserted observable
+//! through `commit` / `commit_with` flows. Start there when extending the VM.
 //!
-//! HPSVM lets you write any account data you want, regardless of
-//! whether the account state would even be possible.
+//! # Migrating from the pre-refactor API
 //!
-//! Here's an example where we give an account a bunch of USDC,
-//! even though we don't have the USDC mint keypair. This is
-//! convenient for testing because it means we don't have to
-//! work with fake USDC in our tests:
+//! The refactor replaces the previous surface outright:
 //!
-//! ```rust
-//! use hpsvm::HPSVM;
-//! use solana_account::Account;
-//! use solana_address::{Address, address};
-//! use solana_program_option::COption;
-//! use solana_program_pack::Pack;
-//! use spl_associated_token_account_interface::address::get_associated_token_address;
-//! use spl_token_interface::{
-//!     ID as TOKEN_PROGRAM_ID,
-//!     state::{Account as TokenAccount, AccountState},
-//! };
-//!
-//! fn test_infinite_usdc_mint() {
-//!     let owner = Address::new_unique();
-//!     let usdc_mint = address!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
-//!     let ata = get_associated_token_address(&owner, &usdc_mint);
-//!     let usdc_to_own = 1_000_000_000_000;
-//!     let token_acc = TokenAccount {
-//!         mint: usdc_mint,
-//!         owner,
-//!         amount: usdc_to_own,
-//!         delegate: COption::None,
-//!         state: AccountState::Initialized,
-//!         is_native: COption::None,
-//!         delegated_amount: 0,
-//!         close_authority: COption::None,
-//!     };
-//!     let mut svm = HPSVM::new();
-//!     let mut token_acc_bytes = [0u8; TokenAccount::LEN];
-//!     TokenAccount::pack(token_acc, &mut token_acc_bytes).unwrap();
-//!     svm.set_account(
-//!         ata,
-//!         Account {
-//!             lamports: 1_000_000_000,
-//!             data: token_acc_bytes.to_vec(),
-//!             owner: TOKEN_PROGRAM_ID,
-//!             executable: false,
-//!             rent_epoch: 0,
-//!         },
-//!     )
-//!     .unwrap();
-//!     let raw_account = svm.get_account(&ata).unwrap();
-//!     assert_eq!(TokenAccount::unpack(&raw_account.data).unwrap().amount, usdc_to_own)
-//! }
-//! ```
-//!
-//! ## Copying Accounts from a live environment
-//!
-//! If you want to copy accounts from mainnet or devnet, you can use the `solana account` command in
-//! the Solana CLI to save account data to a file.
-//!
-//! ## Register tracing
-//!
-//! `hpsvm` can be instantiated with the capability to provide register tracing
-//! data from processed transactions. This functionality is gated behind the
-//! `register-tracing` feature flag, which in turn relies on the
-//! `invocation-inspect-callback` flag. To enable it, users can either
-//! construct `hpsvm` with the `HPSVM::new_debuggable` initializer - allowing
-//! register tracing to be configured directly - or simply set the `SBF_TRACE_DIR`
-//! environment variable, which `hpsvm` interprets as a signal to turn tracing on
-//! upon instantiation. The latter allows users to take advantage of the
-//! functionality without actually doing any changes to their code.
-//!
-//! A default post-instruction callback is provided for storing the
-//! register tracing data in files. It persists the register sets,
-//! the SBPF instructions, and a SHA-256 hash identifying the executable that
-//! was used to generate the tracing data. If the `SBF_TRACE_DISASSEMBLE`
-//! environment variable is set, a disassembled register trace will also be
-//! produced for each collected register trace. The motivation behind providing the
-//! SHA-256 identifier is that files may grow in number, and consumers need a
-//! deterministic way to evaluate which shared object should be used when
-//! analyzing the tracing data.
-//!
-//! Once enabled register tracing can't be changed afterwards because in nature
-//! it's baked into the program executables at load time. Yet a user may want a
-//! more fine-grained control over when register tracing data should be
-//! collected - for example, only for a specific instruction. Such control could
-//! be achieved by resetting the invocation callback to
-//! `EmptyInvocationInspectCallback` and later by restoring it to
-//! `DefaultRegisterTracingCallback`.
-//!
-//! ## Other features
-//!
-//! Other things you can do with `hpsvm` include:
-//!
-//! Changing the max compute units and other compute budget behaviour during construction with
-//! [`HPSVM::builder`](HPSVM::builder) or later via [`HPSVM::set_compute_budget`]. Disable
-//! transaction signature checking during construction with the builder or later via
-//! [`HPSVM::set_sigverify`]. Find previous transactions using
-//! [`.get_transaction`](`HPSVM::get_transaction`).
-//!
-//! ## When should I use `solana-test-validator`?
-//!
-//! While `hpsvm` is faster and more convenient, it is also less like a real RPC node.
-//! So `solana-test-validator` is still useful when you need to call RPC methods that HPSVM
-//! doesn't support, or when you want to test something that depends on real-life validator
-//! behaviour rather than just testing your program and client code.
-//!
-//! In general though it is recommended to use `hpsvm` wherever possible, as it will make your life
-//! much easier.
+//! - `HPSVM` is now [`Hpsvm`], the `Svm<'static, BaseSvmTypes>` alias; new code uses generic
+//!   [`Svm`] with a [`SvmTypesHost`] family.
+//! - `SvmCfg` / `RuntimeEnv` are now [`Version`] (see [`Svm::version`]).
+//! - `ExecutionOutcome` / `commit_transaction` are now [`ExecutedTx`]: [`Svm::transact`] stages,
+//!   [`ExecutedTx::commit`] keeps, [`ExecutedTx::discard`] rolls back, and
+//!   [`ExecutedTx::commit_with`] streams changes into a [`StateChangeSink`].
+//! - `Arc<dyn Inspector>` is now `Option<Box<..>>` plus [`Svm::set_inspector`] (recover with
+//!   [`Svm::clear_inspector`]); scope origins with [`OriginFiltered`].
+//! - The boolean precompile switch is now a [`PrecompileProvider`] (see
+//!   [`Svm::set_precompile_provider`]).
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
+// Task 5.2: `InspectMode` is threaded through execution as a const-generic
+// parameter. A fieldless enum as a const-param type needs minimal ADT const
+// params; the workspace already pins a nightly toolchain (rust-toolchain.toml).
+#![feature(min_adt_const_params)]
 
-use std::sync::{Arc, atomic::AtomicU64};
+use std::{marker::PhantomData, sync::Arc};
 
 use agave_reserved_account_keys::ReservedAccountKeys;
+use parking_lot::Mutex;
 use solana_program_runtime::invoke_context::BuiltinFunctionRegisterer;
 
 pub(crate) use crate::helpers::*;
 use crate::{
-    accounts_db::AccountsDb, history::TransactionHistory,
-    runtime_registry::RuntimeExtensionRegistry,
+    accounts_db::Accounts, history::TransactionHistory, runtime_registry::RuntimeExtensionRegistry,
 };
 macro_rules! hotpath_block {
     ($label:literal, $expr:expr) => {{
@@ -299,8 +290,10 @@ pub(crate) struct CustomSyscallRegistration {
 
 /// Transaction batch planning and parallel execution.
 pub mod batch;
-/// Error types for the HPSVM.
+/// Error types for the SVM.
 pub mod error;
+/// Staged (`ExecutedTx`) and detached (`DetachedTx`) transaction execution.
+pub mod executed;
 /// RPC-backed account source for forking live cluster state.
 #[cfg(feature = "fork")]
 pub mod fork;
@@ -309,6 +302,7 @@ pub mod instruction;
 /// Loader v3 helpers (set_upgrade_authority, deploy_upgradeable_program).
 #[cfg(feature = "loader")]
 pub mod loader;
+pub mod state_change_sink;
 /// SPL token operation helpers (transfer, mint, ATA, freeze, etc.).
 #[cfg(feature = "token")]
 pub mod token;
@@ -325,8 +319,10 @@ mod execution;
 mod format_logs;
 mod helpers;
 mod history;
+mod host;
 mod inspector;
 mod message_processor;
+mod precompile_registry;
 #[cfg(feature = "precompiles")]
 mod precompiles;
 mod programs;
@@ -334,8 +330,14 @@ mod programs;
 pub mod register_tracing;
 mod runtime_env;
 mod runtime_registry;
+mod state_change_set;
+mod svm_instruction;
+mod svm_types;
+mod tx_registry;
 mod utils;
-/// Core `HPSVM` construction, account/sysvar state, and transaction API.
+/// Execution-shaping protocol configuration.
+mod version;
+/// Core `Svm` construction, account/sysvar state, and transaction API.
 mod vm;
 
 /// Compiles and runs every ```rust``` block in the repository README as a
@@ -347,48 +349,107 @@ struct ReadmeExamples;
 pub use account_source::{AccountSource, AccountSourceError};
 pub use accounts_db::AccountsView;
 pub use builder::{FeatureConfigOpen, FeatureConfigSealed, HpsvmBuilder};
-pub use env::{BlockEnv, RuntimeEnv, SvmCfg};
-pub use inspector::{Inspector, TransactionOrigin};
+pub use env::{BlockEnv, TxEnv};
+pub use error::{
+    AnyError, DbError, DbResult, ExecutionError, HaltReason, HandlerError, HostError, LoadError,
+    TxError, TxValidationError,
+};
+pub use executed::{DetachedTx, ExecutedTx};
+pub use host::Host;
+pub use inspector::{InspectMode, Inspector, OriginFilter, OriginFiltered, TransactionOrigin};
+#[cfg(feature = "precompiles")]
+pub use precompile_registry::NativePrecompiles;
+pub use precompile_registry::{NoPrecompiles, Precompile, PrecompileProvider, PrecompileSet};
+pub use state_change_set::StateChangeSet;
+pub use state_change_sink::{AccountChange, AccountChangeRecord, StateChangeSink};
+pub use svm_instruction::{SvmInstructionAccount, SvmInstructionCtx};
+pub use svm_types::{BaseSvmTypes, SvmTypes, SvmTypesHost};
+pub use tx_registry::{
+    DefaultExecutionHandler, TxHandler, TxRegistry, TxRegistryError, TxTag, handler, tag_of,
+};
+pub use version::{
+    ClusterInfo, ClusterSpecId, FeatureGate, RuntimeLimits, TxFeatureFlags, Version,
+};
 
 // Re-export crate-internal items at the root so child modules can reference
 // them as `crate::X` (descendant modules can read root-private items, but the
 // names must resolve via the crate root).
-pub(crate) use crate::commit::{CommitDelta, apply_commit_delta, outcome_into_result_and_delta};
+pub(crate) use crate::commit::apply_commit_delta;
 pub(crate) use crate::error::HPSVMError;
 
-static NEXT_VM_INSTANCE_ID: AtomicU64 = AtomicU64::new(1);
-
-pub(crate) fn next_vm_instance_id() -> u64 {
-    NEXT_VM_INSTANCE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-}
-
-/// The core Solana Virtual Machine simulator.
+/// The core Solana Virtual Machine simulator, parameterized by its type family.
 ///
-/// HPSVM manages account state, program execution, and transaction processing
-/// in a deterministic, single-threaded environment.
-pub struct HPSVM {
-    accounts: AccountsDb,
+/// The single `T` parameter selects every swappable axis of the VM through
+/// [`SvmTypesHost`]: the spec identifier, the transaction envelope, the six
+/// extension slots and the host itself. Instantiate it with [`BaseSvmTypes`] to
+/// get the shape the rest of this workspace uses, or with a custom family to
+/// extend a slot without touching the core.
+///
+/// `'a` is the host lifetime. It is carried by the phantom marker below and
+/// bounds no real borrow, so a VM value has no lifetime obligations of its own.
+///
+/// Every inherent method is written once against [`SvmTypesHost`] and
+/// instantiated per family, so a fork that leaves a slot at `()` pays nothing
+/// for it.
+///
+/// # Compatibility alias
+///
+/// The all-caps spelling is an alias for the instantiation every pre-refactor caller used:
+/// `Svm<'static, BaseSvmTypes>`. It exists so the existing public-behaviour
+/// surface keeps compiling unchanged while call sites migrate.
+pub struct Svm<'a, T: SvmTypesHost> {
+    accounts: Accounts,
     airdrop_kp: [u8; 64],
     builtins_loaded: bool,
     default_programs_loaded: bool,
     spl_programs_loaded: bool,
-    cfg: SvmCfg,
+    version: Version,
     feature_accounts_loaded: bool,
-    inspector: Arc<dyn Inspector>,
+    /// The installed inspector, if any.
+    ///
+    /// Stored behind a lock as `Option<Box<..>>` (not `Arc`) so hooks can
+    /// take `&mut self`: each dispatcher takes the box out, runs the hook
+    /// with the lock released, and puts it back. A hook that re-enters
+    /// execution therefore observes no inspector instead of deadlocking.
+    inspector: Mutex<Option<Box<dyn Inspector<T> + 'a>>>,
     inspection_origin: TransactionOrigin,
     reserved_account_keys: ReservedAccountKeys,
     runtime_registry: RuntimeExtensionRegistry,
-    instance_id: u64,
-    state_version: u64,
-    block_env: BlockEnv,
+    /// Tag-to-handler map consulted by every transaction entry point.
+    ///
+    /// Starts from [`TxRegistry::with_defaults`](crate::TxRegistry::with_defaults),
+    /// so existing transaction kinds behave exactly as before the registry
+    /// existed. [`register_tx_handler`](Svm::register_tx_handler) replaces the
+    /// entry for a tag, which is how tests and forks intercept execution.
+    registry: TxRegistry<T, DetachedTx>,
+    block_env: BlockEnv<T::BlockEnvExt>,
     history: TransactionHistory,
-    runtime_env: RuntimeEnv,
     sysvars_loaded: bool,
+    /// Per-instance precompile dispatch: which program ids execute as
+    /// precompiles and what runs for each of them.
+    ///
+    /// Defaults to the agave-backed native set when the `precompiles`
+    /// feature is on and to [`NoPrecompiles`] otherwise. Replaced wholesale
+    /// by [`set_precompile_provider`](Svm::set_precompile_provider); clones
+    /// share the allocation. Providers are `'static` so batch worker VMs can
+    /// share them across Rayon threads.
+    precompiles: Arc<dyn PrecompileProvider<T>>,
+    /// Binds the host lifetime and the type family to the value without letting
+    /// either affect the VM's auto traits.
+    ///
+    /// A `fn() -> &'a T` pointer is `Send + Sync` whatever `T` is, so the VM's
+    /// existing `Send + Sync` behaviour does not depend on the auto traits of
+    /// the family it is instantiated with. Storing `T` or `&'a T` directly
+    /// would make the VM `Send`/`Sync` exactly when the family is, which would
+    /// silently change what a `Svm<'_, T>` can do inside a `rayon` batch stage.
+    /// It is covariant in both parameters, which keeps the compatibility alias
+    /// below interchangeable with the generic host.
+    _type_family: PhantomData<fn() -> &'a T>,
     /// The callback which can be used to inspect invoke_context
     /// and extract low-level information such as bpf traces, transaction
     /// context, detailed timings, etc.
     #[cfg(feature = "invocation-inspect-callback")]
-    invocation_inspect_callback: Arc<dyn InvocationInspectCallback>,
+    invocation_inspect_callback: Arc<dyn InvocationInspectCallback<T>>,
     /// Dictates whether or not register tracing was enabled.
     /// Provided as input to the invocation inspect callback for potential
     /// register trace consumption.
@@ -396,21 +457,35 @@ pub struct HPSVM {
     enable_register_tracing: bool,
 }
 
-impl std::fmt::Debug for HPSVM {
+/// The pre-refactor name for [`Svm<'static, BaseSvmTypes>`].
+///
+/// Every call site that predates the type family still names this alias, so the
+/// public-behaviour surface is unchanged by the rename. It is removed once the
+/// call sites have migrated to [`Svm`].
+pub type HPSVM = Svm<'static, BaseSvmTypes>;
+
+/// Ergonomic name for the base VM instantiation.
+///
+/// This names exactly the same type as the all-caps spelling: `Svm<'static,
+/// BaseSvmTypes>`. New code should prefer `Hpsvm`, while the all-caps spelling remains as the
+/// pre-refactor compatibility spelling.
+pub type Hpsvm = Svm<'static, BaseSvmTypes>;
+
+impl<T: SvmTypesHost> std::fmt::Debug for Svm<'_, T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut debug = f.debug_struct("HPSVM");
+        let mut debug = f.debug_struct("Svm");
         debug
             .field("accounts", &self.accounts)
             .field("builtins_loaded", &self.builtins_loaded)
             .field("default_programs_loaded", &self.default_programs_loaded)
             .field("spl_programs_loaded", &self.spl_programs_loaded)
-            .field("cfg", &self.cfg)
+            .field("version", &self.version)
             .field("feature_accounts_loaded", &self.feature_accounts_loaded)
             .field("inspection_origin", &self.inspection_origin)
             .field("runtime_registry", &self.runtime_registry)
-            .field("state_version", &self.state_version)
+            .field("registry", &self.registry)
             .field("block_env", &self.block_env)
-            .field("runtime_env", &self.runtime_env)
+            .field("precompile_ids", &self.precompiles.program_ids())
             .field("sysvars_loaded", &self.sysvars_loaded);
         #[cfg(feature = "invocation-inspect-callback")]
         debug.field("enable_register_tracing", &self.enable_register_tracing);
@@ -418,7 +493,7 @@ impl std::fmt::Debug for HPSVM {
     }
 }
 
-impl Clone for HPSVM {
+impl<T: SvmTypesHost> Clone for Svm<'_, T> {
     fn clone(&self) -> Self {
         Self {
             accounts: self.accounts.clone(),
@@ -426,18 +501,22 @@ impl Clone for HPSVM {
             builtins_loaded: self.builtins_loaded,
             default_programs_loaded: self.default_programs_loaded,
             spl_programs_loaded: self.spl_programs_loaded,
-            cfg: self.cfg.clone(),
+            version: self.version.clone(),
             feature_accounts_loaded: self.feature_accounts_loaded,
-            inspector: self.inspector.clone(),
+            // Clones never inherit the inspector: a clone is a scratch VM
+            // (simulations, batch workers), and inspector state belongs to
+            // the VM it was installed on. Install it on the clone explicitly
+            // when observation is wanted.
+            inspector: Mutex::new(None),
             inspection_origin: self.inspection_origin,
             reserved_account_keys: self.reserved_account_keys.clone(),
             runtime_registry: self.runtime_registry.clone(),
-            instance_id: next_vm_instance_id(),
-            state_version: self.state_version,
+            registry: self.registry.clone(),
             block_env: self.block_env,
             history: self.history.clone(),
-            runtime_env: self.runtime_env,
+            precompiles: Arc::clone(&self.precompiles),
             sysvars_loaded: self.sysvars_loaded,
+            _type_family: PhantomData,
             #[cfg(feature = "invocation-inspect-callback")]
             invocation_inspect_callback: self.invocation_inspect_callback.clone(),
             #[cfg(feature = "invocation-inspect-callback")]
@@ -446,7 +525,7 @@ impl Clone for HPSVM {
     }
 }
 
-impl Default for HPSVM {
+impl Default for Hpsvm {
     fn default() -> Self {
         Self::new()
     }
@@ -459,11 +538,16 @@ use solana_transaction::sanitized::SanitizedTransaction;
 #[cfg(feature = "invocation-inspect-callback")]
 use solana_transaction_context::IndexOfAccount;
 
+/// Low-level execution hook, parameterized by the VM's type family.
+///
+/// The type parameter follows [`Inspector`]: the callback receives the very host
+/// the VM is instantiated with, so a family with extension slots exposes them
+/// here instead of forcing a downcast.
 #[cfg(feature = "invocation-inspect-callback")]
-pub trait InvocationInspectCallback: Send + Sync {
+pub trait InvocationInspectCallback<T: SvmTypesHost>: Send + Sync {
     fn before_invocation(
         &self,
-        svm: &HPSVM,
+        svm: &Svm<'_, T>,
         tx: &SanitizedTransaction,
         program_indices: &[IndexOfAccount],
         invoke_context: &InvokeContext<'_, '_>,
@@ -471,7 +555,7 @@ pub trait InvocationInspectCallback: Send + Sync {
 
     fn after_invocation(
         &self,
-        svm: &HPSVM,
+        svm: &Svm<'_, T>,
         invoke_context: &InvokeContext<'_, '_>,
         enable_register_tracing: bool,
     );
@@ -482,10 +566,10 @@ pub trait InvocationInspectCallback: Send + Sync {
 pub struct EmptyInvocationInspectCallback;
 
 #[cfg(feature = "invocation-inspect-callback")]
-impl InvocationInspectCallback for EmptyInvocationInspectCallback {
+impl<T: SvmTypesHost> InvocationInspectCallback<T> for EmptyInvocationInspectCallback {
     fn before_invocation(
         &self,
-        _: &HPSVM,
+        _: &Svm<'_, T>,
         _: &SanitizedTransaction,
         _: &[IndexOfAccount],
         _: &InvokeContext<'_, '_>,
@@ -494,9 +578,39 @@ impl InvocationInspectCallback for EmptyInvocationInspectCallback {
 
     fn after_invocation(
         &self,
-        _: &HPSVM,
+        _: &Svm<'_, T>,
         _: &InvokeContext<'_, '_>,
         _enable_register_tracing: bool,
     ) {
+    }
+}
+
+#[cfg(test)]
+mod task_1_2_red_probe {
+    use super::*;
+
+    #[test]
+    fn hpsvm_alias_is_the_base_instantiation() {
+        const _: fn() = || {
+            let _: fn(Hpsvm) -> Svm<'static, BaseSvmTypes> = std::convert::identity;
+        };
+        fn takes_both<A, B>()
+        where
+            A: Into<B>,
+        {
+        }
+        takes_both::<Hpsvm, Svm<'static, BaseSvmTypes>>();
+    }
+
+    #[test]
+    fn base_svm_implements_the_host_boundary() {
+        fn uses_host<H: crate::host::Host<BaseSvmTypes>>(_: H) {}
+        fn assert_impl<T: SvmTypesHost>()
+        where
+            Svm<'static, T>: crate::host::Host<T>,
+        {
+        }
+        assert_impl::<BaseSvmTypes>();
+        let _ = uses_host::<Svm<'static, BaseSvmTypes>>;
     }
 }

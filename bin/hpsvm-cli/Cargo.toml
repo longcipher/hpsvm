@@ -9,6 +9,7 @@ repository.workspace = true
 [[bin]]
 name = "hpsvm"
 path = "src/main.rs"
+doc = false
 
 [features]
 default = []

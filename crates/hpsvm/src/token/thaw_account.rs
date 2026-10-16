@@ -4,7 +4,7 @@ use solana_keypair::Keypair;
 use solana_signer::{Signer, signers::Signers};
 
 use super::{TOKEN_ID, get_multisig_signers, spl_token::instruction::thaw_account};
-use crate::{HPSVM, types::FailedTransactionMetadata};
+use crate::{Svm, SvmTypesHost, types::FailedTransactionMetadata};
 
 /// ### Description
 /// Builder for the [`thaw_account`] instruction.
@@ -14,8 +14,8 @@ use crate::{HPSVM, types::FailedTransactionMetadata};
 /// - `authority`: `payer` by default.
 /// - `token_program_id`: [`TOKEN_ID`] by default.
 #[derive(Debug)]
-pub struct ThawAccount<'a> {
-    svm: &'a mut HPSVM,
+pub struct ThawAccount<'a, 's, T: SvmTypesHost> {
+    svm: &'a mut Svm<'s, T>,
     payer: &'a Keypair,
     mint: &'a Address,
     signers: SmallVec<[&'a Keypair; 1]>,
@@ -24,9 +24,9 @@ pub struct ThawAccount<'a> {
     token_program_id: Option<&'a Address>,
 }
 
-impl<'a> ThawAccount<'a> {
+impl<'a, 's, T: SvmTypesHost> ThawAccount<'a, 's, T> {
     /// Creates a new instance of [`thaw_account`] instruction.
-    pub fn new(svm: &'a mut HPSVM, payer: &'a Keypair, mint: &'a Address) -> Self {
+    pub fn new(svm: &'a mut Svm<'s, T>, payer: &'a Keypair, mint: &'a Address) -> Self {
         ThawAccount {
             svm,
             payer,

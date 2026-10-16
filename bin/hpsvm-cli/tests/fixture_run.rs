@@ -66,7 +66,7 @@ fn write_fixture_to_path(name: &str, blockhash_check: bool, path: PathBuf, forma
         Message::new(&[transfer(&payer.pubkey(), &recipient, 64)], Some(&payer.pubkey())),
         svm.latest_blockhash(),
     ));
-    let baseline = ExecutionSnapshot::from_outcome(&svm.transact(tx.clone()));
+    let baseline = ExecutionSnapshot::from_outcome(&svm.transact_detached(tx.clone()));
     let fixture = CaptureBuilder::new(name)
         .runtime(RuntimeFixtureConfig::new(svm.block_env().slot, None, true, blockhash_check))
         .pre_accounts(vec![

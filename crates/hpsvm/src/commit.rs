@@ -1,27 +1,33 @@
-//! Commit-delta logic for atomically applying execution outcomes to the VM state.
+//! Commit-delta logic for applying detached execution outcomes to the VM state.
 //!
-//! This module encapsulates the two-phase commit plumbing: constructing a
-//! [`CommitDelta`] from an execution outcome, verifying origin provenance
-//! (instance-id + state-version), and applying the delta to accounts and
-//! transaction history.
+//! This module encapsulates the delta plumbing: constructing a [`CommitDelta`]
+//! from a detached execution outcome and applying the delta to accounts and
+//! transaction history. Staged execution (`ExecutedTx`) applies the account
+//! half eagerly at `transact` time and records the history half at `commit`
+//! time; the parallel batch path still funnels worker outcomes through
+//! [`detached_into_result_and_delta`] + [`apply_commit_delta`].
 
 use solana_account::AccountSharedData;
 use solana_address::Address;
 use solana_signature::Signature;
-use solana_transaction_error::TransactionError;
 
 use crate::{
-    HPSVM,
+    StateChangeSet,
     accounts_db::AccountsDb,
     error::HPSVMError,
+    executed::DetachedTx,
     history::TransactionHistory,
-    types::{ExecutionOutcome, FailedTransactionMetadata, TransactionResult},
+    types::{FailedTransactionMetadata, TransactionResult},
 };
+
+/// Split result of a commit delta.
+type CommitDeltaParts = (Vec<(Address, AccountSharedData)>, Option<(Signature, TransactionResult)>);
 
 /// A self-contained set of mutations produced by a single transaction execution.
 ///
-/// Applying a `CommitDelta` to the VM state is the second half of the
-/// two-phase commit model (`transact` → `commit_transaction`).
+/// Staged execution (`transact` → `commit`/`discard`) and the parallel batch
+/// merge share this type: the batch path builds one per worker transaction and
+/// applies them in stage order.
 #[derive(Debug, Clone)]
 pub(crate) struct CommitDelta {
     post_accounts: Vec<(Address, AccountSharedData)>,
@@ -39,6 +45,14 @@ impl CommitDelta {
     pub(crate) const fn mutates_state(&self) -> bool {
         !self.post_accounts.is_empty() || self.history_entry.is_some()
     }
+
+    /// Splits the delta into its account writes and its history entry.
+    ///
+    /// The staged path syncs the accounts eagerly and keeps the entry for
+    /// commit time.
+    pub(crate) fn into_parts(self) -> CommitDeltaParts {
+        (self.post_accounts, self.history_entry)
+    }
 }
 
 /// Apply a commit delta to the VM's account store and transaction history.
@@ -49,16 +63,30 @@ impl CommitDelta {
 pub(crate) fn apply_commit_delta(
     accounts: &mut AccountsDb,
     history: &mut TransactionHistory,
-    delta: CommitDelta,
+    set: impl Into<StateChangeSet>,
 ) -> Result<(), HPSVMError> {
-    accounts.sync_accounts(delta.post_accounts)?;
-    if let Some((signature, entry)) = delta.history_entry {
+    let set = set.into();
+    accounts.sync_accounts(set.post_accounts)?;
+    if let Some((signature, entry)) = set.history_entry {
         history.add_new_transaction(signature, entry);
     }
     Ok(())
 }
 
-/// Decompose an [`ExecutionOutcome`] into its transaction result and the
+impl From<CommitDelta> for StateChangeSet {
+    fn from(delta: CommitDelta) -> Self {
+        let (post_accounts, history_entry) = delta.into_parts();
+        Self { post_accounts, history_entry }
+    }
+}
+
+impl From<StateChangeSet> for CommitDelta {
+    fn from(set: StateChangeSet) -> Self {
+        Self::new(set.post_accounts, set.history_entry)
+    }
+}
+
+/// Decompose a [`DetachedTx`] into its transaction result and the
 /// corresponding commit delta.
 ///
 /// When `history_enabled` is `false`, no transaction-history entry is built,
@@ -66,11 +94,11 @@ pub(crate) fn apply_commit_delta(
 /// cloned. This keeps the steady-state hot path (history disabled) free of the
 /// two `TransactionMetadata` clones the previous implementation performed per
 /// transaction.
-pub(crate) fn outcome_into_result_and_delta(
-    outcome: ExecutionOutcome,
+pub(crate) fn detached_into_result_and_delta(
+    detached: DetachedTx,
     history_enabled: bool,
 ) -> (TransactionResult, CommitDelta) {
-    let ExecutionOutcome { meta, post_accounts, status, included, .. } = outcome;
+    let DetachedTx { meta, post_accounts, status, included, .. } = detached;
     let signature = meta.signature;
     // Move `meta` into the result instead of cloning it.
     let result = match status {
@@ -87,40 +115,15 @@ pub(crate) fn outcome_into_result_and_delta(
     (result, delta)
 }
 
-/// Verify the origin provenance and commit the execution outcome to the VM.
-///
-/// The two-phase commit model requires that the execution outcome was produced
-/// by the same VM instance at the same state version. If either check fails,
-/// the outcome is rejected with [`TransactionError::ResanitizationNeeded`].
-pub(crate) fn commit_execution_outcome(
-    vm: &mut HPSVM,
-    outcome: ExecutionOutcome,
-) -> TransactionResult {
-    let origin_vm_instance_id = outcome.origin_vm_instance_id;
-    let origin_state_version = outcome.origin_state_version;
-
-    if origin_vm_instance_id != vm.instance_id || origin_state_version != vm.state_version {
-        return TransactionResult::Err(FailedTransactionMetadata {
-            err: TransactionError::ResanitizationNeeded,
-            meta: outcome.meta,
-        });
-    }
-
-    let history_enabled = vm.history.is_enabled();
-    let (result, delta) = crate::hotpath_block!(
-        "hpsvm::commit::outcome_into_result_and_delta",
-        outcome_into_result_and_delta(outcome, history_enabled)
-    );
-    let mutates_state = delta.mutates_state();
-
-    crate::hotpath_block!("hpsvm::commit::apply_commit_delta", {
-        apply_commit_delta(&mut vm.accounts, &mut vm.history, delta)
-            .expect("It shouldn't be possible to write invalid sysvars in send_transaction.");
-    });
-    if mutates_state {
-        vm.invalidate_execution_outcomes();
-    }
-    result
+/// Decompose a [`DetachedTx`] into its transaction result and the
+/// corresponding state change set.
+#[inline]
+pub(crate) fn detached_into_result_and_state_change_set(
+    detached: DetachedTx,
+    history_enabled: bool,
+) -> (TransactionResult, StateChangeSet) {
+    let (result, delta) = detached_into_result_and_delta(detached, history_enabled);
+    (result, StateChangeSet::from(delta))
 }
 
 #[cfg(test)]
@@ -129,24 +132,25 @@ mod tests {
     use solana_account::Account;
     use solana_address::Address;
     use solana_signature::Signature;
+    use solana_transaction_error::TransactionError;
 
     use super::*;
-    use crate::types::TransactionMetadata;
+    use crate::{Hpsvm, types::TransactionMetadata};
 
-    fn outcome_with(
+    fn detached_with(
         status: Result<(), TransactionError>,
         included: bool,
         post_accounts: Vec<(Address, AccountSharedData)>,
-    ) -> ExecutionOutcome {
+    ) -> DetachedTx {
         let signature = Signature::from([7; 64]);
-        ExecutionOutcome {
+        DetachedTx {
             meta: TransactionMetadata { signature, ..Default::default() },
             post_accounts,
             status,
             included,
-            origin_vm_instance_id: 1,
-            origin_state_version: 1,
             fee_payer: Some(Address::new_unique()),
+            fatal_error: None,
+            inspector_live: false,
         }
     }
 
@@ -179,13 +183,13 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // outcome_into_result_and_delta
+    // detached_into_result_and_delta
     // -----------------------------------------------------------------
 
     #[test]
-    fn a_successful_outcome_moves_the_metadata_into_the_result() {
-        let outcome = outcome_with(Ok(()), true, vec![(Address::new_unique(), account(1))]);
-        let (result, delta) = outcome_into_result_and_delta(outcome, false);
+    fn a_successful_detached_outcome_moves_the_metadata_into_the_result() {
+        let outcome = detached_with(Ok(()), true, vec![(Address::new_unique(), account(1))]);
+        let (result, delta) = detached_into_result_and_delta(outcome, false);
 
         assert!(result.is_ok());
         assert_eq!(delta.post_accounts.len(), 1);
@@ -195,13 +199,13 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_outcome_produces_failed_metadata() {
-        let outcome = outcome_with(
+    fn a_failed_detached_outcome_produces_failed_metadata() {
+        let outcome = detached_with(
             Err(TransactionError::AccountNotFound),
             true,
             vec![(Address::new_unique(), account(1))],
         );
-        let (result, delta) = outcome_into_result_and_delta(outcome, true);
+        let (result, delta) = detached_into_result_and_delta(outcome, true);
 
         match result {
             TransactionResult::Err(meta) => {
@@ -215,9 +219,9 @@ mod tests {
     /// An excluded outcome is not eligible for commit-time side effects, so its
     /// post accounts must be discarded rather than applied.
     #[test]
-    fn an_excluded_outcome_discards_its_post_accounts() {
-        let outcome = outcome_with(Ok(()), false, vec![(Address::new_unique(), account(1))]);
-        let (result, delta) = outcome_into_result_and_delta(outcome, true);
+    fn an_excluded_detached_outcome_discards_its_post_accounts() {
+        let outcome = detached_with(Ok(()), false, vec![(Address::new_unique(), account(1))]);
+        let (result, delta) = detached_into_result_and_delta(outcome, true);
 
         assert!(result.is_ok());
         assert!(delta.post_accounts.is_empty());
@@ -228,9 +232,9 @@ mod tests {
     /// With history enabled the result is cloned so both the caller and the
     /// history hold the same value.
     #[test]
-    fn an_included_outcome_with_history_enabled_records_an_entry() {
-        let outcome = outcome_with(Ok(()), true, Vec::new());
-        let (result, delta) = outcome_into_result_and_delta(outcome, true);
+    fn an_included_detached_outcome_with_history_enabled_records_an_entry() {
+        let outcome = detached_with(Ok(()), true, Vec::new());
+        let (result, delta) = detached_into_result_and_delta(outcome, true);
 
         let (signature, stored) = delta.history_entry.clone().expect("history entry must be built");
         assert_eq!(signature, Signature::from([7; 64]));
@@ -241,9 +245,9 @@ mod tests {
     /// With history disabled the metadata must move (not be cloned) into the
     /// result, and no entry may be built.
     #[test]
-    fn an_included_outcome_with_history_disabled_records_no_entry() {
-        let outcome = outcome_with(Ok(()), true, Vec::new());
-        let (result, delta) = outcome_into_result_and_delta(outcome, false);
+    fn an_included_detached_outcome_with_history_disabled_records_no_entry() {
+        let outcome = detached_with(Ok(()), true, Vec::new());
+        let (result, delta) = detached_into_result_and_delta(outcome, false);
 
         assert!(delta.history_entry.is_none());
         assert!(!delta.mutates_state());
@@ -260,8 +264,8 @@ mod tests {
             lamports in any::<u64>(),
         ) {
             let post_accounts = vec![(Address::new_unique(), account(lamports))];
-            let outcome = outcome_with(Ok(()), included, post_accounts);
-            let (_, delta) = outcome_into_result_and_delta(outcome, history_enabled);
+            let outcome = detached_with(Ok(()), included, post_accounts);
+            let (_, delta) = detached_into_result_and_delta(outcome, history_enabled);
 
             prop_assert_eq!(delta.post_accounts.is_empty(), !included);
             prop_assert_eq!(delta.history_entry.is_some(), included && history_enabled);
@@ -279,8 +283,8 @@ mod tests {
             fails in any::<bool>(),
         ) {
             let status = if fails { Err(TransactionError::AlreadyProcessed) } else { Ok(()) };
-            let outcome = outcome_with(status, included, Vec::new());
-            let (result, delta) = outcome_into_result_and_delta(outcome, history_enabled);
+            let outcome = detached_with(status, included, Vec::new());
+            let (result, delta) = detached_into_result_and_delta(outcome, history_enabled);
 
             match delta.history_entry {
                 Some((_, stored)) => prop_assert_eq!(stored, result),
@@ -295,7 +299,7 @@ mod tests {
 
     #[test]
     fn applying_a_delta_writes_post_accounts() {
-        let mut svm = HPSVM::new();
+        let mut svm = Hpsvm::new();
         let address = Address::new_unique();
 
         let delta = CommitDelta::new(
@@ -309,7 +313,7 @@ mod tests {
 
     #[test]
     fn applying_a_delta_records_the_history_entry() {
-        let mut svm = HPSVM::new();
+        let mut svm = Hpsvm::new();
         let signature = Signature::from([9; 64]);
 
         let delta = CommitDelta::new(
@@ -324,7 +328,7 @@ mod tests {
 
     #[test]
     fn applying_an_empty_delta_is_a_no_op() {
-        let mut svm = HPSVM::new();
+        let mut svm = Hpsvm::new();
         apply_commit_delta(&mut svm.accounts, &mut svm.history, CommitDelta::new(Vec::new(), None))
             .unwrap();
     }
@@ -332,7 +336,7 @@ mod tests {
     /// A disabled history must silently drop the entry rather than storing it.
     #[test]
     fn applying_a_delta_with_a_disabled_history_drops_the_entry() {
-        let mut svm = HPSVM::new();
+        let mut svm = Hpsvm::new();
         svm.set_transaction_history(0);
         let signature = Signature::from([9; 64]);
 
@@ -350,7 +354,7 @@ mod tests {
     /// rather than silently corrupting the sysvar.
     #[test]
     fn applying_a_sysvar_account_with_invalid_data_is_rejected() {
-        let mut svm = HPSVM::new();
+        let mut svm = Hpsvm::new();
         let sysvar = solana_sdk_ids::sysvar::clock::id();
 
         let broken = Account {
@@ -373,7 +377,7 @@ mod tests {
     /// A valid sysvar account must be accepted and take effect.
     #[test]
     fn applying_a_valid_sysvar_account_succeeds() {
-        let mut svm = HPSVM::new();
+        let mut svm = Hpsvm::new();
         let sysvar = solana_sdk_ids::sysvar::clock::id();
         // Round-trip the existing sysvar account so the payload is well formed.
         let existing =
@@ -394,7 +398,7 @@ mod tests {
     /// A non-sysvar account is written without any validation.
     #[test]
     fn applying_a_non_sysvar_account_is_never_validated() {
-        let mut svm = HPSVM::new();
+        let mut svm = Hpsvm::new();
         let address = Address::new_unique();
         let account = Account {
             lamports: 9,
@@ -416,5 +420,55 @@ mod tests {
 
     fn is_ok(result: &TransactionResult) -> bool {
         result.is_ok()
+    }
+
+    // Property: change sets produced from disjoint workers commute when merged
+    // in either order, because their address sets do not overlap.
+    proptest! {
+        #[test]
+        fn disjoint_state_change_sets_commute_when_merged(
+            g0 in any::<u8>(),
+            g1 in any::<u8>(),
+            g2 in any::<u8>(),
+            g3 in any::<u8>(),
+            l0 in any::<u64>(),
+            l1 in any::<u64>(),
+            l2 in any::<u64>(),
+            l3 in any::<u64>(),
+        ) {
+            use crate::accounts_db::AccountsDb;
+            use crate::history::TransactionHistory;
+
+            let addrs = [Address::new_unique(), Address::new_unique(), Address::new_unique(), Address::new_unique()];
+            let lamports = [l0, l1, l2, l3];
+            let groups = [g0, g1, g2, g3];
+            let mut a_accounts = Vec::new();
+            let mut b_accounts = Vec::new();
+            for i in 0..4 {
+                let owner = Address::new_unique();
+                let account = AccountSharedData::new(lamports[i], 0, &owner);
+                match groups[i] % 2 {
+                    0 => a_accounts.push((addrs[i], account)),
+                    _ => b_accounts.push((addrs[i], account)),
+                }
+            }
+
+            let set_a = StateChangeSet { post_accounts: a_accounts, history_entry: None };
+            let set_b = StateChangeSet { post_accounts: b_accounts, history_entry: None };
+
+            let mut db1 = AccountsDb::default();
+            let mut hist1 = TransactionHistory::new();
+            apply_commit_delta(&mut db1, &mut hist1, set_a.clone()).unwrap();
+            apply_commit_delta(&mut db1, &mut hist1, set_b.clone()).unwrap();
+
+            let mut db2 = AccountsDb::default();
+            let mut hist2 = TransactionHistory::new();
+            apply_commit_delta(&mut db2, &mut hist2, set_b).unwrap();
+            apply_commit_delta(&mut db2, &mut hist2, set_a).unwrap();
+
+            for addr in &addrs {
+                prop_assert_eq!(db1.get_account(addr), db2.get_account(addr));
+            }
+        }
     }
 }

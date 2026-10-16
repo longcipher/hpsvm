@@ -23,7 +23,7 @@ fn checks_can_assert_success_and_resulting_lamports() {
         svm.latest_blockhash(),
     );
 
-    let snapshot = ExecutionSnapshot::from_outcome(&svm.transact(tx));
+    let snapshot = ExecutionSnapshot::from_outcome(&svm.transact_detached(tx));
     let checks = vec![
         Check::Success,
         Check::ComputeUnits(snapshot.compute_units_consumed),
@@ -46,7 +46,7 @@ fn return_data_check_requires_return_data_to_exist() {
         svm.latest_blockhash(),
     );
 
-    let snapshot = ExecutionSnapshot::from_outcome(&svm.transact(tx));
+    let snapshot = ExecutionSnapshot::from_outcome(&svm.transact_detached(tx));
 
     assert!(snapshot.return_data.is_none());
     assert!(!snapshot.run_checks(
@@ -74,7 +74,8 @@ fn checks_use_rent_model_for_account_and_all_rent_exempt() {
         svm.latest_blockhash(),
     );
 
-    let non_exempt_snapshot = ExecutionSnapshot::from_outcome(&svm.transact(non_exempt_tx));
+    let non_exempt_snapshot =
+        ExecutionSnapshot::from_outcome(&svm.transact_detached(non_exempt_tx));
 
     assert!(
         !non_exempt_snapshot
@@ -96,7 +97,7 @@ fn checks_use_rent_model_for_account_and_all_rent_exempt() {
         svm.latest_blockhash(),
     );
 
-    let exempt_snapshot = ExecutionSnapshot::from_outcome(&svm.transact(exempt_tx));
+    let exempt_snapshot = ExecutionSnapshot::from_outcome(&svm.transact_detached(exempt_tx));
 
     assert!(exempt_snapshot.run_checks(
         &[

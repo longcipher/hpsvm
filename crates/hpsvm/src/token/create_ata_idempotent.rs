@@ -4,7 +4,7 @@ use solana_signer::Signer;
 use spl_associated_token_account_interface::instruction::create_associated_token_account_idempotent;
 
 use super::TOKEN_ID;
-use crate::{HPSVM, types::FailedTransactionMetadata};
+use crate::{Svm, SvmTypesHost, types::FailedTransactionMetadata};
 
 /// ### Description
 /// Builder for the [`create_associated_token_account_idempotent`] instruction.
@@ -13,17 +13,17 @@ use crate::{HPSVM, types::FailedTransactionMetadata};
 /// - `owner`: `payer` by default.
 /// - `token_program_id`: [`TOKEN_ID`] by default.
 #[derive(Debug)]
-pub struct CreateAssociatedTokenAccountIdempotent<'a> {
-    svm: &'a mut HPSVM,
+pub struct CreateAssociatedTokenAccountIdempotent<'a, 's, T: SvmTypesHost> {
+    svm: &'a mut Svm<'s, T>,
     payer: &'a Keypair,
     mint: &'a Address,
     token_program_id: Option<&'a Address>,
     owner: Option<Address>,
 }
 
-impl<'a> CreateAssociatedTokenAccountIdempotent<'a> {
+impl<'a, 's, T: SvmTypesHost> CreateAssociatedTokenAccountIdempotent<'a, 's, T> {
     /// Creates a new instance of [`create_associated_token_account_idempotent`] instruction.
-    pub fn new(svm: &'a mut HPSVM, payer: &'a Keypair, mint: &'a Address) -> Self {
+    pub fn new(svm: &'a mut Svm<'s, T>, payer: &'a Keypair, mint: &'a Address) -> Self {
         CreateAssociatedTokenAccountIdempotent {
             svm,
             payer,

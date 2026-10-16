@@ -1,10 +1,11 @@
+#![allow(deprecated)]
 use smallvec::{SmallVec, smallvec};
 use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signer::{Signer, signers::Signers};
 
 use super::{TOKEN_ID, get_multisig_signers, spl_token::instruction::transfer};
-use crate::{HPSVM, types::FailedTransactionMetadata};
+use crate::{Svm, SvmTypesHost, types::FailedTransactionMetadata};
 
 /// ### Description
 /// Builder for the [`transfer`] instruction.
@@ -14,8 +15,8 @@ use crate::{HPSVM, types::FailedTransactionMetadata};
 /// - `owner`: `payer` by default.
 /// - `token_program_id`: [`TOKEN_ID`] by default.
 #[derive(Debug)]
-pub struct Transfer<'a> {
-    svm: &'a mut HPSVM,
+pub struct Transfer<'a, 's, T: SvmTypesHost> {
+    svm: &'a mut Svm<'s, T>,
     payer: &'a Keypair,
     mint: &'a Address,
     source: Option<&'a Address>,
@@ -26,10 +27,10 @@ pub struct Transfer<'a> {
     owner: Option<Address>,
 }
 
-impl<'a> Transfer<'a> {
+impl<'a, 's, T: SvmTypesHost> Transfer<'a, 's, T> {
     /// Creates a new instance of [`transfer`] instruction.
     pub fn new(
-        svm: &'a mut HPSVM,
+        svm: &'a mut Svm<'s, T>,
         payer: &'a Keypair,
         mint: &'a Address,
         destination: &'a Address,

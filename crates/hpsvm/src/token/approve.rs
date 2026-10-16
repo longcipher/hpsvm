@@ -4,7 +4,7 @@ use solana_keypair::Keypair;
 use solana_signer::{Signer, signers::Signers};
 
 use super::{TOKEN_ID, get_multisig_signers, spl_token::instruction::approve};
-use crate::{HPSVM, types::FailedTransactionMetadata};
+use crate::{Svm, SvmTypesHost, types::FailedTransactionMetadata};
 
 /// ### Description
 /// Builder for the [`approve`] instruction.
@@ -14,8 +14,8 @@ use crate::{HPSVM, types::FailedTransactionMetadata};
 /// - `owner`: `payer` by default.
 /// - `token_program_id`: [`TOKEN_ID`] by default.
 #[derive(Debug)]
-pub struct Approve<'a> {
-    svm: &'a mut HPSVM,
+pub struct Approve<'a, 's, T: SvmTypesHost> {
+    svm: &'a mut Svm<'s, T>,
     payer: &'a Keypair,
     delegate: &'a Address,
     source: &'a Address,
@@ -25,10 +25,10 @@ pub struct Approve<'a> {
     token_program_id: Option<&'a Address>,
 }
 
-impl<'a> Approve<'a> {
+impl<'a, 's, T: SvmTypesHost> Approve<'a, 's, T> {
     /// Creates a new instance of [`approve`] instruction.
     pub fn new(
-        svm: &'a mut HPSVM,
+        svm: &'a mut Svm<'s, T>,
         payer: &'a Keypair,
         delegate: &'a Address,
         source: &'a Address,

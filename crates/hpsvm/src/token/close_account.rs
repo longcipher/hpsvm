@@ -4,7 +4,7 @@ use solana_keypair::Keypair;
 use solana_signer::{Signer, signers::Signers};
 
 use super::{TOKEN_ID, get_multisig_signers, spl_token::instruction::close_account};
-use crate::{HPSVM, types::FailedTransactionMetadata};
+use crate::{Svm, SvmTypesHost, types::FailedTransactionMetadata};
 
 /// ### Description
 /// Builder for the [`close_account`] instruction.
@@ -13,8 +13,8 @@ use crate::{HPSVM, types::FailedTransactionMetadata};
 /// - `owner`: `payer` by default.
 /// - `token_program_id`: [`TOKEN_ID`] by default.
 #[derive(Debug)]
-pub struct CloseAccount<'a> {
-    svm: &'a mut HPSVM,
+pub struct CloseAccount<'a, 's, T: SvmTypesHost> {
+    svm: &'a mut Svm<'s, T>,
     payer: &'a Keypair,
     account: &'a Address,
     destination: &'a Address,
@@ -23,10 +23,10 @@ pub struct CloseAccount<'a> {
     owner: Option<Address>,
 }
 
-impl<'a> CloseAccount<'a> {
+impl<'a, 's, T: SvmTypesHost> CloseAccount<'a, 's, T> {
     /// Creates a new instance of [`close_account`] instruction.
     pub fn new(
-        svm: &'a mut HPSVM,
+        svm: &'a mut Svm<'s, T>,
         payer: &'a Keypair,
         account: &'a Address,
         destination: &'a Address,

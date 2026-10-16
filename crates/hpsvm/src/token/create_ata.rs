@@ -4,7 +4,7 @@ use solana_signer::Signer;
 use spl_associated_token_account_interface::instruction::create_associated_token_account;
 
 use super::TOKEN_ID;
-use crate::{HPSVM, types::FailedTransactionMetadata};
+use crate::{Svm, SvmTypesHost, types::FailedTransactionMetadata};
 
 /// ### Description
 /// Builder for the [`create_associated_token_account`] instruction.
@@ -13,17 +13,17 @@ use crate::{HPSVM, types::FailedTransactionMetadata};
 /// - `owner`: `payer` by default.
 /// - `token_program_id`: [`TOKEN_ID`] by default.
 #[derive(Debug)]
-pub struct CreateAssociatedTokenAccount<'a> {
-    svm: &'a mut HPSVM,
+pub struct CreateAssociatedTokenAccount<'a, 's, T: SvmTypesHost> {
+    svm: &'a mut Svm<'s, T>,
     payer: &'a Keypair,
     mint: &'a Address,
     token_program_id: Option<&'a Address>,
     owner: Option<Address>,
 }
 
-impl<'a> CreateAssociatedTokenAccount<'a> {
+impl<'a, 's, T: SvmTypesHost> CreateAssociatedTokenAccount<'a, 's, T> {
     /// Creates a new instance of [`create_associated_token_account`] instruction.
-    pub fn new(svm: &'a mut HPSVM, payer: &'a Keypair, mint: &'a Address) -> Self {
+    pub fn new(svm: &'a mut Svm<'s, T>, payer: &'a Keypair, mint: &'a Address) -> Self {
         CreateAssociatedTokenAccount { svm, payer, owner: None, token_program_id: None, mint }
     }
 

@@ -58,7 +58,7 @@ fn a_failing_later_instruction_reports_its_own_index() {
         svm.latest_blockhash(),
     );
 
-    let outcome = svm.transact(tx);
+    let outcome = svm.transact_detached(tx);
 
     match outcome.status() {
         Err(TransactionError::InstructionError(index, _)) => {
@@ -86,7 +86,7 @@ fn a_failing_first_instruction_reports_index_zero() {
         svm.latest_blockhash(),
     );
 
-    let outcome = svm.transact(tx);
+    let outcome = svm.transact_detached(tx);
 
     match outcome.status() {
         Err(TransactionError::InstructionError(index, _)) => assert_eq!(*index, 0),
@@ -116,7 +116,7 @@ fn an_undeployed_program_is_rejected_before_any_instruction_runs() {
         svm.latest_blockhash(),
     );
 
-    let outcome = svm.transact(tx);
+    let outcome = svm.transact_detached(tx);
 
     match outcome.status() {
         Err(TransactionError::InvalidProgramForExecution) => {}
@@ -147,12 +147,12 @@ fn a_failing_later_instruction_rolls_back_the_earlier_transfer() {
         svm.latest_blockhash(),
     );
 
-    let outcome = svm.transact(tx);
-    assert!(outcome.status().is_err());
+    let staged = svm.transact(tx).expect("a failing execution must still stage");
+    assert!(staged.result().is_err());
 
     // The first instruction succeeded in isolation, so the transaction as a whole
     // must not commit it.
-    let committed = svm.commit_transaction(outcome);
+    let committed = staged.commit();
     assert!(committed.is_err());
     assert_eq!(svm.get_balance(&recipient), None, "the earlier transfer must be rolled back");
 }
@@ -172,7 +172,7 @@ fn compute_units_accumulate_across_all_instructions() {
         Message::new(&[transfer(&payer.pubkey(), &a, 1)], Some(&payer.pubkey())),
         svm.latest_blockhash(),
     );
-    let single_units = svm.transact(single).meta().compute_units_consumed;
+    let single_units = svm.transact_detached(single).meta().compute_units_consumed;
 
     let triple = Transaction::new(
         &[&payer],
@@ -186,7 +186,7 @@ fn compute_units_accumulate_across_all_instructions() {
         ),
         svm.latest_blockhash(),
     );
-    let triple_units = svm.transact(triple).meta().compute_units_consumed;
+    let triple_units = svm.transact_detached(triple).meta().compute_units_consumed;
 
     assert!(
         triple_units > single_units,
@@ -222,7 +222,7 @@ fn compute_units_burned_before_a_failure_are_still_reported() {
         svm.latest_blockhash(),
     );
 
-    let outcome = svm.transact(tx);
+    let outcome = svm.transact_detached(tx);
 
     assert!(outcome.status().is_err());
     assert!(
@@ -239,7 +239,7 @@ fn compute_units_burned_before_a_failure_are_still_reported() {
         ),
         svm.latest_blockhash(),
     );
-    let rejected = svm.transact(undeployed);
+    let rejected = svm.transact_detached(undeployed);
     assert!(rejected.status().is_err());
     assert_eq!(
         rejected.meta().compute_units_consumed,
@@ -267,7 +267,7 @@ fn compute_budget_instructions_appear_in_the_execution_trace() {
         svm.latest_blockhash(),
     );
 
-    let outcome = svm.transact(tx);
+    let outcome = svm.transact_detached(tx);
     assert!(outcome.status().is_ok());
 
     // Every top-level instruction is recorded, including the compute budget
@@ -292,7 +292,7 @@ fn the_execution_trace_records_program_accounts_and_data() {
         svm.latest_blockhash(),
     );
 
-    let outcome = svm.transact(tx);
+    let outcome = svm.transact_detached(tx);
     let frame = &outcome.meta().diagnostics.execution_trace.instructions[0];
 
     assert_eq!(frame.stack_height, 1, "a top-level frame has stack height 1");
@@ -320,7 +320,7 @@ fn an_execution_trace_frame_converts_back_into_an_instruction() {
         svm.latest_blockhash(),
     );
 
-    let outcome = svm.transact(tx);
+    let outcome = svm.transact_detached(tx);
     let frame = &outcome.meta().diagnostics.execution_trace.instructions[0];
     let instruction = frame.instruction();
 
@@ -343,7 +343,7 @@ fn a_transaction_with_no_instructions_produces_an_empty_trace() {
         svm.latest_blockhash(),
     );
 
-    let outcome = svm.transact(tx);
+    let outcome = svm.transact_detached(tx);
 
     assert!(outcome.status().is_ok());
     assert!(outcome.meta().diagnostics.execution_trace.instructions.is_empty());
@@ -370,7 +370,7 @@ fn a_failing_program_contributes_a_trace_frame_with_its_error() {
         svm.latest_blockhash(),
     );
 
-    let outcome = svm.transact(tx);
+    let outcome = svm.transact_detached(tx);
 
     assert!(outcome.status().is_err());
     // The frame is recorded even though the program failed.
@@ -405,7 +405,7 @@ fn top_level_frames_all_have_stack_height_one() {
         svm.latest_blockhash(),
     );
 
-    let outcome = svm.transact(tx);
+    let outcome = svm.transact_detached(tx);
     let frames: &[ExecutedInstruction] = &outcome.meta().diagnostics.execution_trace.instructions;
 
     // Three frames, not two: the trace records every instruction the message
@@ -437,7 +437,7 @@ fn the_return_data_field_is_readable_even_without_return_data() {
         svm.latest_blockhash(),
     );
 
-    let outcome = svm.transact(tx);
+    let outcome = svm.transact_detached(tx);
 
     assert!(outcome.status().is_ok());
     // The system program returns no data, so the snapshot must be empty.

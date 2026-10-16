@@ -1,4 +1,7 @@
-use hpsvm::types::{ExecutionOutcome, FailedTransactionMetadata, SimulatedTransactionInfo};
+use hpsvm::{
+    DetachedTx,
+    types::{FailedTransactionMetadata, SimulatedTransactionInfo},
+};
 use solana_account::ReadableAccount;
 use solana_address::Address;
 use solana_message::inner_instruction::InnerInstructionsList;
@@ -100,7 +103,7 @@ impl ExecutionSnapshot {
         }
     }
 
-    pub fn from_outcome(outcome: &ExecutionOutcome) -> Self {
+    pub fn from_outcome(outcome: &DetachedTx) -> Self {
         Self {
             status: ExecutionStatus::from_result(outcome.status()),
             included: outcome.included(),

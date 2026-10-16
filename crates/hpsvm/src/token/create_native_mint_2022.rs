@@ -3,20 +3,20 @@ use solana_keypair::Keypair;
 use solana_signer::Signer;
 use spl_token_2022_interface::instruction::create_native_mint;
 
-use crate::{HPSVM, types::FailedTransactionMetadata};
+use crate::{Svm, SvmTypesHost, types::FailedTransactionMetadata};
 
 /// ### Description
 /// Builder for the [`create_native_mint`] instruction.
 #[derive(Debug)]
-pub struct CreateNativeMint<'a> {
-    svm: &'a mut HPSVM,
+pub struct CreateNativeMint<'a, 's, T: SvmTypesHost> {
+    svm: &'a mut Svm<'s, T>,
     payer: &'a Keypair,
     token_program_id: Option<&'a Address>,
 }
 
-impl<'a> CreateNativeMint<'a> {
+impl<'a, 's, T: SvmTypesHost> CreateNativeMint<'a, 's, T> {
     /// Creates a new instance of [`create_native_mint`] instruction.
-    pub fn new(svm: &'a mut HPSVM, payer: &'a Keypair) -> Self {
+    pub fn new(svm: &'a mut Svm<'s, T>, payer: &'a Keypair) -> Self {
         CreateNativeMint { svm, payer, token_program_id: None }
     }
 

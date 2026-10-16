@@ -66,6 +66,7 @@ impl TransactionHistory {
     }
 
     /// Returns whether the signature is present in history.
+    #[inline]
     pub(crate) fn check_transaction(&self, signature: &Signature) -> bool {
         if self.max_entries == 0 {
             return false;

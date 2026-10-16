@@ -27,7 +27,7 @@ fn snapshot_from_outcome_captures_post_accounts_and_metadata() {
         svm.latest_blockhash(),
     );
 
-    let outcome = svm.transact(tx);
+    let outcome = svm.transact_detached(tx);
     let snapshot = ExecutionSnapshot::from_outcome(&outcome);
 
     assert!(matches!(snapshot.status, ExecutionStatus::Success));

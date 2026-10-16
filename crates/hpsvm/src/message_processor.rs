@@ -5,11 +5,11 @@ use solana_svm_transaction::svm_message::SVMMessage;
 use solana_transaction_context::IndexOfAccount;
 use solana_transaction_error::TransactionError;
 
-use crate::HPSVM;
+use crate::{InspectMode, Svm, SvmTypesHost};
 
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
-pub(crate) fn process_message<'ix_data>(
-    svm: &HPSVM,
+pub(crate) fn process_message<'ix_data, const MODE: InspectMode, T: SvmTypesHost>(
+    svm: &Svm<'_, T>,
     message: &'ix_data impl SVMMessage,
     program_indices: &[IndexOfAccount],
     invoke_context: &mut InvokeContext<'_, 'ix_data>,
@@ -25,7 +25,7 @@ pub(crate) fn process_message<'ix_data>(
     for (top_level_instruction_index, ((program_id, _instruction), _program_account_index)) in
         message.program_instructions_iter().zip(program_indices.iter()).enumerate()
     {
-        svm.on_instruction(top_level_instruction_index, program_id);
+        svm.on_instruction_start::<MODE>(top_level_instruction_index, program_id);
 
         let mut compute_units_consumed = 0;
         let result = if invoke_context.is_precompile(program_id) {
@@ -46,6 +46,10 @@ pub(crate) fn process_message<'ix_data>(
             *accumulated_consumed_units =
                 accumulated_consumed_units.saturating_add(compute_units_consumed);
         });
+
+        // The end hook fires for failed instructions too, before the error
+        // propagates to the transaction result.
+        svm.on_instruction_end::<MODE>(top_level_instruction_index, program_id);
 
         result.map_err(|err| {
             TransactionError::InstructionError(top_level_instruction_index as u8, err)

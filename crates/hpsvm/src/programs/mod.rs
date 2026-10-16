@@ -1,10 +1,9 @@
-use agave_feature_set::replace_spl_token_with_p_token;
 use solana_address::{Address, address};
 use solana_sdk_ids::{
     address_lookup_table, bpf_loader, bpf_loader_deprecated, bpf_loader_upgradeable, config, stake,
 };
 
-use crate::HPSVM;
+use crate::{FeatureGate, Svm, SvmTypesHost, TxFeatureFlags};
 
 pub(crate) const DEFAULT_PROGRAM_IDS: [Address; 8] = [
     address!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
@@ -23,15 +22,18 @@ pub(crate) const SPL_PROGRAM_IDS: [Address; 3] = [
     address!("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"),
 ];
 
-pub(crate) fn load_default_programs(svm: &mut HPSVM) {
+pub(crate) fn load_default_programs<T: SvmTypesHost>(svm: &mut Svm<'_, T>) {
     load_spl_programs(svm);
     load_non_spl_default_programs(svm);
 }
 
-pub(crate) fn load_spl_programs(svm: &mut HPSVM) {
+pub(crate) fn load_spl_programs<T: SvmTypesHost>(svm: &mut Svm<'_, T>) {
+    // One flag load per program-load pass; loading runs at setup or feature
+    // reconfiguration time, never per transaction.
+    let flags = TxFeatureFlags::load(&svm.version.feature_set);
     // if replace spl-token with p-token feature is enabled, the SPL token contract is loaded from
     // a different .so
-    if svm.cfg.feature_set.is_active(&replace_spl_token_with_p_token::id()) {
+    if flags.is_enabled(FeatureGate::ReplaceSplTokenWithPToken) {
         svm.add_program_preverified(
             address!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
             include_bytes!("../../elf/pinocchio_token_program.so"),
@@ -61,7 +63,7 @@ pub(crate) fn load_spl_programs(svm: &mut HPSVM) {
     .expect("failed to load spl-associated-token-account 1.1.1");
 }
 
-fn load_non_spl_default_programs(svm: &mut HPSVM) {
+fn load_non_spl_default_programs<T: SvmTypesHost>(svm: &mut Svm<'_, T>) {
     svm.add_program_preverified(
         address!("Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo"),
         include_bytes!("../../elf/spl_memo-1.0.0.so"),

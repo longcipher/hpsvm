@@ -1,7 +1,7 @@
-//! Token operations for the HPSVM.
+//! Token operations for [`Svm`](crate::Svm).
 //!
 //! Provides SPL token helpers (transfer, mint, ATA, freeze, etc.) for tests
-//! built on [`crate::HPSVM`]. Enable via the `token` feature.
+//! built on [`crate::Hpsvm`]. Enable via the `token` feature.
 
 /// Account snapshot factories for fast fixture and test setup.
 pub mod accounts;
@@ -50,22 +50,24 @@ pub use self::{
     create_native_mint::*, freeze_account::*, mint_to::*, mint_to_checked::*, revoke::*,
     set_authority::*, sync_native::*, thaw_account::*, transfer::*, transfer_checked::*,
 };
-use crate::{HPSVM, types::FailedTransactionMetadata};
+#[cfg(test)]
+use crate::Hpsvm;
+use crate::{Svm, SvmTypesHost, types::FailedTransactionMetadata};
 
 /// SPL Token program ID
 pub const TOKEN_ID: Address = spl_token::ID;
 
 /// Get an SPL account from the SVM
-pub fn get_spl_account<T: Pack + IsInitialized>(
-    svm: &HPSVM,
+pub fn get_spl_account<A: Pack + IsInitialized, T: SvmTypesHost>(
+    svm: &Svm<'_, T>,
     account: &Address,
-) -> Result<T, TokenError> {
+) -> Result<A, TokenError> {
     let account = svm.get_account(account).ok_or(TokenError::AccountNotFound(*account))?;
     let data = account
         .data
-        .get(..T::LEN)
-        .ok_or(TokenError::AccountDataTooSmall { expected: T::LEN, actual: account.data.len() })?;
-    let account = T::unpack(data)?;
+        .get(..A::LEN)
+        .ok_or(TokenError::AccountDataTooSmall { expected: A::LEN, actual: account.data.len() })?;
+    let account = A::unpack(data)?;
 
     Ok(account)
 }
@@ -81,8 +83,8 @@ fn get_multisig_signers<'a>(
     }
 }
 
-pub(crate) fn sign_and_send(
-    svm: &mut HPSVM,
+pub(crate) fn sign_and_send<T: SvmTypesHost>(
+    svm: &mut Svm<'_, T>,
     payer: &Keypair,
     signers: &[&Keypair],
     ix: solana_instruction::Instruction,
@@ -152,10 +154,10 @@ mod tests {
 
     #[test]
     fn get_spl_account_reports_a_missing_account() {
-        let svm = HPSVM::new();
+        let svm = Hpsvm::new();
         let address = Address::new_unique();
 
-        match get_spl_account::<spl_token::state::Mint>(&svm, &address) {
+        match get_spl_account::<spl_token::state::Mint, _>(&svm, &address) {
             Err(TokenError::AccountNotFound(missing)) => assert_eq!(missing, address),
             other => panic!("expected TokenError::AccountNotFound, got {other:?}"),
         }
@@ -163,11 +165,11 @@ mod tests {
 
     #[test]
     fn get_spl_account_reports_short_account_data() {
-        let mut svm = HPSVM::new();
+        let mut svm = Hpsvm::new();
         let address = Address::new_unique();
         svm.set_account(address, system_account(1_000)).unwrap();
 
-        match get_spl_account::<spl_token::state::Mint>(&svm, &address) {
+        match get_spl_account::<spl_token::state::Mint, _>(&svm, &address) {
             Err(TokenError::AccountDataTooSmall { expected, actual }) => {
                 assert_eq!(expected, spl_token::state::Mint::LEN);
                 assert_eq!(actual, 0);
@@ -180,7 +182,7 @@ mod tests {
     /// bytes in a padded account must be ignored rather than rejected.
     #[test]
     fn get_spl_account_ignores_trailing_padding() {
-        let mut svm = HPSVM::new();
+        let mut svm = Hpsvm::new();
         let address = Address::new_unique();
         let mint_state = sample_mint();
 
@@ -197,14 +199,17 @@ mod tests {
         };
         svm.set_account(address, account).unwrap();
 
-        assert_eq!(get_spl_account::<spl_token::state::Mint>(&svm, &address).unwrap(), mint_state);
+        assert_eq!(
+            get_spl_account::<spl_token::state::Mint, _>(&svm, &address).unwrap(),
+            mint_state
+        );
     }
 
     /// Data that is long enough but not a valid mint must surface the unpack
     /// failure rather than being reported as missing or short.
     #[test]
     fn get_spl_account_surfaces_unpack_failures() {
-        let mut svm = HPSVM::new();
+        let mut svm = Hpsvm::new();
         let address = Address::new_unique();
         let account = solana_account::Account {
             lamports: 1,
@@ -216,7 +221,7 @@ mod tests {
         };
         svm.set_account(address, account).unwrap();
 
-        match get_spl_account::<spl_token::state::Mint>(&svm, &address) {
+        match get_spl_account::<spl_token::state::Mint, _>(&svm, &address) {
             Err(TokenError::UnpackError(_)) => {}
             other => panic!("expected TokenError::UnpackError, got {other:?}"),
         }
@@ -224,12 +229,12 @@ mod tests {
 
     #[test]
     fn get_spl_account_round_trips_a_mint_installed_by_the_factory() {
-        let mut svm = HPSVM::new();
+        let mut svm = Hpsvm::new();
         let address = Address::new_unique();
         let mint_state = sample_mint();
         set_keyed(&mut svm, keyed_mint_account(address, mint_state));
 
-        let unpacked = get_spl_account::<spl_token::state::Mint>(&svm, &address).unwrap();
+        let unpacked = get_spl_account::<spl_token::state::Mint, _>(&svm, &address).unwrap();
         assert_eq!(unpacked, mint_state);
         assert!(unpacked.is_initialized());
     }
@@ -238,7 +243,7 @@ mod tests {
     fn get_spl_account_round_trips_a_token_account_installed_by_the_factory() {
         use crate::token::accounts::keyed_token_account;
 
-        let mut svm = HPSVM::new();
+        let mut svm = Hpsvm::new();
         let address = Address::new_unique();
         let mint = Address::new_unique();
         let token = spl_token::state::Account {
@@ -250,17 +255,17 @@ mod tests {
         };
         set_keyed(&mut svm, keyed_token_account(address, token));
 
-        assert_eq!(get_spl_account::<spl_token::state::Account>(&svm, &address).unwrap(), token);
+        assert_eq!(get_spl_account::<spl_token::state::Account, _>(&svm, &address).unwrap(), token);
     }
 
     /// The not-found error must win over the too-small error when the account
     /// does not exist at all.
     #[test]
     fn get_spl_account_prefers_not_found_over_size_checks() {
-        let svm = HPSVM::new();
+        let svm = Hpsvm::new();
         let address = Address::new_unique();
         assert!(matches!(
-            get_spl_account::<spl_token::state::Account>(&svm, &address),
+            get_spl_account::<spl_token::state::Account, _>(&svm, &address),
             Err(TokenError::AccountNotFound(_))
         ));
     }
@@ -269,19 +274,22 @@ mod tests {
     /// only unpacks bytes and does not check ownership.
     #[test]
     fn get_spl_account_does_not_check_account_ownership() {
-        let mut svm = HPSVM::new();
+        let mut svm = Hpsvm::new();
         let address = Address::new_unique();
         let mint_state = sample_mint();
         let (key, account) = keyed_mint_account(address, mint_state);
         svm.set_account(key, solana_account::Account { owner: Address::new_unique(), ..account })
             .unwrap();
 
-        assert_eq!(get_spl_account::<spl_token::state::Mint>(&svm, &address).unwrap(), mint_state);
+        assert_eq!(
+            get_spl_account::<spl_token::state::Mint, _>(&svm, &address).unwrap(),
+            mint_state
+        );
     }
 
     #[test]
     fn get_spl_account_reports_a_missing_account_even_when_other_accounts_exist() {
-        let mut svm = HPSVM::new();
+        let mut svm = Hpsvm::new();
         let present = Address::new_unique();
         let absent = Address::new_unique();
         svm.set_account(
@@ -295,12 +303,12 @@ mod tests {
         .unwrap();
 
         assert!(matches!(
-            get_spl_account::<spl_token::state::Mint>(&svm, &absent),
+            get_spl_account::<spl_token::state::Mint, _>(&svm, &absent),
             Err(TokenError::AccountNotFound(missing)) if missing == absent
         ));
     }
 
-    fn set_keyed(svm: &mut HPSVM, keyed: (Address, solana_account::Account)) {
+    fn set_keyed(svm: &mut Hpsvm, keyed: (Address, solana_account::Account)) {
         let (address, account) = keyed;
         svm.set_account(address, account).unwrap();
     }
@@ -355,11 +363,11 @@ mod tests {
         fn get_spl_account_always_reports_short_data_for_system_accounts(
             lamports in 0u64..1_000_000_000,
         ) {
-            let mut svm = HPSVM::new();
+            let mut svm = Hpsvm::new();
             let address = Address::new_unique();
             set_keyed(&mut svm, keyed_system_account(address, lamports));
 
-            match get_spl_account::<spl_token::state::Mint>(&svm, &address) {
+            match get_spl_account::<spl_token::state::Mint, _>(&svm, &address) {
                 Err(TokenError::AccountDataTooSmall { expected, actual }) => {
                     prop_assert_eq!(expected, spl_token::state::Mint::LEN);
                     prop_assert_eq!(actual, 0);

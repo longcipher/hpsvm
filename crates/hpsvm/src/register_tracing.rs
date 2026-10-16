@@ -14,7 +14,7 @@ use solana_program_runtime::invoke_context::{Executable, InvokeContext, Register
 use solana_transaction::sanitized::SanitizedTransaction;
 use solana_transaction_context::{IndexOfAccount, instruction::InstructionContext};
 
-use crate::{HPSVM, InvocationInspectCallback};
+use crate::{InvocationInspectCallback, Svm, SvmTypesHost};
 
 const DEFAULT_PATH: &str = "target/sbf/trace";
 
@@ -168,9 +168,9 @@ impl DefaultRegisterTracingCallback {
         }
     }
 
-    pub fn handler(
+    pub fn handler<T: SvmTypesHost>(
         &self,
-        svm: &HPSVM,
+        svm: &Svm<'_, T>,
         instruction_context: InstructionContext<'_, '_>,
         executable: &Executable,
         register_trace: RegisterTrace<'_>,
@@ -244,10 +244,10 @@ impl DefaultRegisterTracingCallback {
     }
 }
 
-impl InvocationInspectCallback for DefaultRegisterTracingCallback {
+impl<T: SvmTypesHost> InvocationInspectCallback<T> for DefaultRegisterTracingCallback {
     fn before_invocation(
         &self,
-        _: &HPSVM,
+        _: &Svm<'_, T>,
         _: &SanitizedTransaction,
         _: &[IndexOfAccount],
         _: &InvokeContext<'_, '_>,
@@ -256,7 +256,7 @@ impl InvocationInspectCallback for DefaultRegisterTracingCallback {
 
     fn after_invocation(
         &self,
-        svm: &HPSVM,
+        svm: &Svm<'_, T>,
         invoke_context: &InvokeContext<'_, '_>,
         register_tracing_enabled: bool,
     ) {
@@ -277,10 +277,10 @@ impl InvocationInspectCallback for DefaultRegisterTracingCallback {
     }
 }
 
-impl InvocationInspectCallback for TraceMetricsCollector {
+impl<T: SvmTypesHost> InvocationInspectCallback<T> for TraceMetricsCollector {
     fn before_invocation(
         &self,
-        _: &HPSVM,
+        _: &Svm<'_, T>,
         _: &SanitizedTransaction,
         _: &[IndexOfAccount],
         _: &InvokeContext<'_, '_>,
@@ -289,7 +289,7 @@ impl InvocationInspectCallback for TraceMetricsCollector {
 
     fn after_invocation(
         &self,
-        _: &HPSVM,
+        _: &Svm<'_, T>,
         invoke_context: &InvokeContext<'_, '_>,
         register_tracing_enabled: bool,
     ) {

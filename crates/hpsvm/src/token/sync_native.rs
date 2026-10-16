@@ -2,7 +2,7 @@ use solana_address::Address;
 use solana_keypair::Keypair;
 
 use super::{TOKEN_ID, spl_token::instruction::sync_native};
-use crate::{HPSVM, types::FailedTransactionMetadata};
+use crate::{Svm, SvmTypesHost, types::FailedTransactionMetadata};
 
 /// ### Description
 /// Builder for the [`sync_native`] instruction.
@@ -10,16 +10,16 @@ use crate::{HPSVM, types::FailedTransactionMetadata};
 /// ### Optional fields
 /// - `token_program_id`: [`TOKEN_ID`] by default.
 #[derive(Debug)]
-pub struct SyncNative<'a> {
-    svm: &'a mut HPSVM,
+pub struct SyncNative<'a, 's, T: SvmTypesHost> {
+    svm: &'a mut Svm<'s, T>,
     payer: &'a Keypair,
     account: &'a Address,
     token_program_id: Option<&'a Address>,
 }
 
-impl<'a> SyncNative<'a> {
+impl<'a, 's, T: SvmTypesHost> SyncNative<'a, 's, T> {
     /// Creates a new instance of [`sync_native`] instruction.
-    pub fn new(svm: &'a mut HPSVM, payer: &'a Keypair, account: &'a Address) -> Self {
+    pub fn new(svm: &'a mut Svm<'s, T>, payer: &'a Keypair, account: &'a Address) -> Self {
         SyncNative { svm, payer, account, token_program_id: None }
     }
 

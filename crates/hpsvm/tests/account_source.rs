@@ -105,7 +105,7 @@ fn transaction_execution_preserves_account_source_failures() {
 
     assert!(matches!(err, HPSVMError::AccountSource { pubkey, .. } if pubkey == recipient));
 
-    let outcome = svm.transact(build_tx());
+    let outcome = svm.transact_detached(build_tx());
 
     assert_eq!(outcome.status(), &Err(TransactionError::AccountNotFound));
     assert_eq!(outcome.meta().diagnostics.account_source_failures.len(), 1);

@@ -4,6 +4,7 @@ use std::{cell::RefCell, sync::Arc};
 
 #[cfg(feature = "hashbrown")]
 use hashbrown::{HashMap, HashSet};
+use parking_lot::RwLock;
 use solana_account::{AccountSharedData, ReadableAccount, state_traits::StateMut};
 use solana_address::Address;
 use solana_address_lookup_table_interface::{error::AddressLookupError, state::AddressLookupTable};
@@ -37,7 +38,7 @@ use solana_transaction_error::AddressLoaderError;
 
 use crate::{
     account_source::{AccountSource, AccountSourceError, EmptyAccountSource},
-    error::{HPSVMError, InvalidSysvarDataError},
+    error::{DbError, DbResult, ExecutionError, HPSVMError, InvalidSysvarDataError},
 };
 
 const FEES_ID: Address = Address::from_str_const("SysvarFees111111111111111111111111111111111");
@@ -48,7 +49,7 @@ fn is_cached_program_account(pubkey: &Address, account: &AccountSharedData) -> b
     account.executable() && *pubkey != Address::default() && account.owner() != &native_loader::ID
 }
 
-const fn is_managed_sysvar_account(pubkey: &Address) -> bool {
+pub(crate) const fn is_managed_sysvar_account(pubkey: &Address) -> bool {
     matches!(
         *pubkey,
         CLOCK_ID |
@@ -114,19 +115,100 @@ fn validate_sysvar_account(
     Ok(())
 }
 
-pub(crate) struct AccountsDb {
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct CacheDb {
+    pub(crate) inner: HashMap<Address, AccountSharedData>,
+    pub(crate) removed: HashSet<Address>,
+}
+
+impl CacheDb {
+    /// Returns a borrowed account from the overlay (no source fall-through).
+    pub fn get_account_ref(&self, pubkey: &Address) -> Option<&AccountSharedData> {
+        self.inner.get(pubkey)
+    }
+
+    /// Returns `true` when `pubkey` was explicitly removed from the overlay.
+    pub fn is_removed(&self, pubkey: &Address) -> bool {
+        self.removed.contains(pubkey)
+    }
+}
+
+/// Shared handle to the committed program cache (Task 4.2 / REQ-02).
+///
+/// Cloning the handle is a cheap `Arc` pointer bump. The inner
+/// `ProgramCacheForTxBatch` is never deep-cloned on the transaction path;
+/// callers needing `&mut` access (the `InvokeContext` constructor, prep-time
+/// rebuilds) take the `RwLock` instead.
+pub(crate) type SharedProgramCache = Arc<RwLock<ProgramCacheForTxBatch>>;
+
+pub(crate) struct Accounts {
     source: Arc<dyn AccountSource>,
-    inner: HashMap<Address, AccountSharedData>,
-    removed: HashSet<Address>,
-    programs_cache: ProgramCacheForTxBatch,
+    cache: CacheDb,
+    /// Committed program cache, shared across VM clones and transactions.
+    ///
+    /// The `Arc` makes the handle cheap to clone (pointer bump, never a
+    /// `HashMap` deep clone); the `RwLock` supplies the `&mut
+    /// ProgramCacheForTxBatch` the `InvokeContext` API requires on the
+    /// transaction path. Prep paths (`add_account`, `rebuild_*`) take the
+    /// write lock briefly; the transaction path holds it for the whole
+    /// execution and drains transaction-scratch state afterwards, so workers
+    /// cloning this `Accounts` (batch stages, simulates) observe the same
+    /// committed entries without ever cloning the map.
+    programs_cache: SharedProgramCache,
     sysvar_cache: SysvarCache,
     environments: Arc<ProgramRuntimeEnvironments>,
+    /// Ordered undo log for account state (`inner` + `removed`).
+    ///
+    /// Each entry records the pre-mutation state of one address, so
+    /// [`AccountsDb::rollback`] can restore an earlier
+    /// [`StateCheckpoint`] byte-identically by replaying entries in reverse.
+    /// A cloned DB carries its journal; rolling back the clone does not
+    /// affect the original.
+    ///
+    /// Scope: account state only. Cache-only mutations (`programs_cache`,
+    /// `sysvar_cache`, `environments`) are NOT journaled; caches are derived
+    /// from `inner` and can be rebuilt via `rebuild_*_cache`.
+    journal: Vec<JournalEntry>,
 }
+
+/// One undo step for a single address's account state.
+///
+/// A single variant subsumes per-field sketches (`Lamports` / `Data` /
+/// `Wipe`): every `inner` / `removed` mutation is fully described by the
+/// previous overlay entry (`previous`) plus the previous tombstone
+/// (`was_removed`), so restoring both fields exactly undoes any add, update,
+/// or remove regardless of which account bytes changed.
+#[derive(Clone, Debug)]
+pub(crate) enum JournalEntry {
+    Account { address: Address, previous: Option<AccountSharedData>, was_removed: bool },
+}
+
+/// Opaque index into the journal marking a restorable point in time.
+///
+/// Produced by [`AccountsDb::checkpoint`]; consumed by
+/// [`AccountsDb::rollback`]. The index is positional: it equals the journal
+/// length at checkpoint time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct StateCheckpoint(usize);
 
 #[derive(Debug)]
 pub(crate) struct AccountSourceLoadFailure {
     pub(crate) pubkey: Address,
     pub(crate) source: AccountSourceError,
+}
+
+impl AccountSourceLoadFailure {
+    /// Maps the failure onto the layered taxonomy: the source error's fatal
+    /// classification (infrastructure down vs deterministic) is preserved in
+    /// the [`DbError`].
+    pub(crate) fn into_db_error(self) -> DbError {
+        DbError::from(self.source)
+    }
+
+    /// Maps the failure onto the execution layer as a database failure.
+    pub(crate) fn into_execution_error(self) -> ExecutionError {
+        ExecutionError::Database(self.into_db_error())
+    }
 }
 
 #[derive(Debug)]
@@ -142,12 +224,12 @@ impl From<AddressLookupError> for LookupTableLoadError {
 }
 
 pub(crate) struct AccountSourceTrackingAddressLoader<'a> {
-    accounts_db: &'a AccountsDb,
+    accounts_db: &'a Accounts,
     failure: RefCell<Option<AccountSourceLoadFailure>>,
 }
 
 impl<'a> AccountSourceTrackingAddressLoader<'a> {
-    pub(crate) const fn new(accounts_db: &'a AccountsDb) -> Self {
+    pub(crate) const fn new(accounts_db: &'a Accounts) -> Self {
         Self { accounts_db, failure: RefCell::new(None) }
     }
 
@@ -163,30 +245,33 @@ impl<'a> AccountSourceTrackingAddressLoader<'a> {
     }
 }
 
-impl Clone for AccountsDb {
+impl Clone for Accounts {
     fn clone(&self) -> Self {
         Self {
             source: self.source.clone(),
-            inner: self.inner.clone(),
-            removed: self.removed.clone(),
-            programs_cache: self.programs_cache.clone(),
+            cache: self.cache.clone(),
+            // Share, don't clone: the program cache is invariant data on the
+            // read path, so VM clones (batch workers, simulates, feature-set
+            // backups) bump the refcount instead of deep-cloning the map.
+            programs_cache: Arc::clone(&self.programs_cache),
             sysvar_cache: self.sysvar_cache.clone(),
             environments: self.environments.clone(),
+            journal: self.journal.clone(),
         }
     }
 }
 
-impl Default for AccountsDb {
+impl Default for Accounts {
     fn default() -> Self {
         use solana_program_runtime::solana_sbpf::program::BuiltinProgram;
         let env = ProgramRuntimeEnvironment::from(BuiltinProgram::new_loader(Default::default()));
         Self {
             source: Arc::new(EmptyAccountSource),
-            inner: HashMap::default(),
-            removed: HashSet::default(),
-            programs_cache: ProgramCacheForTxBatch::default(),
+            cache: CacheDb::default(),
+            programs_cache: Arc::new(RwLock::new(ProgramCacheForTxBatch::default())),
             sysvar_cache: SysvarCache::default(),
             environments: Arc::new(ProgramRuntimeEnvironments::new(env.clone(), env)),
+            journal: Vec::new(),
         }
     }
 }
@@ -197,15 +282,15 @@ impl Default for AccountsDb {
 // ever equals keeps hpsvm-loaded programs immediately effective.
 pub(crate) const IMMEDIATE_DEPLOYMENT_SLOT: u64 = u64::MAX;
 
-impl std::fmt::Debug for AccountsDb {
+impl std::fmt::Debug for Accounts {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AccountsDb")
+        f.debug_struct("Accounts")
             .field("source", &"dyn AccountSource")
-            .field("inner", &self.inner)
-            .field("removed", &self.removed)
-            .field("programs_cache", &self.programs_cache)
+            .field("cache", &self.cache)
+            .field("programs_cache", &*self.programs_cache.read())
             .field("sysvar_cache", &self.sysvar_cache)
             .field("environments", &"ProgramRuntimeEnvironments")
+            .field("journal", &self.journal)
             .finish()
     }
 }
@@ -213,7 +298,7 @@ impl std::fmt::Debug for AccountsDb {
 /// Read-only facade over the VM accounts database.
 #[derive(Clone, Copy, Debug)]
 pub struct AccountsView<'a> {
-    accounts_db: &'a AccountsDb,
+    accounts_db: &'a Accounts,
 }
 
 impl<'a> AccountsView<'a> {
@@ -240,7 +325,7 @@ impl<'a> AccountsView<'a> {
     }
 }
 
-impl AccountsDb {
+impl Accounts {
     pub(crate) fn set_account_source(&mut self, source: Arc<dyn AccountSource>) {
         self.source = source;
     }
@@ -252,8 +337,9 @@ impl AccountsDb {
         std::mem::replace(&mut self.source, source)
     }
 
+    #[inline]
     pub fn get_account_ref(&self, pubkey: &Address) -> Option<&AccountSharedData> {
-        self.inner.get(pubkey)
+        self.cache.inner.get(pubkey)
     }
 
     pub fn try_get_account(
@@ -264,7 +350,7 @@ impl AccountsDb {
             return Ok(Some(account.clone()));
         }
 
-        if self.removed.contains(pubkey) {
+        if self.cache.removed.contains(pubkey) {
             return Ok(None);
         }
 
@@ -285,9 +371,136 @@ impl AccountsDb {
         self.source.get_accounts(pubkeys)
     }
 
+    /// Batch-loads `addrs` from the account source into the overlay (Task 4.3).
+    ///
+    /// Only addresses missing from the overlay (neither cached nor tombstoned)
+    /// are fetched, in a single `source.get_accounts` round-trip. Hits are
+    /// inserted with [`Accounts::add_account_no_checks`]: source data is
+    /// already canonical, and the no-checks path keeps the load byte-identical
+    /// to a per-key fall-through — no sysvar validation, no program-cache
+    /// rebuild, no zero-lamport tombstone conversion — so prewarmed execution
+    /// observes exactly what non-prewarmed execution would load. Addresses
+    /// absent at the source are left untouched (no tombstones), preserving the
+    /// fall-through `None` observable.
+    ///
+    /// Short-circuits without touching the source when every address is
+    /// already known or `addrs` is empty. Insertions are journaled like any
+    /// other overlay mutation; prewarm runs before any stage checkpoint, so
+    /// rollback only truncates to later checkpoints and is unaffected.
+    ///
+    /// The only failure mode is the batched source load itself, returned
+    /// as a [`DbError`](crate::error::DbError) so the fatal classification
+    /// of the underlying [`AccountSourceError`] (infrastructure down vs
+    /// deterministic failure) survives for the caller to inspect.
+    pub(crate) fn prewarm(&mut self, addrs: &[Address]) -> DbResult<()> {
+        let mut missing: Vec<Address> = Vec::new();
+        for addr in addrs {
+            if self.cache.inner.contains_key(addr) || self.cache.removed.contains(addr) {
+                continue;
+            }
+            if !missing.contains(addr) {
+                missing.push(*addr);
+            }
+        }
+        if missing.is_empty() {
+            return Ok(());
+        }
+        let loaded = self.source.get_accounts(&missing).map_err(DbError::from)?;
+        for (addr, maybe_account) in missing.iter().zip(loaded) {
+            if let Some(account) = maybe_account {
+                self.add_account_no_checks(*addr, account);
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn remove_account(&mut self, pubkey: &Address) {
-        self.inner.remove(pubkey);
-        self.removed.insert(*pubkey);
+        self.record_journal(*pubkey);
+        self.cache.inner.remove(pubkey);
+        self.cache.removed.insert(*pubkey);
+    }
+
+    /// Captures the current end of the journal as a restorable checkpoint.
+    pub(crate) fn checkpoint(&self) -> StateCheckpoint {
+        StateCheckpoint(self.journal.len())
+    }
+
+    /// Streams one [`AccountChange`](crate::state_change_sink::AccountChange) per
+    /// journaled entry to `sink`, using the entry's recorded previous state as
+    /// `before` and the current overlay state as `after`.
+    ///
+    /// This lets tooling observe the staged delta without re-deriving it from
+    /// the full account store. Sink errors propagate immediately.
+    pub fn commit_source<S: crate::state_change_sink::StateChangeSink>(
+        &self,
+        sink: &mut S,
+    ) -> Result<(), S::Error> {
+        for entry in &self.journal {
+            let JournalEntry::Account { address, previous, .. } = entry;
+            let change = crate::state_change_sink::AccountChange {
+                address: *address,
+                before: previous.as_ref(),
+                after: self.get_account_ref(address),
+            };
+            sink.on_account_change(change)?;
+        }
+        Ok(())
+    }
+
+    /// Returns the current journal length (number of undo entries recorded).
+    ///
+    /// Used to prove rollback restores the journal itself: after rolling back
+    /// to a checkpoint, the length equals the checkpoint length again.
+    #[cfg(test)]
+    pub(crate) fn journal_len(&self) -> usize {
+        self.journal.len()
+    }
+
+    /// Restores `inner` + `removed` to the state at `checkpoint` by undoing
+    /// journal entries at indices `>= checkpoint.0` in reverse order.
+    ///
+    /// Rolling back to the current length is a no-op, which also makes
+    /// repeated rollback to the same checkpoint idempotent
+    /// (`rollback(cp)` twice == once: the first call truncates the journal
+    /// to `cp.0`, so the second call finds nothing to undo). A checkpoint
+    /// beyond the current journal end (stale after an earlier rollback) is
+    /// likewise a no-op rather than a panic.
+    ///
+    /// Account state only: `programs_cache` / `sysvar_cache` are not rewound.
+    /// Callers that mutate executable or managed-sysvar accounts across a
+    /// checkpoint should call `rebuild_program_cache` / `rebuild_sysvar_cache`
+    /// after rollback if the caches must match restored state.
+    pub(crate) fn rollback(&mut self, checkpoint: StateCheckpoint) {
+        while self.journal.len() > checkpoint.0 {
+            let Some(entry) = self.journal.pop() else { break };
+            let JournalEntry::Account { address, previous, was_removed } = entry;
+            match previous {
+                Some(account) => {
+                    self.cache.inner.insert(address, account);
+                }
+                None => {
+                    self.cache.inner.remove(&address);
+                }
+            }
+            if was_removed {
+                self.cache.removed.insert(address);
+            } else {
+                self.cache.removed.remove(&address);
+            }
+        }
+    }
+
+    /// Pushes the pre-mutation state of `pubkey` onto the journal.
+    ///
+    /// Must be called BEFORE mutating `inner` / `removed`, and only on paths
+    /// that actually mutate (failed validation in `add_account` returns
+    /// before recording, so failed calls leave no spurious entries).
+    fn record_journal(&mut self, pubkey: Address) {
+        self.journal.push(JournalEntry::Account {
+            previous: self.cache.inner.get(&pubkey).cloned(),
+            was_removed: self.cache.removed.contains(&pubkey),
+            address: pubkey,
+        });
     }
 
     pub(crate) fn minimum_balance_for_rent_exemption(&self, data_len: usize) -> u64 {
@@ -303,17 +516,24 @@ impl AccountsDb {
         program_id: Address,
         program: Arc<ProgramCacheEntry>,
     ) {
-        self.programs_cache.replenish(program_id, program);
+        self.programs_cache.write().replenish(program_id, program);
     }
 
-    pub(crate) fn cloned_programs_cache(&self) -> ProgramCacheForTxBatch {
-        self.programs_cache.clone()
+    /// Returns the shared program-cache handle.
+    ///
+    /// This is a cheap `Arc` clone (pointer bump): the transaction path
+    /// shares the committed cache through this handle instead of
+    /// deep-cloning the map per transaction.
+    #[inline]
+    pub(crate) fn shared_programs_cache(&self) -> SharedProgramCache {
+        Arc::clone(&self.programs_cache)
     }
 
     pub(crate) fn has_program_cache_entry(&self, program_id: &Address) -> bool {
-        self.programs_cache.find(program_id).is_some()
+        self.programs_cache.read().find(program_id).is_some()
     }
 
+    #[inline]
     pub(crate) fn runtime_environments(&self) -> &ProgramRuntimeEnvironments {
         &self.environments
     }
@@ -335,7 +555,7 @@ impl AccountsDb {
     ///
     /// Default-constructed VMs share a single immutable environment across the
     /// process so that default-program executables can be memoized once and
-    /// reused by every subsequent `HPSVM::new()`.
+    /// reused by every subsequent `Hpsvm::new()`.
     pub(crate) fn set_runtime_environments_arc(&mut self, envs: Arc<ProgramRuntimeEnvironments>) {
         self.environments = envs;
     }
@@ -347,8 +567,9 @@ impl AccountsDb {
     /// We should only use this when we know we're not touching any executable or sysvar accounts,
     /// or have already handled such cases.
     pub(crate) fn add_account_no_checks(&mut self, pubkey: Address, account: AccountSharedData) {
-        self.removed.remove(&pubkey);
-        self.inner.insert(pubkey, account);
+        self.record_journal(pubkey);
+        self.cache.removed.remove(&pubkey);
+        self.cache.inner.insert(pubkey, account);
     }
 
     pub(crate) fn add_account(
@@ -361,6 +582,7 @@ impl AccountsDb {
         // before the mutable operations below, avoiding the old borrow-checker
         // limitation that forced the triple-lookup pattern.
         let had_cached_program = self
+            .cache
             .inner
             .get(&pubkey)
             .is_some_and(|existing| is_cached_program_account(&pubkey, existing));
@@ -379,12 +601,16 @@ impl AccountsDb {
         let program_entry =
             if has_cached_program { Some(Arc::new(self.load_program(&account)?)) } else { None };
 
+        // Record AFTER validation and program loading succeed: a failed call
+        // returns above without touching `inner` / `removed`, so it must not
+        // leave a journal entry either.
+        self.record_journal(pubkey);
         if account.lamports() == 0 {
-            self.inner.remove(&pubkey);
-            self.removed.insert(pubkey);
+            self.cache.inner.remove(&pubkey);
+            self.cache.removed.insert(pubkey);
         } else {
-            self.removed.remove(&pubkey);
-            self.inner.insert(pubkey, account);
+            self.cache.removed.remove(&pubkey);
+            self.cache.inner.insert(pubkey, account);
         }
 
         if is_managed_sysvar_account(&pubkey) {
@@ -392,7 +618,7 @@ impl AccountsDb {
         }
 
         if let Some(loaded_program) = program_entry {
-            self.programs_cache.replenish(pubkey, loaded_program);
+            self.programs_cache.write().replenish(pubkey, loaded_program);
         } else if had_cached_program {
             self.rebuild_program_cache()?;
         }
@@ -403,12 +629,12 @@ impl AccountsDb {
     pub(crate) fn rebuild_sysvar_cache(&mut self) {
         self.sysvar_cache.reset();
         self.sysvar_cache.fill_missing_entries(|pubkey, set_sysvar| {
-            if let Some(acc) = self.inner.get(pubkey) {
+            if let Some(acc) = self.cache.inner.get(pubkey) {
                 set_sysvar(acc.data());
             }
         });
         let slot = self.sysvar_cache.get_clock().unwrap_or_default().slot;
-        self.programs_cache.set_slot_for_tests(slot);
+        self.programs_cache.write().set_slot_for_tests(slot);
     }
 
     pub(crate) fn rebuild_program_cache(&mut self) -> Result<(), InstructionError> {
@@ -418,7 +644,7 @@ impl AccountsDb {
         // Single lookup per builtin: `contains_key` avoids the implicit
         // second lookup inside `replenish` that the old pattern incurred.
         for builtin in BUILTINS {
-            if self.inner.contains_key(&builtin.program_id) {
+            if self.cache.inner.contains_key(&builtin.program_id) {
                 let loaded_program = ProgramCacheEntry::new_builtin(builtin.register_fn);
                 cache.replenish(builtin.program_id, Arc::new(loaded_program));
             }
@@ -428,6 +654,7 @@ impl AccountsDb {
         // eliminating the second `get_account_ref` lookup that the old
         // collect-keys-then-lookup pattern required.
         let program_entries: Vec<(Address, &AccountSharedData)> = self
+            .cache
             .inner
             .iter()
             .filter_map(|(pubkey, account)| {
@@ -440,14 +667,21 @@ impl AccountsDb {
             cache.replenish(pubkey, Arc::new(loaded_program));
         }
 
-        self.programs_cache = cache;
+        // The cache is shared through an `Arc`, so publish the rebuilt map
+        // through the lock rather than replacing the handle (clones keep
+        // observing the same committed cache).
+        *self.programs_cache.write() = cache;
         Ok(())
     }
 
     /// Skip the executable() checks for builtin accounts
     pub(crate) fn add_builtin_account(&mut self, address: Address, data: AccountSharedData) {
-        self.removed.remove(&address);
-        self.inner.insert(address, data);
+        // Fourth `inner` / `removed` mutation site alongside `add_account`,
+        // `add_account_no_checks`, and `remove_account` (verified by grep for
+        // `inner.insert` / `removed.remove`): journaled for the same reason.
+        self.record_journal(address);
+        self.cache.removed.remove(&address);
+        self.cache.inner.insert(address, data);
     }
 
     pub(crate) fn sync_accounts(
@@ -674,7 +908,7 @@ const fn into_address_loader_error(err: AddressLookupError) -> AddressLoaderErro
     }
 }
 
-impl AddressLoader for &AccountsDb {
+impl AddressLoader for &Accounts {
     fn load_addresses(
         self,
         lookups: &[MessageAddressTableLookup],
@@ -712,12 +946,25 @@ impl AddressLoader for &AccountSourceTrackingAddressLoader<'_> {
     }
 }
 
+/// Compatibility alias for the pre-split `AccountsDb` name.
+pub(crate) type AccountsDb = Accounts;
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use solana_account::WritableAccount;
+    use solana_keypair::Keypair;
+    use solana_message::Message;
+    use solana_signer::Signer;
+    use solana_system_interface::{instruction::transfer, program as system_program};
+    use solana_transaction::{Transaction, versioned::VersionedTransaction};
+
     use super::*;
-    use crate::account_source::{AccountSource, AccountSourceError};
+    use crate::{
+        Hpsvm,
+        account_source::{AccountSource, AccountSourceError},
+    };
 
     #[derive(Clone)]
     struct CountingAccountSource {
@@ -762,5 +1009,728 @@ mod tests {
         let _ = db.get_accounts_batch(&pubkeys);
 
         assert_eq!(source.batch_calls.load(Ordering::SeqCst), 1);
+    }
+
+    // -----------------------------------------------------------------
+    // Task 4.3 (TDD): prewarm driven by the batch read-set
+    // -----------------------------------------------------------------
+
+    /// Map-backed source counting batched vs single loads separately.
+    /// `get_accounts` serves from the map in one round-trip without
+    /// delegating to `get_account`, so the counters distinguish a single
+    /// batched load from per-key fall-through reads.
+    #[derive(Clone, Default)]
+    struct MapCountingSource {
+        accounts: Arc<std::collections::HashMap<Address, AccountSharedData>>,
+        batch_calls: Arc<AtomicUsize>,
+        single_calls: Arc<AtomicUsize>,
+    }
+
+    impl MapCountingSource {
+        fn with_accounts(accounts: Vec<(Address, AccountSharedData)>) -> Self {
+            Self {
+                accounts: Arc::new(accounts.into_iter().collect()),
+                batch_calls: Arc::new(AtomicUsize::new(0)),
+                single_calls: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+    }
+
+    impl AccountSource for MapCountingSource {
+        fn get_account(
+            &self,
+            pubkey: &Address,
+        ) -> Result<Option<AccountSharedData>, AccountSourceError> {
+            self.single_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(self.accounts.get(pubkey).cloned())
+        }
+
+        fn get_accounts(
+            &self,
+            pubkeys: &[Address],
+        ) -> Result<Vec<Option<AccountSharedData>>, AccountSourceError> {
+            self.batch_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(pubkeys.iter().map(|key| self.accounts.get(key).cloned()).collect())
+        }
+    }
+
+    struct FailingBatchSource {
+        single_calls: Arc<AtomicUsize>,
+    }
+
+    /// Batch source failing with a caller-chosen kind, so the fatal
+    /// classification can be exercised on the real `prewarm` path for both
+    /// fatal (`Unavailable`) and non-fatal (`InvalidResponse`, `Other`) kinds.
+    struct KindFailingBatchSource {
+        kind: crate::account_source::AccountSourceErrorKind,
+    }
+
+    impl AccountSource for KindFailingBatchSource {
+        fn get_account(
+            &self,
+            _pubkey: &Address,
+        ) -> Result<Option<AccountSharedData>, AccountSourceError> {
+            Ok(None)
+        }
+
+        fn get_accounts(
+            &self,
+            _pubkeys: &[Address],
+        ) -> Result<Vec<Option<AccountSharedData>>, AccountSourceError> {
+            Err(AccountSourceError::with_kind(self.kind, "kind failure"))
+        }
+    }
+
+    impl AccountSource for FailingBatchSource {
+        fn get_account(
+            &self,
+            _pubkey: &Address,
+        ) -> Result<Option<AccountSharedData>, AccountSourceError> {
+            self.single_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(None)
+        }
+
+        fn get_accounts(
+            &self,
+            _pubkeys: &[Address],
+        ) -> Result<Vec<Option<AccountSharedData>>, AccountSourceError> {
+            Err(AccountSourceError::new("batch endpoint unavailable"))
+        }
+    }
+
+    fn task43_prewarm_db(source: MapCountingSource) -> (AccountsDb, MapCountingSource) {
+        let mut db = AccountsDb::default();
+        db.set_account_source(Arc::new(source.clone()));
+        (db, source)
+    }
+
+    #[test]
+    fn task43_prewarm_loads_missing_accounts_in_a_single_batch_call() {
+        let addr_a = Address::new_from_array([0xA0; 32]);
+        let addr_b = Address::new_from_array([0xB0; 32]);
+        let addr_absent = Address::new_from_array([0xC0; 32]);
+        let acc_a = journal_test_account(11, &[1], &Address::new_from_array([1; 32]), false, 0);
+        let acc_b = journal_test_account(22, &[2], &Address::new_from_array([2; 32]), false, 0);
+        let source = MapCountingSource::with_accounts(vec![
+            (addr_a, acc_a.clone()),
+            (addr_b, acc_b.clone()),
+        ]);
+        let (mut db, source) = task43_prewarm_db(source);
+
+        db.prewarm(&[addr_a, addr_b, addr_absent]).expect("cold prewarm must succeed");
+
+        assert_eq!(source.batch_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(source.single_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(db.get_account(&addr_a), Some(acc_a));
+        assert_eq!(db.get_account(&addr_b), Some(acc_b));
+        // Overlay hits no longer touch the source at all.
+        db.try_get_account(&addr_a).expect("overlay hit must not error");
+        assert_eq!(source.batch_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(source.single_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn task43_prewarm_leaves_absent_accounts_without_tombstones() {
+        let addr_absent = Address::new_from_array([0xD0; 32]);
+        let (mut db, source) = task43_prewarm_db(MapCountingSource::default());
+
+        db.prewarm(&[addr_absent]).expect("all-absent prewarm must succeed");
+
+        assert_eq!(source.batch_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(db.get_account_ref(&addr_absent), None);
+        assert!(!db.cache.is_removed(&addr_absent));
+        // The fall-through observable is preserved: still a plain miss.
+        assert_eq!(db.try_get_account(&addr_absent).expect("miss must not error"), None);
+    }
+
+    #[test]
+    fn task43_prewarm_skips_overlay_known_addresses_without_source_calls() {
+        let addr_warm = Address::new_from_array([0xE0; 32]);
+        let addr_cold = Address::new_from_array([0xF0; 32]);
+        let acc_warm = journal_test_account(5, &[9], &Address::new_from_array([3; 32]), false, 0);
+        let acc_cold = journal_test_account(6, &[8], &Address::new_from_array([4; 32]), false, 0);
+        let source = MapCountingSource::with_accounts(vec![
+            (addr_warm, acc_warm.clone()),
+            (addr_cold, acc_cold.clone()),
+        ]);
+        let (mut db, source) = task43_prewarm_db(source);
+        db.add_account_no_checks(addr_warm, acc_warm.clone());
+
+        // First prewarm loads only the cold address; the second finds
+        // everything warm and short-circuits without calling the source.
+        db.prewarm(&[addr_warm, addr_cold, addr_warm]).expect("prewarm must succeed");
+        assert_eq!(source.batch_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(db.get_account(&addr_cold), Some(acc_cold));
+
+        db.prewarm(&[addr_warm, addr_cold]).expect("warm prewarm must succeed");
+        assert_eq!(source.batch_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(source.single_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn task43_prewarm_skips_tombstoned_addresses() {
+        let addr_removed = Address::new_from_array([0xE1; 32]);
+        let source = MapCountingSource::with_accounts(vec![(
+            addr_removed,
+            journal_test_account(5, &[9], &Address::new_from_array([3; 32]), false, 0),
+        )]);
+        let (mut db, source) = task43_prewarm_db(source);
+        db.remove_account(&addr_removed);
+
+        db.prewarm(&[addr_removed]).expect("prewarm over a tombstone must succeed");
+
+        assert_eq!(source.batch_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(source.single_calls.load(Ordering::SeqCst), 0);
+        assert!(db.cache.is_removed(&addr_removed));
+    }
+
+    #[test]
+    fn task43_prewarm_with_empty_slice_is_a_noop() {
+        let (mut db, source) = task43_prewarm_db(MapCountingSource::default());
+
+        db.prewarm(&[]).expect("empty prewarm must succeed");
+
+        assert_eq!(source.batch_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(source.single_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn task43_prewarm_propagates_source_errors_without_per_key_fallback() {
+        let addr_a = Address::new_from_array([0xA1; 32]);
+        let addr_b = Address::new_from_array([0xB1; 32]);
+        let source = FailingBatchSource { single_calls: Arc::new(AtomicUsize::new(0)) };
+        let single_calls = Arc::clone(&source.single_calls);
+        let mut db = AccountsDb::default();
+        db.set_account_source(Arc::new(source));
+
+        let error = db.prewarm(&[addr_a, addr_b]).expect_err("failing source must error");
+
+        // The error preserves the fatal classification (`Unavailable` means
+        // the infrastructure is down) and the concrete source error stays
+        // recoverable by downcast. No per-key fallback loop ran.
+        assert!(error.is_fatal());
+        let source = error
+            .downcast_ref::<AccountSourceError>()
+            .expect("DbError must recover the AccountSourceError");
+        assert_eq!(source.kind(), crate::account_source::AccountSourceErrorKind::Unavailable);
+        assert_eq!(source.message(), "batch endpoint unavailable");
+        assert_eq!(single_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(db.get_account_ref(&addr_a), None);
+        assert_eq!(db.get_account_ref(&addr_b), None);
+    }
+
+    #[test]
+    fn task43_prewarm_insertions_roll_back_to_an_earlier_checkpoint() {
+        let addr = Address::new_from_array([0xA2; 32]);
+        let acc = journal_test_account(7, &[7], &Address::new_from_array([5; 32]), false, 0);
+        let source = MapCountingSource::with_accounts(vec![(addr, acc)]);
+        let (mut db, _) = task43_prewarm_db(source);
+        let checkpoint = db.checkpoint();
+
+        db.prewarm(&[addr]).expect("prewarm must succeed");
+        assert!(db.get_account_ref(&addr).is_some());
+
+        db.rollback(checkpoint);
+        assert_eq!(db.get_account_ref(&addr), None);
+        assert!(!db.cache.is_removed(&addr));
+    }
+
+    // -----------------------------------------------------------------
+    // Task 7.1: fatal classification survives the real `prewarm` path
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn task71_prewarm_fatal_matrix_over_source_kinds_on_the_real_path() {
+        use crate::{
+            account_source::AccountSourceErrorKind,
+            error::{DbError, ExecutionError, HPSVMError},
+        };
+
+        for (kind, fatal) in [
+            (AccountSourceErrorKind::Unavailable, true),
+            (AccountSourceErrorKind::InvalidResponse, false),
+            (AccountSourceErrorKind::Other, false),
+        ] {
+            let mut db = AccountsDb::default();
+            db.set_account_source(Arc::new(KindFailingBatchSource { kind }));
+            let addr = Address::new_from_array([0xA3; 32]);
+
+            let error: DbError = db.prewarm(&[addr]).expect_err("failing source must error");
+            assert_eq!(error.is_fatal(), fatal, "kind {kind:?} must map to fatal={fatal}");
+
+            // The classification survives the execution layer and the
+            // public `HPSVMError` boundary with the concrete error intact.
+            let execution = ExecutionError::from(error);
+            assert_eq!(execution.is_fatal(), fatal);
+            let host = HPSVMError::from(crate::error::HostError::from(execution));
+            match &host {
+                HPSVMError::Host(crate::error::HostError::Execution(ExecutionError::Database(
+                    inner,
+                ))) => {
+                    assert_eq!(inner.is_fatal(), fatal);
+                    let source = inner
+                        .downcast_ref::<AccountSourceError>()
+                        .expect("AccountSourceError must survive to the host boundary");
+                    assert_eq!(source.kind(), kind);
+                }
+                other => panic!("expected HPSVMError::Host(Execution(Database)), got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn task71_account_source_load_failure_maps_onto_both_layers() {
+        use crate::account_source::AccountSourceErrorKind;
+
+        let failure = AccountSourceLoadFailure {
+            pubkey: Address::new_from_array([0xA4; 32]),
+            source: AccountSourceError::new("rpc down"),
+        };
+        let db_error = failure.into_db_error();
+        assert!(db_error.is_fatal());
+        assert_eq!(
+            db_error
+                .downcast_ref::<AccountSourceError>()
+                .expect("DbError must recover the source error")
+                .kind(),
+            AccountSourceErrorKind::Unavailable
+        );
+
+        let failure = AccountSourceLoadFailure {
+            pubkey: Address::new_from_array([0xA4; 32]),
+            source: AccountSourceError::with_kind(AccountSourceErrorKind::Other, "custom"),
+        };
+        match failure.into_execution_error() {
+            crate::error::ExecutionError::Database(inner) => assert!(!inner.is_fatal()),
+            other => panic!("expected ExecutionError::Database, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Task 3.1 (TDD RED): journal + StateCheckpoint / rollback
+    // -----------------------------------------------------------------
+
+    fn journal_test_account(
+        lamports: u64,
+        data: &[u8],
+        owner: &Address,
+        executable: bool,
+        rent_epoch: u64,
+    ) -> AccountSharedData {
+        let mut account = AccountSharedData::new(lamports, data.len(), owner);
+        account.set_data_from_slice(data);
+        account.set_executable(executable);
+        account.set_rent_epoch(rent_epoch);
+        account
+    }
+
+    // -----------------------------------------------------------------
+    // Task 4.1 (TDD): account read fall-through + overlay hit
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn task41_get_account_served_from_overlay_after_add_no_checks() {
+        let mut db = Accounts::default();
+        let addr = Address::new_from_array([7; 32]);
+        let acc = journal_test_account(42, &[1, 2, 3], &Address::new_from_array([9; 32]), false, 1);
+        db.add_account_no_checks(addr, acc.clone());
+
+        assert_eq!(db.get_account(&addr), Some(acc.clone()));
+        assert!(db.get_account_ref(&addr).is_some());
+        assert!(!db.cache.is_removed(&addr));
+    }
+
+    #[test]
+    fn task41_try_get_account_miss_hits_source() {
+        let source = CountingAccountSource::new();
+        let mut db = Accounts::default();
+        db.set_account_source(Arc::new(source.clone()));
+        let addr = Address::new_from_array([8; 32]);
+
+        let result = db.try_get_account(&addr).expect("source call must not error");
+        assert!(result.is_none());
+        assert_eq!(source.single_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn task41_try_get_account_hit_does_not_hit_source() {
+        let source = CountingAccountSource::new();
+        let mut db = Accounts::default();
+        db.set_account_source(Arc::new(source.clone()));
+        let addr = Address::new_from_array([9; 32]);
+        let acc = journal_test_account(10, &[5], &Address::new_from_array([3; 32]), false, 2);
+        db.add_account_no_checks(addr, acc.clone());
+
+        let result = db.try_get_account(&addr).expect("overlay hit must not error");
+        assert_eq!(result, Some(acc));
+        assert_eq!(source.single_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn task41_cache_db_shape_has_no_sysvar_or_env_accessors() {
+        // Runtime evidence that CacheDb carries only overlay state; the absence
+        // of sysvar/environment members is also verified by grep in the report.
+        let c = CacheDb::default();
+        let _ = c.get_account_ref(&Address::default());
+        let _ = c.is_removed(&Address::default());
+        // CacheDb has no source fall-through, programs cache, sysvar cache, or
+        // environment field by construction (see struct definition).
+        assert!(c.inner.is_empty());
+        assert!(c.removed.is_empty());
+    }
+
+    #[test]
+    fn task41_cache_db_overlay_read_returns_inserted_account() {
+        let addr = Address::new_from_array([12; 32]);
+        let acc = journal_test_account(7, &[9, 9], &Address::new_from_array([4; 32]), false, 3);
+        let mut c = CacheDb::default();
+        c.inner.insert(addr, acc.clone());
+
+        assert_eq!(c.get_account_ref(&addr), Some(&acc));
+        assert!(!c.is_removed(&addr));
+    }
+
+    #[test]
+    fn task41_cache_db_removed_flag_round_trips() {
+        let addr = Address::new_from_array([13; 32]);
+        let mut c = CacheDb::default();
+        c.removed.insert(addr);
+
+        assert!(c.is_removed(&addr));
+        assert!(c.get_account_ref(&addr).is_none());
+    }
+
+    // -- proptest properties (Task 3.1) ------------------------------------
+
+    use proptest::prelude::*;
+
+    /// Small address pool (4 entries) forces collisions and overwrites, which
+    /// is exactly what makes rollback non-trivial.
+    fn pool_address(idx: usize) -> Address {
+        Address::new_from_array([(idx % 4) as u8 + 20; 32])
+    }
+
+    #[derive(Clone, Debug)]
+    enum JournalOp {
+        Add {
+            addr_idx: usize,
+            lamports: u64,
+            data_byte: u8,
+            owner_byte: u8,
+            rent_epoch: u64,
+        },
+        AddNoChecks {
+            addr_idx: usize,
+            lamports: u64,
+            data_byte: u8,
+            owner_byte: u8,
+            rent_epoch: u64,
+        },
+        Remove {
+            addr_idx: usize,
+        },
+    }
+
+    fn journal_op_strategy() -> impl Strategy<Value = JournalOp> {
+        prop_oneof![
+            (any::<usize>(), any::<u64>(), any::<u8>(), any::<u8>(), any::<u64>()).prop_map(
+                |(addr_idx, lamports, data_byte, owner_byte, rent_epoch)| JournalOp::Add {
+                    addr_idx,
+                    lamports,
+                    data_byte,
+                    owner_byte,
+                    rent_epoch,
+                }
+            ),
+            (any::<usize>(), any::<u64>(), any::<u8>(), any::<u8>(), any::<u64>()).prop_map(
+                |(addr_idx, lamports, data_byte, owner_byte, rent_epoch)| {
+                    JournalOp::AddNoChecks { addr_idx, lamports, data_byte, owner_byte, rent_epoch }
+                }
+            ),
+            any::<usize>().prop_map(|addr_idx| JournalOp::Remove { addr_idx }),
+        ]
+    }
+
+    /// Non-executable accounts with non-sysvar pool addresses always pass
+    /// `add_account` validation, so every generated op mutates state.
+    fn journal_op_account(
+        op_lamports: u64,
+        data_byte: u8,
+        owner_byte: u8,
+        rent_epoch: u64,
+    ) -> AccountSharedData {
+        journal_test_account(
+            op_lamports,
+            &[data_byte; 4],
+            &Address::new_from_array([owner_byte; 32]),
+            false,
+            rent_epoch,
+        )
+    }
+
+    fn apply_journal_op(db: &mut AccountsDb, op: &JournalOp) {
+        match op {
+            JournalOp::Add { addr_idx, lamports, data_byte, owner_byte, rent_epoch } => {
+                let account = journal_op_account(*lamports, *data_byte, *owner_byte, *rent_epoch);
+                // Pool addresses are never managed sysvars and the account is
+                // never executable, so validation always passes.
+                db.add_account(pool_address(*addr_idx), account)
+                    .expect("proptest add_account must succeed");
+            }
+            JournalOp::AddNoChecks { addr_idx, lamports, data_byte, owner_byte, rent_epoch } => {
+                let account = journal_op_account(*lamports, *data_byte, *owner_byte, *rent_epoch);
+                db.add_account_no_checks(pool_address(*addr_idx), account);
+            }
+            JournalOp::Remove { addr_idx } => {
+                db.remove_account(&pool_address(*addr_idx));
+            }
+        }
+    }
+
+    proptest! {
+        /// Rollback-to-origin restores `inner` + `removed` exactly for an
+        /// arbitrary mutation sequence.
+        #[test]
+        fn rollback_to_origin_restores_the_original_snapshot(ops in prop::collection::vec(journal_op_strategy(), 0..32)) {
+            let mut db = AccountsDb::default();
+            let origin_inner = db.cache.inner.clone();
+            let origin_removed = db.cache.removed.clone();
+            let checkpoint = db.checkpoint();
+
+            for op in &ops {
+                apply_journal_op(&mut db, op);
+            }
+            prop_assert_eq!(db.journal.len() - checkpoint.0, ops.len());
+
+            db.rollback(checkpoint);
+            prop_assert_eq!(&db.cache.inner, &origin_inner);
+            prop_assert_eq!(&db.cache.removed, &origin_removed);
+        }
+
+        /// Nested checkpoints unwind correctly: rolling back the inner
+        /// checkpoint restores the mid-state, then rolling back the outer
+        /// checkpoint restores the origin.
+        #[test]
+        fn nested_checkpoints_unwind_correctly(
+            first_ops in prop::collection::vec(journal_op_strategy(), 0..16),
+            second_ops in prop::collection::vec(journal_op_strategy(), 0..16),
+        ) {
+            let mut db = AccountsDb::default();
+            let origin_inner = db.cache.inner.clone();
+            let origin_removed = db.cache.removed.clone();
+            let outer = db.checkpoint();
+
+            for op in &first_ops {
+                apply_journal_op(&mut db, op);
+            }
+            let mid_inner = db.cache.inner.clone();
+            let mid_removed = db.cache.removed.clone();
+            let inner_cp = db.checkpoint();
+
+            for op in &second_ops {
+                apply_journal_op(&mut db, op);
+            }
+
+            db.rollback(inner_cp);
+            prop_assert_eq!(&db.cache.inner, &mid_inner);
+            prop_assert_eq!(&db.cache.removed, &mid_removed);
+
+            db.rollback(outer);
+            prop_assert_eq!(&db.cache.inner, &origin_inner);
+            prop_assert_eq!(&db.cache.removed, &origin_removed);
+        }
+    }
+
+    #[test]
+    fn rollback_restores_account_state_byte_identically() {
+        use solana_sdk_ids::sysvar::clock::ID as CLOCK_ID;
+
+        let owner_a = Address::new_from_array([10; 32]);
+        let owner_b = Address::new_from_array([11; 32]);
+        let addr_a = Address::new_from_array([1; 32]);
+        let addr_b = Address::new_from_array([2; 32]);
+        let addr_prog = Address::new_from_array([3; 32]);
+        let addr_sysvar = CLOCK_ID;
+        let addr_new = Address::new_from_array([4; 32]);
+
+        let mut db = AccountsDb::default();
+
+        // N = 5 setup mutations across add / add_no_checks paths, including a
+        // sysvar-shaped address and a program-shaped (executable) address.
+        db.add_account(addr_a, journal_test_account(100, &[1, 2, 3], &owner_a, false, 5))
+            .expect("plain add_account must succeed");
+        db.add_account_no_checks(
+            addr_sysvar,
+            journal_test_account(42, &[7; 8], &owner_a, false, 6),
+        );
+        db.add_account_no_checks(
+            addr_prog,
+            journal_test_account(77, &[9; 4], &solana_sdk_ids::bpf_loader::ID, true, 7),
+        );
+        db.add_account(addr_b, journal_test_account(200, &[5, 6], &owner_b, false, 8))
+            .expect("plain add_account must succeed");
+        db.remove_account(&addr_b);
+
+        let snapshot_inner = db.cache.inner.clone();
+        let snapshot_removed = db.cache.removed.clone();
+
+        let checkpoint = db.checkpoint();
+        let journal_len_at_checkpoint = db.journal.len();
+
+        // Mutate further: update (all five fields change), resurrect the
+        // removed address, remove the program account, add a fresh address.
+        db.add_account(addr_a, journal_test_account(999, &[8, 8, 8, 8], &owner_b, false, 99))
+            .expect("update must succeed");
+        db.add_account(addr_b, journal_test_account(1, &[0], &owner_a, false, 0))
+            .expect("resurrection must succeed");
+        db.remove_account(&addr_prog);
+        db.add_account(addr_new, journal_test_account(50, &[3], &owner_a, false, 1))
+            .expect("fresh add must succeed");
+
+        // Journal grew by exactly one entry per mutation.
+        assert_eq!(db.journal.len() - journal_len_at_checkpoint, 4);
+
+        db.rollback(checkpoint);
+
+        // Byte-identical restore: derived PartialEq on AccountSharedData covers
+        // lamports, data bytes, owner, executable, and rent_epoch.
+        assert_eq!(db.cache.inner, snapshot_inner);
+        assert_eq!(db.cache.removed, snapshot_removed);
+
+        // Rollback is idempotent: rolling back to the same checkpoint twice is
+        // a no-op the second time.
+        db.rollback(checkpoint);
+        assert_eq!(db.cache.inner, snapshot_inner);
+        assert_eq!(db.cache.removed, snapshot_removed);
+    }
+
+    // -----------------------------------------------------------------
+    // Task 4.2 (TDD RED): program cache shared as Arc, never deep-cloned
+    // on the transaction path.
+    // -----------------------------------------------------------------
+
+    fn task42_deployed_program_id() -> Address {
+        Address::new_from_array([0x42; 32])
+    }
+
+    /// Builds a VM with one extra builtin deployed under a fresh id, so the
+    /// tests observe a program that was deployed exactly once.
+    fn task42_vm_with_builtin() -> Hpsvm {
+        let mut svm = Hpsvm::new();
+        let register_fn = BUILTINS
+            .iter()
+            .find(|builtin| builtin.program_id == system_program::id())
+            .expect("system builtin must exist in BUILTINS")
+            .register_fn;
+        svm.add_builtin(task42_deployed_program_id(), register_fn);
+        svm
+    }
+
+    fn task42_funded_payer(svm: &mut Hpsvm) -> Keypair {
+        let payer = Keypair::new();
+        svm.airdrop(&payer.pubkey(), 1_000_000_000).unwrap();
+        payer
+    }
+
+    fn task42_transfer_tx(svm: &Hpsvm, payer: &Keypair, lamports: u64) -> Transaction {
+        Transaction::new(
+            &[payer],
+            Message::new(
+                &[transfer(&payer.pubkey(), &Address::new_unique(), lamports)],
+                Some(&payer.pubkey()),
+            ),
+            svm.latest_blockhash(),
+        )
+    }
+
+    #[test]
+    fn task42_program_cache_handle_is_shared_across_send_transaction() {
+        let mut svm = task42_vm_with_builtin();
+        let program_id = task42_deployed_program_id();
+        assert!(
+            svm.accounts.has_program_cache_entry(&program_id),
+            "deployed builtin must resolve from the cache before any transaction"
+        );
+        let before = svm.accounts.shared_programs_cache();
+
+        let payer = task42_funded_payer(&mut svm);
+        svm.send_transaction(task42_transfer_tx(&svm, &payer, 64)).unwrap();
+
+        let after = svm.accounts.shared_programs_cache();
+        assert!(
+            Arc::ptr_eq(&before, &after),
+            "program cache handle must be shared (Arc::clone), not deep-cloned, across a transaction"
+        );
+        assert!(
+            svm.accounts.has_program_cache_entry(&program_id),
+            "deployed builtin must still resolve from the shared cache after a transaction"
+        );
+    }
+
+    #[test]
+    fn task42_program_cache_handle_is_shared_across_batch_stage() {
+        let mut svm = task42_vm_with_builtin();
+        let program_id = task42_deployed_program_id();
+        let payer_a = task42_funded_payer(&mut svm);
+        let payer_b = task42_funded_payer(&mut svm);
+        let before = svm.accounts.shared_programs_cache();
+
+        // Distinct payers/recipients are conflict-free, so both land in one
+        // stage executed on rayon worker VMs cloned from this VM's state.
+        let txs = vec![
+            VersionedTransaction::from(task42_transfer_tx(&svm, &payer_a, 10)),
+            VersionedTransaction::from(task42_transfer_tx(&svm, &payer_b, 20)),
+        ];
+        let result = svm.send_transaction_batch(txs).unwrap();
+
+        assert_eq!(result.results.len(), 2);
+        assert!(result.results.iter().all(|r| r.is_ok()));
+        let after = svm.accounts.shared_programs_cache();
+        assert!(
+            Arc::ptr_eq(&before, &after),
+            "program cache handle must stay shared across a batch stage"
+        );
+        assert!(
+            svm.accounts.has_program_cache_entry(&program_id),
+            "deployed builtin must still resolve from the shared cache after a batch"
+        );
+    }
+
+    #[test]
+    fn task42_vm_clone_shares_the_program_cache_handle() {
+        let svm = task42_vm_with_builtin();
+        let worker = svm.clone();
+        assert!(
+            Arc::ptr_eq(
+                &svm.accounts.shared_programs_cache(),
+                &worker.accounts.shared_programs_cache()
+            ),
+            "VM clones (batch workers, simulates) must share the program cache instead of deep-cloning it"
+        );
+    }
+
+    #[test]
+    fn task42_program_still_resolves_after_failed_and_discarded_transactions() {
+        let mut svm = task42_vm_with_builtin();
+        let program_id = task42_deployed_program_id();
+        let before = svm.accounts.shared_programs_cache();
+        let payer = task42_funded_payer(&mut svm);
+
+        // Discard a staged success: the overlay rolls back, the cache must be
+        // intact.
+        let staged =
+            svm.transact(task42_transfer_tx(&svm, &payer, 32)).expect("transact must stage");
+        assert!(staged.discard().is_ok());
+        assert!(Arc::ptr_eq(&before, &svm.accounts.shared_programs_cache()));
+        assert!(svm.accounts.has_program_cache_entry(&program_id));
+
+        // Fail at runtime (insufficient funds): the cache must be intact.
+        let failing = task42_transfer_tx(&svm, &payer, u64::MAX);
+        assert!(svm.send_transaction(failing).is_err());
+        assert!(Arc::ptr_eq(&before, &svm.accounts.shared_programs_cache()));
+        assert!(
+            svm.accounts.has_program_cache_entry(&program_id),
+            "deployed builtin must still resolve after failed/discarded transactions"
+        );
     }
 }

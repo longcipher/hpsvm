@@ -1,0 +1,7 @@
+error: expected a function `fn name(ctx: &mut SvmInstructionCtx) -> Result<(), InstructionError>`; `#[svm_instruction]` decorates free functions only
+ --> tests/ui/non_function.rs:5:1
+  |
+5 | #[svm_instruction(program_id = "84LtecYhx229KabnaiMixiuD5Tey4bBo6N4yzZ81Vzpz", compute_units = 150)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `svm_instruction` (in Nightly builds, run with -Z macro-backtrace for more info)

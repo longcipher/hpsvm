@@ -1,4 +1,4 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{collections::HashSet, marker::PhantomData, sync::Arc};
 
 use rayon::prelude::*;
 use solana_address::Address;
@@ -8,9 +8,9 @@ use solana_transaction_error::TransactionError;
 use thiserror::Error;
 
 use crate::{
-    AccountSourceError, CommitDelta, HPSVM, TransactionOrigin, accounts_db::AccountsDb,
-    apply_commit_delta, error::HPSVMError, history::TransactionHistory, next_vm_instance_id,
-    outcome_into_result_and_delta, types::TransactionResult,
+    AccountSourceError, StateChangeSet, Svm, SvmTypesHost, TransactionOrigin,
+    account_source::AccountSourceErrorKind, accounts_db::AccountsDb, apply_commit_delta,
+    error::HPSVMError, history::TransactionHistory, types::TransactionResult,
 };
 
 /// A conflict-free stage in a transaction batch plan.
@@ -98,7 +98,7 @@ impl Default for HpsvmRuntimeState {
 }
 
 impl HpsvmRuntimeState {
-    fn from_vm(vm: &HPSVM) -> Self {
+    fn from_vm<T: SvmTypesHost>(vm: &Svm<'_, T>) -> Self {
         Self { accounts: Arc::new(vm.accounts.clone()), history: Arc::new(vm.history.clone()) }
     }
 }
@@ -109,14 +109,14 @@ struct BatchExecutionSnapshot {
 }
 
 impl BatchExecutionSnapshot {
-    fn from_vm(vm: &HPSVM) -> Self {
+    fn from_vm<T: SvmTypesHost>(vm: &Svm<'_, T>) -> Self {
         Self { runtime: HpsvmRuntimeState::from_vm(vm) }
     }
 }
 
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
-pub(crate) fn plan_transaction_batch(
-    vm: &HPSVM,
+pub(crate) fn plan_transaction_batch<T: SvmTypesHost>(
+    vm: &Svm<'_, T>,
     txs: &[VersionedTransaction],
 ) -> Result<TransactionBatchPlan, TransactionBatchError> {
     let mut stages = Vec::<ScheduledTransactionBatchStage>::new();
@@ -148,8 +148,8 @@ pub(crate) fn plan_transaction_batch(
 }
 
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
-pub(crate) fn send_transaction_batch(
-    vm: &mut HPSVM,
+pub(crate) fn send_transaction_batch<T: SvmTypesHost>(
+    vm: &mut Svm<'_, T>,
     transactions: Vec<VersionedTransaction>,
 ) -> Result<TransactionBatchExecutionResult, TransactionBatchError> {
     let plan = plan_transaction_batch(vm, &transactions)?;
@@ -165,17 +165,39 @@ pub(crate) fn send_transaction_batch(
             continue;
         }
 
+        // Task 4.3 (AD-07): prewarm the stage read-set with a single batched
+        // source load, so workers clone an already-warm overlay instead of
+        // issuing per-transaction source round-trips. Single-transaction
+        // stages skip this: they run serially on the live overlay, which is
+        // warm by construction.
+        let read_set = stage_read_set(stage, &transactions);
+        if let Err(db_error) = vm.accounts.prewarm(&read_set) {
+            // `prewarm` only fails on the batched source load, which implies a
+            // non-empty missing set and hence a non-empty read set. A batched
+            // load cannot name the failing key, so attribute the error to the
+            // stage head (first transaction, read-set head). The `DbError`
+            // still carries the fatal classification for future conflict
+            // logic; the legacy `TransactionBatchError` shape keeps the
+            // concrete `AccountSourceError`, recovered by downcast.
+            let index = stage.transaction_indexes[0];
+            let pubkey = read_set[0];
+            let source =
+                db_error.downcast_ref::<AccountSourceError>().cloned().unwrap_or_else(|| {
+                    AccountSourceError::with_kind(
+                        AccountSourceErrorKind::Other,
+                        db_error.to_string(),
+                    )
+                });
+            return Err(TransactionBatchError::AccountSource { index, pubkey, source });
+        }
+
         let mut stage_results =
             execute_transaction_batch_stage(vm, stage_index, stage, &transactions);
         stage_results.sort_by_key(|result| result.index);
 
         for stage_result in stage_results {
-            let mutates_state = stage_result.delta.mutates_state();
             apply_commit_delta(&mut vm.accounts, &mut vm.history, stage_result.delta)
                 .expect("batch stage merge should only apply valid account states");
-            if mutates_state {
-                vm.invalidate_execution_outcomes();
-            }
             results[stage_result.index] = Some(stage_result.result);
         }
     }
@@ -189,12 +211,39 @@ pub(crate) fn send_transaction_batch(
     Ok(TransactionBatchExecutionResult { plan, results })
 }
 
+/// Union of static account keys referenced by a stage's transactions.
+///
+/// This is the AD-07 read-set adaptation: the public plan carries only
+/// `transaction_indexes` (lock sets are consumed at plan time), so the
+/// prewarm set is re-derived from each stage transaction's static keys.
+/// Lookup-table dynamic addresses are excluded — planning already resolved
+/// them against the source during sanitize, and legacy transactions have no
+/// dynamic addresses at all. Keys absent here simply fall through to per-key
+/// source loads during execution: prewarm is purely an optimization and never
+/// changes execution semantics.
+fn stage_read_set(
+    stage: &TransactionBatchStage,
+    transactions: &[VersionedTransaction],
+) -> Vec<Address> {
+    let mut seen = HashSet::new();
+    let mut union = Vec::new();
+    for &index in &stage.transaction_indexes {
+        let Some(tx) = transactions.get(index) else { continue };
+        for key in tx.message.static_account_keys() {
+            if seen.insert(*key) {
+                union.push(*key);
+            }
+        }
+    }
+    union
+}
+
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
-fn sanitize_transaction_for_batch(
-    vm: &HPSVM,
+fn sanitize_transaction_for_batch<T: SvmTypesHost>(
+    vm: &Svm<'_, T>,
     tx: VersionedTransaction,
 ) -> Result<SanitizedTransaction, BatchSanitizeError> {
-    let result = if vm.cfg.sigverify {
+    let result = if vm.version.sigverify {
         vm.sanitize_transaction(tx)
     } else {
         vm.sanitize_transaction_no_verify(tx)
@@ -218,12 +267,12 @@ fn sanitize_transaction_for_batch(
 /// indexes across workers leaves most threads idle while the unluckiest chunk
 /// finishes. Work stealing keeps every worker busy until the stage drains.
 ///
-/// [`rayon::iter::ParallelIterator::map_init`] builds the per-worker [`HPSVM`]
+/// [`rayon::iter::ParallelIterator::map_init`] builds the per-worker [`Svm`]
 /// clone lazily, once per Rayon worker thread rather than once per transaction,
 /// which preserves the amortized setup cost of the previous chunked design.
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
-fn execute_transaction_batch_stage(
-    vm: &HPSVM,
+fn execute_transaction_batch_stage<T: SvmTypesHost>(
+    vm: &Svm<'_, T>,
     stage_index: usize,
     stage: &TransactionBatchStage,
     transactions: &[VersionedTransaction],
@@ -246,8 +295,8 @@ fn execute_transaction_batch_stage(
             |local, &index| {
                 local.inspection_origin =
                     TransactionOrigin::Batch { stage_index, transaction_index: index };
-                let (result, delta) = outcome_into_result_and_delta(
-                    local.transact(transactions[index].clone()),
+                let (result, delta) = crate::commit::detached_into_result_and_state_change_set(
+                    local.transact_detached(transactions[index].clone()),
                     local.history.is_enabled(),
                 );
                 BatchStageResult { index, result, delta }
@@ -260,31 +309,41 @@ fn execute_transaction_batch_stage(
 ///
 /// # Performance note
 ///
-/// This performs a full clone of `AccountsDb` and `TransactionHistory` from the
-/// `Arc`-wrapped runtime state. For workloads with large account sets this can
-/// dominate batch setup time. A future optimization would introduce COW
-/// (copy-on-write) semantics so that read-only workers share backing storage and
-/// only fork on mutation.
+/// This clones the account overlay and `TransactionHistory` from the
+/// `Arc`-wrapped runtime state, while the committed program cache is shared
+/// through its `Arc` handle (no deep clone). For workloads with large account
+/// sets the overlay clone can dominate batch setup time. A future
+/// optimization would introduce COW (copy-on-write) semantics so that
+/// read-only workers share backing storage and only fork on mutation.
 #[inline]
-fn worker_vm(vm: &HPSVM, runtime: HpsvmRuntimeState, origin: TransactionOrigin) -> HPSVM {
-    HPSVM {
+fn worker_vm<T: SvmTypesHost>(
+    vm: &Svm<'_, T>,
+    runtime: HpsvmRuntimeState,
+    origin: TransactionOrigin,
+) -> Svm<'static, T> {
+    Svm {
         accounts: (*runtime.accounts).clone(),
         airdrop_kp: vm.airdrop_kp,
         builtins_loaded: vm.builtins_loaded,
         default_programs_loaded: vm.default_programs_loaded,
         spl_programs_loaded: vm.spl_programs_loaded,
-        cfg: vm.cfg.clone(),
+        version: vm.version.clone(),
         feature_accounts_loaded: vm.feature_accounts_loaded,
-        inspector: vm.inspector.clone(),
+        // Parallel workers run with no inspector: the boxed inspector
+        // cannot be cloned, and sharing one box across rayon threads would
+        // serialize execution on its lock. Only the serial single-transaction
+        // stage path (which runs on the live VM) fires hooks; parallel-stage
+        // transactions never reach them.
+        inspector: parking_lot::Mutex::new(None),
         inspection_origin: origin,
         reserved_account_keys: vm.reserved_account_keys.clone(),
         runtime_registry: vm.runtime_registry.clone(),
-        instance_id: next_vm_instance_id(),
-        state_version: vm.state_version,
+        registry: vm.registry.clone(),
         block_env: vm.block_env,
         history: (*runtime.history).clone(),
-        runtime_env: vm.runtime_env,
+        precompiles: Arc::clone(&vm.precompiles),
         sysvars_loaded: vm.sysvars_loaded,
+        _type_family: PhantomData,
         #[cfg(feature = "invocation-inspect-callback")]
         invocation_inspect_callback: vm.invocation_inspect_callback.clone(),
         #[cfg(feature = "invocation-inspect-callback")]
@@ -301,15 +360,15 @@ struct ScheduledTransactionBatchStage {
 struct BatchStageResult {
     index: usize,
     result: TransactionResult,
-    delta: CommitDelta,
+    delta: StateChangeSet,
 }
 
 impl BatchStageResult {
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    fn new(
+    fn new<T: SvmTypesHost>(
         stage_index: usize,
         index: usize,
-        vm: &HPSVM,
+        vm: &Svm<'_, T>,
         snapshot: BatchExecutionSnapshot,
         tx: VersionedTransaction,
     ) -> Self {
@@ -318,8 +377,10 @@ impl BatchStageResult {
             snapshot.runtime,
             TransactionOrigin::Batch { stage_index, transaction_index: index },
         );
-        let (result, delta) =
-            outcome_into_result_and_delta(local.transact(tx), local.history.is_enabled());
+        let (result, delta) = crate::commit::detached_into_result_and_state_change_set(
+            local.transact_detached(tx),
+            local.history.is_enabled(),
+        );
 
         Self { index, result, delta }
     }
@@ -380,7 +441,9 @@ mod tests {
     use solana_transaction_error::TransactionError;
 
     use super::*;
-    use crate::{CommitDelta, HPSVM, apply_commit_delta, types::TransactionMetadata};
+    use crate::{
+        BaseSvmTypes, StateChangeSet, Svm, apply_commit_delta, types::TransactionMetadata,
+    };
 
     #[test]
     fn commit_delta_merges_runtime_updates() {
@@ -399,10 +462,10 @@ mod tests {
             fee: 5000,
             ..Default::default()
         });
-        let delta = CommitDelta::new(
-            vec![(address, after.clone())],
-            Some((signature, history_entry.clone())),
-        );
+        let delta = StateChangeSet {
+            post_accounts: vec![(address, after.clone())],
+            history_entry: Some((signature, history_entry.clone())),
+        };
 
         apply_commit_delta(&mut accounts, &mut history, delta)
             .expect("commit delta merge should apply valid state");
@@ -413,7 +476,7 @@ mod tests {
 
     #[test]
     fn batch_stage_result_returns_transaction_error_when_lookup_table_becomes_unsanitizable() {
-        let mut svm = HPSVM::new();
+        let mut svm = Svm::<BaseSvmTypes>::new();
         let authority = Keypair::new();
         let lookup_user = Keypair::new();
         let authority_pk = authority.pubkey();
@@ -470,7 +533,7 @@ mod tests {
 
     #[test]
     fn batch_stage_preserves_per_transaction_origin_under_work_stealing() {
-        let mut svm = HPSVM::new();
+        let mut svm = Svm::<BaseSvmTypes>::new();
         let blockhash = svm.latest_blockhash();
 
         let senders: Vec<Keypair> = (0..8).map(|_| Keypair::new()).collect();
@@ -503,7 +566,7 @@ mod tests {
 
     #[test]
     fn batch_ten_conflict_free_transactions_produce_correct_balances() {
-        let mut svm = HPSVM::new();
+        let mut svm = Svm::<BaseSvmTypes>::new();
         let blockhash = svm.latest_blockhash();
 
         let initial_balance: u64 = 1_000_000_000;

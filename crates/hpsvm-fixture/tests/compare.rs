@@ -22,7 +22,7 @@ fn compare_can_ignore_unselected_accounts() {
         svm.latest_blockhash(),
     );
 
-    let baseline = ExecutionSnapshot::from_outcome(&svm.transact(tx));
+    let baseline = ExecutionSnapshot::from_outcome(&svm.transact_detached(tx));
     let mut candidate = baseline.clone();
     let payer_account = candidate
         .post_accounts
@@ -58,7 +58,7 @@ fn compare_presets_only_differ_on_compute_units() {
         svm.latest_blockhash(),
     );
 
-    let baseline = ExecutionSnapshot::from_outcome(&svm.transact(tx));
+    let baseline = ExecutionSnapshot::from_outcome(&svm.transact_detached(tx));
     let mut candidate = baseline.clone();
     candidate.compute_units_consumed = candidate.compute_units_consumed.saturating_add(1);
 

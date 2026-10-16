@@ -1,7 +1,7 @@
-//! Loader operations for the HPSVM.
+//! Loader operations for [`Svm`](crate::Svm).
 //!
 //! This module provides helpers for working with the BPF loader v3 (upgradeable loader)
-//! when constructing tests with [`crate::HPSVM`]. Enable via the `loader` feature.
+//! when constructing tests with [`crate::Hpsvm`]. Enable via the `loader` feature.
 
 use solana_address::Address;
 use solana_keypair::Keypair;
@@ -12,7 +12,7 @@ use solana_signer::Signer;
 use solana_transaction::{InstructionError, Transaction};
 use solana_transaction_error::TransactionError;
 
-use crate::{HPSVM, types::FailedTransactionMetadata};
+use crate::{Svm, SvmTypesHost, types::FailedTransactionMetadata};
 
 const CHUNK_SIZE: usize = 512;
 
@@ -24,8 +24,8 @@ fn loader_instruction_error(source: InstructionError) -> FailedTransactionMetada
 }
 
 /// Set the upgrade authority for an upgradeable program
-pub fn set_upgrade_authority(
-    svm: &mut HPSVM,
+pub fn set_upgrade_authority<T: SvmTypesHost>(
+    svm: &mut Svm<'_, T>,
     from_keypair: &Keypair,
     program_address: &Address,
     current_authority_keypair: &Keypair,
@@ -52,8 +52,8 @@ pub fn set_upgrade_authority(
     Ok(())
 }
 
-fn load_upgradeable_buffer(
-    svm: &mut HPSVM,
+fn load_upgradeable_buffer<T: SvmTypesHost>(
+    svm: &mut Svm<'_, T>,
     payer_kp: &Keypair,
     program_bytes: &[u8],
 ) -> Result<Address, FailedTransactionMetadata> {
@@ -101,8 +101,8 @@ fn load_upgradeable_buffer(
 }
 
 /// Deploy an upgradeable program
-pub fn deploy_upgradeable_program(
-    svm: &mut HPSVM,
+pub fn deploy_upgradeable_program<T: SvmTypesHost>(
+    svm: &mut Svm<'_, T>,
     payer_kp: &Keypair,
     program_kp: &Keypair,
     program_bytes: &[u8],
@@ -136,16 +136,16 @@ pub fn deploy_upgradeable_program(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::TransactionMetadata;
+    use crate::{Hpsvm, types::TransactionMetadata};
 
     /// Builds a VM that can deploy SBPF v0 programs.
     ///
-    /// `HPSVM::new()` enables every feature, including
+    /// `Hpsvm::new()` enables every feature, including
     /// `disable_sbpf_v0_v1_v2_deployment`, which blocks the v0 deployments the
     /// loader helpers exist to exercise, so these tests build against the default
     /// feature set instead.
-    fn deployable_vm() -> HPSVM {
-        HPSVM::builder()
+    fn deployable_vm() -> Hpsvm {
+        Hpsvm::builder()
             .with_feature_set(agave_feature_set::FeatureSet::default())
             .with_builtins()
             .with_lamports(1_000_000_000_000_000)
@@ -154,7 +154,7 @@ mod tests {
             .expect("the default builder configuration must succeed")
     }
 
-    fn funded(lamports: u64) -> (HPSVM, Keypair) {
+    fn funded(lamports: u64) -> (Hpsvm, Keypair) {
         let mut svm = deployable_vm();
         let payer = Keypair::new();
         svm.airdrop(&payer.pubkey(), lamports).unwrap();

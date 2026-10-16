@@ -14,6 +14,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [package.metadata.cargo-shear]
 ignored = ["solana-short-vec", "solana-wincode-varint"]
+ignored-paths = ["tests/ui/*.rs"]
 
 [features]
 internal-test = []
@@ -45,6 +46,7 @@ agave-precompiles = { workspace = true, optional = true, features = [
 agave-reserved-account-keys = { workspace = true, features = [
     "agave-unstable-api",
 ] }
+auto_impl.workspace = true
 hashbrown = { workspace = true, optional = true }
 hex = { workspace = true, optional = true }
 hotpath = { workspace = true, optional = true, features = ["hotpath"] }
@@ -123,6 +125,7 @@ tracing.workspace = true
 [dev-dependencies]
 criterion.workspace = true
 ed25519-dalek.workspace = true
+hpsvm-macros.workspace = true
 hpsvm-test-support.workspace = true
 k256.workspace = true
 proptest.workspace = true
@@ -141,6 +144,7 @@ solana-vote-interface = { workspace = true, features = ["wincode", "bincode"] }
 spl-associated-token-account-interface.workspace = true
 spl-token-interface.workspace = true
 test-log.workspace = true
+trybuild.workspace = true
 # `solana-config-interface` exposes its instruction helpers for both `bincode` and
 # `wincode`, and `wincode` wins when both features are on. The `fork` feature pulls
 # in `solana-account-decoder`, which turns `wincode` on, so config-account tests must
@@ -157,6 +161,10 @@ required-features = ["fork"]
 
 [[test]]
 name = "precompiles"
+required-features = ["precompiles"]
+
+[[test]]
+name = "precompile_registry"
 required-features = ["precompiles"]
 
 [[test]]

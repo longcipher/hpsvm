@@ -4,13 +4,13 @@ use solana_keypair::Keypair;
 use solana_signer::{Signer, signers::Signers};
 
 use super::{TOKEN_ID, get_multisig_signers, spl_token::instruction::revoke};
-use crate::{HPSVM, types::FailedTransactionMetadata};
+use crate::{Svm, SvmTypesHost, types::FailedTransactionMetadata};
 
 /// ### Description
 /// Builder for the [`revoke`] instruction.
 #[derive(Debug)]
-pub struct Revoke<'a> {
-    svm: &'a mut HPSVM,
+pub struct Revoke<'a, 's, T: SvmTypesHost> {
+    svm: &'a mut Svm<'s, T>,
     payer: &'a Keypair,
     source: &'a Address,
     signers: SmallVec<[&'a Keypair; 1]>,
@@ -18,9 +18,9 @@ pub struct Revoke<'a> {
     token_program_id: Option<&'a Address>,
 }
 
-impl<'a> Revoke<'a> {
+impl<'a, 's, T: SvmTypesHost> Revoke<'a, 's, T> {
     /// Creates a new instance of [`revoke`] instruction.
-    pub fn new(svm: &'a mut HPSVM, payer: &'a Keypair, source: &'a Address) -> Self {
+    pub fn new(svm: &'a mut Svm<'s, T>, payer: &'a Keypair, source: &'a Address) -> Self {
         Revoke {
             svm,
             payer,

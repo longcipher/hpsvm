@@ -1,6 +1,9 @@
 #![allow(missing_docs)]
 #![cfg(feature = "bin-codec")]
 
+#[cfg(feature = "report-io")]
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use hpsvm::HPSVM;
 use hpsvm_fixture::{
     AccountSnapshot, BenchError, CaptureBuilder, Compare, ComputeUnitBencher,
@@ -15,11 +18,13 @@ use solana_signer::Signer;
 use solana_system_interface::instruction::transfer;
 use solana_transaction::versioned::VersionedTransaction;
 
-#[cfg(feature = "report-io")]
 fn unique_temp_dir() -> std::path::PathBuf {
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
     let nanos =
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    std::env::temp_dir().join(format!("hpsvm-fixture-bencher-{nanos}"))
+    std::env::temp_dir().join(format!("hpsvm-fixture-bencher-{pid}-{seq}-{nanos}"))
 }
 
 fn snapshot_account(vm: &HPSVM, address: Address) -> AccountSnapshot {
@@ -44,7 +49,7 @@ fn build_fixture() -> Fixture {
         Message::new(&[transfer(&payer.pubkey(), &recipient, 64)], Some(&payer.pubkey())),
         vm.latest_blockhash(),
     ));
-    let baseline = ExecutionSnapshot::from_outcome(&vm.transact(tx.clone()));
+    let baseline = ExecutionSnapshot::from_outcome(&vm.transact_detached(tx.clone()));
 
     CaptureBuilder::new("runner-transfer")
         .runtime(RuntimeFixtureConfig::new(vm.block_env().slot, None, true, false))

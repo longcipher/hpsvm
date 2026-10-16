@@ -1,3 +1,7 @@
+//! Command-line fixture tools for hpsvm: record a fixture by executing a
+//! transaction against a supplied pre-state, then run, inspect, or compare it.
+//!
+//! See the `record`, `run`, `inspect`, and `compare` subcommands.
 #![allow(clippy::print_stderr, clippy::print_stdout, missing_docs)]
 
 mod config;

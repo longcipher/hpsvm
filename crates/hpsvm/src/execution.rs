@@ -1,6 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 
-use agave_feature_set::{FeatureSet, raise_cpi_nesting_limit_to_8};
+use agave_feature_set::FeatureSet;
 use solana_account::{AccountSharedData, ReadableAccount, WritableAccount};
 use solana_address::Address;
 use solana_compute_budget::compute_budget_limits::ComputeBudgetLimits;
@@ -19,7 +19,7 @@ use solana_transaction_context::{DropOnBailOut, IndexOfAccount, transaction::Tra
 use solana_transaction_error::TransactionError;
 
 use crate::{
-    HPSVM,
+    FeatureGate, InspectMode, Svm, SvmTypesHost, TxFeatureFlags,
     account_source::AccountSourceError,
     accounts_db::AccountSourceTrackingAddressLoader,
     error::HPSVMError,
@@ -43,6 +43,7 @@ struct CheckAndProcessTransactionSuccess<'ix_data> {
     fee: u64,
     payer_key: Option<Address>,
     account_source_failures: Vec<AccountSourceFailure>,
+    inspector_live: bool,
 }
 
 pub(crate) fn map_sanitize_result<F>(
@@ -82,6 +83,9 @@ fn execution_result_if_context(
         fee_payer,
         account_source_failures,
         fatal_error: None,
+        // Set by the caller after construction (see
+        // `execute_sanitized_transaction_impl`).
+        inspector_live: false,
     }
 }
 
@@ -133,16 +137,16 @@ fn get_compute_budget_limits(
     .map_err(|e| ExecutionResult { tx_result: Err(e), ..Default::default() })
 }
 
-fn get_transaction_account_lock_limit(svm: &HPSVM) -> usize {
+fn get_transaction_account_lock_limit(flags: &TxFeatureFlags) -> usize {
     use solana_transaction::sanitized::MAX_TX_ACCOUNT_LOCKS;
-    if svm.cfg.feature_set.is_active(&agave_feature_set::increase_tx_account_lock_limit::id()) {
+    if flags.is_enabled(FeatureGate::IncreaseTxAccountLockLimit) {
         MAX_TX_ACCOUNT_LOCKS
     } else {
         64
     }
 }
 
-impl HPSVM {
+impl<T: SvmTypesHost> Svm<'_, T> {
     fn create_transaction_context(
         &self,
         compute_budget: solana_compute_budget::compute_budget::ComputeBudget,
@@ -184,12 +188,24 @@ impl HPSVM {
         &self,
         tx: VersionedTransaction,
     ) -> Result<SanitizedTransaction, ExecutionResult> {
+        // Planning / inspection callers have no in-flight flags; one load here
+        // keeps the per-call consultation bounded. The execution entries below
+        // load once and use `sanitize_transaction_with_flags` instead.
+        let flags = TxFeatureFlags::load(&self.version.feature_set);
+        self.sanitize_transaction_with_flags(tx, &flags)
+    }
+
+    pub(crate) fn sanitize_transaction_with_flags(
+        &self,
+        tx: VersionedTransaction,
+        flags: &TxFeatureFlags,
+    ) -> Result<SanitizedTransaction, ExecutionResult> {
         let tx = self.sanitize_transaction_no_verify(tx)?;
 
         tx.verify().map_err(|err| ExecutionResult { tx_result: Err(err), ..Default::default() })?;
         SanitizedTransaction::validate_account_locks(
             tx.message(),
-            get_transaction_account_lock_limit(self),
+            get_transaction_account_lock_limit(flags),
         )
         .map_err(|err| ExecutionResult { tx_result: Err(err), ..Default::default() })?;
 
@@ -197,23 +213,24 @@ impl HPSVM {
     }
 
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    fn process_transaction<'a, 'b>(
+    fn process_transaction<'a, 'b, const MODE: InspectMode>(
         &'a self,
         tx: &'b SanitizedTransaction,
         compute_budget_limits: ComputeBudgetLimits,
         log_collector: Rc<RefCell<LogCollector>>,
+        flags: &TxFeatureFlags,
     ) -> Result<CheckAndProcessTransactionSuccess<'b>, ExecutionResult>
     where
         'a: 'b,
     {
         let mut account_source_failures = Vec::new();
         let compute_budget = hotpath_block!("hpsvm::process_transaction::compute_budget", {
-            self.runtime_env.compute_budget.unwrap_or_else(|| {
+            self.version.compute_budget.unwrap_or_else(|| {
                 solana_compute_budget::compute_budget::ComputeBudget {
                     compute_unit_limit: u64::from(compute_budget_limits.compute_unit_limit),
                     heap_size: compute_budget_limits.updated_heap_bytes,
                     ..solana_compute_budget::compute_budget::ComputeBudget::new_with_defaults(
-                        self.cfg.feature_set.is_active(&raise_cpi_nesting_limit_to_8::ID),
+                        flags.is_enabled(FeatureGate::RaiseCpiNestingLimitTo8),
                     )
                 }
             })
@@ -223,18 +240,26 @@ impl HPSVM {
         });
         let message = tx.message();
         let blockhash = message.recent_blockhash();
-        // reload program cache
-        let mut program_cache_for_tx_batch = hotpath_block!(
-            "hpsvm::process_transaction::clone_program_cache",
-            self.accounts.cloned_programs_cache()
+        // Share the committed program cache: only the `Arc` handle is cloned
+        // (a pointer bump) and the write lock is taken for the `&mut` the
+        // `InvokeContext` API requires. The per-transaction `HashMap` deep
+        // clone this replaced was the documented `clone_program_cache`
+        // hot-path cost (REQ-02). The guard is held for the whole execution;
+        // nothing under it re-locks the cache (the entry-presence check below
+        // reads through the guard), and transaction-scratch state is drained
+        // before the guard drops so only committed entries persist.
+        let shared_program_cache = hotpath_block!(
+            "hpsvm::process_transaction::shared_program_cache",
+            self.accounts.shared_programs_cache()
         );
+        let mut program_cache_guard = shared_program_cache.write();
         let mut accumulated_consume_units = 0;
         let account_keys = message.account_keys();
         let prioritization_fee = compute_budget_limits.get_prioritization_fee();
         let fee = hotpath_block!("hpsvm::process_transaction::calculate_fee", {
             solana_fee::calculate_fee(
                 message,
-                self.cfg.fee_structure.lamports_per_signature,
+                self.version.fee_structure.lamports_per_signature,
                 prioritization_fee,
                 FeeFeatures {},
             )
@@ -252,7 +277,7 @@ impl HPSVM {
                         SVMStaticMessage::is_instruction_account(message, i);
                     let mut account = if !is_instruction_account &&
                         !message.is_writable(i) &&
-                        self.accounts.has_program_cache_entry(key)
+                        program_cache_guard.find(key).is_some()
                     {
                         self.accounts
                             .get_account(key)
@@ -346,15 +371,22 @@ impl HPSVM {
             return Err(error);
         }
 
-        let svm_feature_set = self.cfg.feature_set.runtime_features();
+        // `runtime_features` is an agave API taking the full `FeatureSet`;
+        // the hoisted static gates above already cover this transaction's
+        // cached decisions, so no extra `is_active` consultation happens here.
+        let svm_feature_set = self.version.feature_set.runtime_features();
+        // Cloned before `log_collector` moves into the invoke context below:
+        // the inspector `log` hooks drain through this handle after
+        // instruction processing.
+        let log_sink = Rc::clone(&log_collector);
         let mut invoke_context =
             hotpath_block!("hpsvm::process_transaction::build_invoke_context", {
                 InvokeContext::new(
                     &mut context,
-                    &mut program_cache_for_tx_batch,
+                    &mut program_cache_guard,
                     EnvironmentConfig::new(
                         *blockhash,
-                        self.cfg.fee_structure.lamports_per_signature,
+                        self.version.fee_structure.lamports_per_signature,
                         false,
                         self,
                         &svm_feature_set,
@@ -375,10 +407,15 @@ impl HPSVM {
             &invoke_context,
         );
 
-        self.on_transaction_start(tx);
+        // The mode was selected once at the readonly entry
+        // (`execute_readonly`): it already encodes whether the installed
+        // inspector accepted the current origin, so no second consultation
+        // happens here. Under `NoInspector` every dispatcher below resolves
+        // to its empty arm at compile time.
+        self.on_transaction_start::<MODE>(tx);
 
         let tx_result = hotpath_block!("hpsvm::process_transaction::process_message", {
-            process_message(
+            process_message::<MODE, T>(
                 self,
                 message,
                 &program_indices,
@@ -388,7 +425,13 @@ impl HPSVM {
             )
         });
 
-        self.on_transaction_end(&tx_result);
+        if MODE.is_live() {
+            for message in log_sink.borrow().get_recorded_content() {
+                self.on_log::<MODE>(message);
+            }
+        }
+
+        self.on_transaction_end::<MODE>(&tx_result);
 
         #[cfg(feature = "invocation-inspect-callback")]
         self.invocation_inspect_callback.after_invocation(
@@ -396,6 +439,19 @@ impl HPSVM {
             &invoke_context,
             self.enable_register_tracing,
         );
+
+        // Discard transaction-scratch cache state: entries deployed or
+        // loaded mid-transaction (`modified_entries`) plus the per-batch
+        // flags. The pre-Arc code dropped a per-transaction clone here, so
+        // scratch never reached the committed cache; draining preserves that
+        // exactly. Committed updates still flow through account staging
+        // (`sync_accounts` → `add_account` → `replenish`) and checkpoint
+        // rollback (`rebuild_program_cache`), both of which run after this
+        // guard is dropped.
+        program_cache_guard.drain_modified_entries();
+        program_cache_guard.hit_max_limit = false;
+        program_cache_guard.loaded_missing = false;
+        program_cache_guard.merged_modified = false;
 
         Ok(CheckAndProcessTransactionSuccess {
             core: CheckAndProcessTransactionSuccessCore {
@@ -406,6 +462,10 @@ impl HPSVM {
             fee,
             payer_key,
             account_source_failures,
+            // `MODE` is gone after this function returns, so its liveness is
+            // recorded as a plain bool for the commit boundary (see
+            // `ExecutionResult::inspector_live`).
+            inspector_live: MODE.is_live(),
         })
     }
 
@@ -548,50 +608,33 @@ impl HPSVM {
         Ok(())
     }
 
-    pub(crate) fn execute_transaction_no_verify(
-        &mut self,
-        tx: VersionedTransaction,
-        log_collector: Rc<RefCell<LogCollector>>,
-    ) -> ExecutionResult {
-        map_sanitize_result(self.sanitize_transaction_no_verify(tx), |s_tx| {
-            self.execute_sanitized_transaction(&s_tx, log_collector)
-        })
-    }
-
-    pub(crate) fn execute_transaction(
-        &mut self,
-        tx: VersionedTransaction,
-        log_collector: Rc<RefCell<LogCollector>>,
-    ) -> ExecutionResult {
-        map_sanitize_result(self.sanitize_transaction(tx), |s_tx| {
-            self.execute_sanitized_transaction(&s_tx, log_collector)
-        })
-    }
-
-    pub(crate) fn execute_sanitized_transaction(
+    pub(crate) fn execute_sanitized_transaction<const MODE: InspectMode>(
         &self,
         sanitized_tx: &SanitizedTransaction,
         log_collector: Rc<RefCell<LogCollector>>,
+        flags: &TxFeatureFlags,
     ) -> ExecutionResult {
-        self.execute_sanitized_transaction_impl(sanitized_tx, log_collector)
+        self.execute_sanitized_transaction_impl::<MODE>(sanitized_tx, log_collector, flags)
     }
 
-    fn execute_sanitized_transaction_impl(
+    fn execute_sanitized_transaction_impl<const MODE: InspectMode>(
         &self,
         sanitized_tx: &SanitizedTransaction,
         log_collector: Rc<RefCell<LogCollector>>,
+        flags: &TxFeatureFlags,
     ) -> ExecutionResult {
         let CheckAndProcessTransactionSuccess {
             core: CheckAndProcessTransactionSuccessCore { result, compute_units_consumed, context },
             fee,
             payer_key,
             account_source_failures,
-        } = match self.check_and_process_transaction(sanitized_tx, log_collector) {
+            inspector_live,
+        } = match self.check_and_process_transaction::<MODE>(sanitized_tx, log_collector, flags) {
             Ok(value) => value,
             Err(value) => return value,
         };
         if let Some(ctx) = context {
-            execution_result_if_context(
+            let mut outcome = execution_result_if_context(
                 sanitized_tx,
                 ctx,
                 result,
@@ -599,22 +642,26 @@ impl HPSVM {
                 fee,
                 payer_key,
                 account_source_failures,
-            )
+            );
+            outcome.inspector_live = inspector_live;
+            outcome
         } else {
             ExecutionResult {
                 tx_result: result,
                 compute_units_consumed,
                 fee,
                 account_source_failures,
+                inspector_live,
                 ..Default::default()
             }
         }
     }
 
-    fn check_and_process_transaction<'a, 'b>(
+    fn check_and_process_transaction<'a, 'b, const MODE: InspectMode>(
         &'a self,
         sanitized_tx: &'b SanitizedTransaction,
         log_collector: Rc<RefCell<LogCollector>>,
+        flags: &TxFeatureFlags,
     ) -> Result<CheckAndProcessTransactionSuccess<'b>, ExecutionResult>
     where
         'a: 'b,
@@ -626,16 +673,20 @@ impl HPSVM {
             });
         }
         self.maybe_blockhash_check(sanitized_tx)?;
-        let compute_budget_limits = get_compute_budget_limits(sanitized_tx, &self.cfg.feature_set)?;
+        // `process_compute_budget_instructions` is an agave API taking the full
+        // `FeatureSet`; it cannot take `TxFeatureFlags` and performs no
+        // per-gate `is_active` consultation attributable to this crate.
+        let compute_budget_limits =
+            get_compute_budget_limits(sanitized_tx, &self.version.feature_set)?;
         self.maybe_history_check(sanitized_tx)?;
-        self.process_transaction(sanitized_tx, compute_budget_limits, log_collector)
+        self.process_transaction::<MODE>(sanitized_tx, compute_budget_limits, log_collector, flags)
     }
 
     fn maybe_history_check(
         &self,
         sanitized_tx: &SanitizedTransaction,
     ) -> Result<(), ExecutionResult> {
-        if self.cfg.sigverify && self.history.check_transaction(sanitized_tx.signature()) {
+        if self.version.sigverify && self.history.check_transaction(sanitized_tx.signature()) {
             return Err(ExecutionResult {
                 tx_result: Err(TransactionError::AlreadyProcessed),
                 ..Default::default()
@@ -648,29 +699,33 @@ impl HPSVM {
         &self,
         sanitized_tx: &SanitizedTransaction,
     ) -> Result<(), ExecutionResult> {
-        if self.cfg.blockhash_check {
+        if self.version.blockhash_check {
             self.check_transaction_age(sanitized_tx)?;
         }
         Ok(())
     }
 
-    pub(crate) fn execute_transaction_readonly(
+    pub(crate) fn execute_transaction_readonly<const MODE: InspectMode>(
         &self,
         tx: VersionedTransaction,
         log_collector: Rc<RefCell<LogCollector>>,
     ) -> ExecutionResult {
-        map_sanitize_result(self.sanitize_transaction(tx), |s_tx| {
-            self.execute_sanitized_transaction(&s_tx, log_collector)
+        // Single flag load for this transaction; sanitize and execution share it.
+        let flags = TxFeatureFlags::load(&self.version.feature_set);
+        map_sanitize_result(self.sanitize_transaction_with_flags(tx, &flags), |s_tx| {
+            self.execute_sanitized_transaction::<MODE>(&s_tx, log_collector, &flags)
         })
     }
 
-    pub(crate) fn execute_transaction_no_verify_readonly(
+    pub(crate) fn execute_transaction_no_verify_readonly<const MODE: InspectMode>(
         &self,
         tx: VersionedTransaction,
         log_collector: Rc<RefCell<LogCollector>>,
     ) -> ExecutionResult {
+        // Single flag load for this transaction; sanitize and execution share it.
+        let flags = TxFeatureFlags::load(&self.version.feature_set);
         map_sanitize_result(self.sanitize_transaction_no_verify(tx), |s_tx| {
-            self.execute_sanitized_transaction(&s_tx, log_collector)
+            self.execute_sanitized_transaction::<MODE>(&s_tx, log_collector, &flags)
         })
     }
 }

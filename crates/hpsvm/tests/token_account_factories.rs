@@ -84,7 +84,7 @@ fn get_spl_account_reports_short_account_data_without_panicking() {
     )
     .expect("short token account should be inserted");
 
-    let err = get_spl_account::<TokenAccount>(&svm, &account)
+    let err = get_spl_account::<TokenAccount, _>(&svm, &account)
         .expect_err("short account data should be reported as a token error");
 
     assert!(

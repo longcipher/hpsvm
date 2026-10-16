@@ -4,7 +4,7 @@ use solana_keypair::Keypair;
 use solana_signer::{Signer, signers::Signers};
 
 use super::{TOKEN_ID, get_multisig_signers, spl_token::instruction::freeze_account};
-use crate::{HPSVM, types::FailedTransactionMetadata};
+use crate::{Svm, SvmTypesHost, types::FailedTransactionMetadata};
 
 /// ### Description
 /// Builder for the [`freeze_account`] instruction.
@@ -14,8 +14,8 @@ use crate::{HPSVM, types::FailedTransactionMetadata};
 /// - `owner`: `payer` by default.
 /// - `token_program_id`: [`TOKEN_ID`] by default.
 #[derive(Debug)]
-pub struct FreezeAccount<'a> {
-    svm: &'a mut HPSVM,
+pub struct FreezeAccount<'a, 's, T: SvmTypesHost> {
+    svm: &'a mut Svm<'s, T>,
     payer: &'a Keypair,
     mint: &'a Address,
     account: Option<&'a Address>,
@@ -24,9 +24,9 @@ pub struct FreezeAccount<'a> {
     owner: Option<Address>,
 }
 
-impl<'a> FreezeAccount<'a> {
+impl<'a, 's, T: SvmTypesHost> FreezeAccount<'a, 's, T> {
     /// Creates a new instance of [`freeze_account`] instruction.
-    pub fn new(svm: &'a mut HPSVM, payer: &'a Keypair, mint: &'a Address) -> Self {
+    pub fn new(svm: &'a mut Svm<'s, T>, payer: &'a Keypair, mint: &'a Address) -> Self {
         FreezeAccount {
             svm,
             payer,
