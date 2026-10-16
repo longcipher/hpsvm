@@ -154,7 +154,7 @@ pub(crate) struct Accounts {
     /// execution and drains transaction-scratch state afterwards, so workers
     /// cloning this `Accounts` (batch stages, simulates) observe the same
     /// committed entries without ever cloning the map.
-    programs_cache: SharedProgramCache,
+    pub(crate) programs_cache: SharedProgramCache,
     sysvar_cache: SysvarCache,
     environments: Arc<ProgramRuntimeEnvironments>,
     /// Ordered undo log for account state (`inner` + `removed`).

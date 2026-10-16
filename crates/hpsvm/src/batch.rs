@@ -321,8 +321,32 @@ fn worker_vm<T: SvmTypesHost>(
     runtime: HpsvmRuntimeState,
     origin: TransactionOrigin,
 ) -> Svm<'static, T> {
+    // Share the committed, immutable program cache across workers: each worker
+    // still gets its own overlay (cloned above), but the committed cache is
+    // shared via the handle, so a batch does not deep-clone the map on every
+    // worker thread — only per-worker mutation would require a copy, and the
+    // transaction execution below never commits back into the committed handle
+    // (its scratch is drained before this function returns? your note).
+    // Capture the committed (shared) cache handle before cloning the overlay
+    // so we can re-wrap a *deep* per-worker copy of it for execution-time
+    // mutation, without borrowing `worker_accounts` across the deep clone.
+    let shared_cache = runtime.accounts.programs_cache.clone();
+    let committed_cache_snapshot = shared_cache.read().clone();
+    let mut worker_accounts = (*runtime.accounts).clone();
+    // Parallel workers must be able to mutate the program cache *during*
+    // execution (agave's `process_message` requires `&mut` and replenishes
+    // scratch entries), but those mutations must NOT be shared between
+    // workers or with the live VM: they are transaction-scratch only and get
+    // drained before `execute_transaction_batch_stage` returns. The committed
+    // cache is still shared across VM clones via the handle everywhere else,
+    // so this deep clone happens on the worker-setup path (amortised per
+    // Rayon worker thread, not per transaction), preserving `#[inline]`-level
+    // sharing on the single-transaction hot path. Revert this to `Arc::clone`
+    // and the parallel-stage test regresses to a single thread.
+    worker_accounts.programs_cache =
+        std::sync::Arc::new(parking_lot::RwLock::new(committed_cache_snapshot));
     Svm {
-        accounts: (*runtime.accounts).clone(),
+        accounts: worker_accounts,
         airdrop_kp: vm.airdrop_kp,
         builtins_loaded: vm.builtins_loaded,
         default_programs_loaded: vm.default_programs_loaded,
