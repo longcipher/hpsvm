@@ -120,9 +120,16 @@ check:
 publish-check:
   cargo package --workspace --allow-dirty
 
-# Publish all crates to crates.io
+# Publish all crates to crates.io, in dependency order.
 publish:
-  cargo publish --workspace
+  cargo publish -p hpsvm-macros --registry crates-io
+  sleep 20
+  cargo publish -p hpsvm-test-support --registry crates-io || true
+  sleep 20
+  cargo publish -p hpsvm --registry crates-io
+  sleep 20
+  cargo publish -p hpsvm-fixture --registry crates-io --allow-dirty
+  cargo publish -p hpsvm-inspectors --registry crates-io --allow-dirty
 
 # Check for Chinese characters
 check-cn:

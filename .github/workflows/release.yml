@@ -93,6 +93,34 @@ jobs:
           prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') }}
 
       - name: Publish to crates.io
-        run: just publish
+        # Publish in dependency order, with index-propagation retries. `cargo
+        # publish --workspace` (the previous recipe) launches preparation in an
+        # order that does not account for workspace *dev-dependencies* on
+        # publishable crates, leading to "no matching package named ..." failures
+        # for crates that exist on disk but not yet on the index — the same bug
+        # blocked the 0.1.19 release.
+        run: |
+          set -euo pipefail
+          publish_one() {
+            local name="$1"
+            for _ in $(seq 1 30); do
+              if cargo publish -p "$name" --registry crates-io --allow-dirty 2>&1 | tail -20; then
+                echo "Published $name"
+                return 0
+              fi
+              echo "Publish of $name not yet ready, waiting for index..."
+              sleep 15
+            done
+            echo "ERROR: failed to publish $name after retries"
+            return 1
+          }
+
+          publish_one hpsvm-macros
+          publish_one hpsvm-test-support
+          sleep 20
+          publish_one hpsvm
+          sleep 20
+          publish_one hpsvm-fixture
+          publish_one hpsvm-inspectors
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
