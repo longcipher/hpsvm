@@ -3,16 +3,19 @@ resolver = "3"
 members = ["bin/*", "crates/*"]
 
 [workspace.package]
-version = "0.1.20"
+version = "0.2.0"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/longcipher/hpsvm"
 
 [workspace.dependencies]
 # local crates
-hpsvm = { path = "crates/hpsvm", version = "0.1.20" }
-hpsvm-fixture = { path = "crates/hpsvm-fixture", version = "0.1.20", default-features = false }
-hpsvm-test-support = { path = "crates/hpsvm-test-support", version = "0.1.20" }
+hpsvm = { path = "crates/hpsvm", version = "0.2.0" }
+hpsvm-cli = { path = "bin/hpsvm-cli", version = "0.2.0" }
+hpsvm-fixture = { path = "crates/hpsvm-fixture", version = "0.2.0", default-features = false }
+hpsvm-inspectors = { path = "crates/hpsvm-inspectors", version = "0.2.0" }
+hpsvm-macros = { path = "crates/hpsvm-macros", version = "0.2.0" }
+hpsvm-test-support = { path = "crates/hpsvm-test-support", version = "0.2.0" }
 
 # external crates
 #
@@ -40,7 +43,6 @@ ed25519-dalek = "3.0.0"
 hashbrown = "0.17.1"
 hex = "0.4.3"
 hotpath = "0.28.6"
-hpsvm-macros = { path = "crates/hpsvm-macros", version = "0.1.19" }
 k256 = { version = "0.14.0", features = ["arithmetic"] }
 lru = "0.18.5"
 mollusk-svm-fuzz-fixture-firedancer = "0.16.2"
@@ -114,9 +116,9 @@ solana-slot-history = "3.2.0"
 # between it and the BPF ELF.
 solana-stake-interface = "5.1.1"
 solana-svm-callback = "4.5.0-alpha.2"
-solana-svm-log-collector = "4.5.0-alpha.1"
+solana-svm-log-collector = "4.5.0-alpha.2"
 solana-svm-timings = "4.5.0-alpha.2"
-# Held at 6.0.0 even though 7.0.0 is published: agave 4.5.0-alpha.1 is built
+# Held at 6.0.0 even though 7.0.0 is published: agave 4.5.0-alpha.2 is built
 # against 6.0.0, so taking 7.0.0 would put two incompatible copies of the SVM
 # transaction types in one build. Move both together when agave moves.
 solana-svm-transaction = "6.0.0"
@@ -141,7 +143,25 @@ trybuild = "1.0.122"
 wincode = "0.6.3"
 
 [workspace.metadata.cargo-shear]
-ignored = ["solana-short-vec", "solana-wincode-varint"]
+# `solana-short-vec` / `solana-wincode-varint` are version pins only (see the
+# comment at their declaration above). `hpsvm-cli` and `hpsvm-inspectors` are
+# published crates that no workspace member consumes: `hpsvm-cli` is the
+# top-level binary and `hpsvm-inspectors` targets downstream users. Both are
+# declared in `[workspace.dependencies]` so every published crate's version
+# lives in this one file.
+ignored = [
+    "solana-short-vec",
+    "solana-wincode-varint",
+    "hpsvm-cli",
+    "hpsvm-inspectors",
+]
+
+[workspace.lints.cargo]
+# `hpsvm-cli` and `hpsvm-inspectors` are declared in `[workspace.dependencies]`
+# for centralized version management but consumed by no workspace member (see
+# the `[workspace.metadata.cargo-shear]` note above), which this lint reports on
+# every cargo invocation.
+unused_workspace_dependencies = "allow"
 
 [workspace.lints.clippy]
 # Enable pedantic lints for stricter code quality

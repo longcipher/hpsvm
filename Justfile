@@ -125,14 +125,22 @@ check:
 publish-check:
   cargo package --workspace --allow-dirty
 
-# Publish all crates to crates.io, in dependency order.
+# Publish all crates to crates.io, in dependency order (dev-deps included).
+# Mirrors the `Publish to crates.io` step in .github/workflows/release.yml:
+# every workspace member declared in `[workspace.dependencies]` is published,
+# and the cargo-metadata guard there fails the release if the list rots.
 publish:
-  cargo publish -p hpsvm-macros --registry crates-io --no-verify
+  cargo publish -p hpsvm-macros --registry crates-io --allow-dirty --no-verify
   sleep 20
+  cargo publish -p hpsvm-test-support --registry crates-io --allow-dirty --no-verify
   sleep 20
-  cargo publish -p hpsvm --registry crates-io --no-verify
+  cargo publish -p hpsvm --registry crates-io --allow-dirty --no-verify
+  sleep 20
+  cargo publish -p hpsvm-fixture --registry crates-io --allow-dirty --no-verify
   sleep 20
   cargo publish -p hpsvm-inspectors --registry crates-io --allow-dirty --no-verify
+  sleep 20
+  cargo publish -p hpsvm-cli --registry crates-io --allow-dirty --no-verify
 
 # Check for Chinese characters
 check-cn:

@@ -93,12 +93,20 @@ jobs:
           prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') }}
 
       - name: Publish to crates.io
-        # Publish in dependency order, with index-propagation retries. `cargo
-        # publish --workspace` (the previous recipe) launches preparation in an
-        # order that does not account for workspace *dev-dependencies* on
-        # publishable crates, leading to "no matching package named ..." failures
-        # for crates that exist on disk but not yet on the index — the same bug
-        # blocked the 0.1.19 release.
+        # Publish every workspace member declared in `[workspace.dependencies]`,
+        # in dependency order, with index-propagation retries.
+        #
+        # The order must account for workspace *dev-dependencies* on publishable
+        # crates: `cargo publish --workspace` ignores them and fails with
+        # "no matching package named ..." for crates that exist on disk but not
+        # yet on the index — the bug that blocked the 0.1.19 release.
+        #
+        # `--no-verify` skips the packaged-tarball build. Verification would
+        # compile hpsvm-fixture's optional `fd-codec` dependency
+        # (`mollusk-svm-fuzz-fixture-firedancer` 0.16.2, published on crates.io)
+        # against the agave 4.3 line, which does not build on this toolchain
+        # line; the feature is opt-in and guarded by a `compile_error!` in
+        # `src/fd.rs`, so the published crate stays resolvable without it.
         run: |
           set -euo pipefail
           publish_one() {
@@ -125,15 +133,43 @@ jobs:
             return 1
           }
 
-          publish_one hpsvm-macros
-          publish_one hpsvm-test-support
-          sleep 20
-          publish_one hpsvm
-          sleep 20
-          # hpsvm-fixture is skipped here: its optional `fd-codec` transitive
-          # dependency on `mollusk-svm-fuzz-fixture-firedancer` cannot be resolved
-          # on crates.io (the vendored patch is not published), so publishing
-          # would block the release. The crate ships on git checkouts instead.
-          publish_one hpsvm-inspectors
+          # Dependency order (dev-dependencies included):
+          #   hpsvm-macros        no local deps
+          #   hpsvm-test-support  no local deps
+          #   hpsvm               dev-deps on the two above
+          #   hpsvm-fixture       deps: hpsvm
+          #   hpsvm-inspectors    deps: hpsvm
+          #   hpsvm-cli           deps: hpsvm, hpsvm-fixture
+          crates=(
+            hpsvm-macros
+            hpsvm-test-support
+            hpsvm
+            hpsvm-fixture
+            hpsvm-inspectors
+            hpsvm-cli
+          )
+
+          # Guard against omissions: the list must cover every publishable
+          # workspace member. `cargo metadata` reports `publish: null` for
+          # publishable crates and `publish: []` for `publish = false`.
+          expected="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.publish == null) | .name' | sort)"
+          listed="$(printf '%s\n' "${crates[@]}" | sort)"
+          if [ "$listed" != "$expected" ]; then
+            echo "ERROR: publish list does not match the publishable workspace members" >&2
+            echo "--- expected (from cargo metadata) ---" >&2
+            echo "$expected" >&2
+            echo "--- listed ---" >&2
+            echo "$listed" >&2
+            exit 1
+          fi
+
+          last=$((${#crates[@]} - 1))
+          for i in "${!crates[@]}"; do
+            publish_one "${crates[$i]}"
+            if [ "$i" -lt "$last" ]; then
+              sleep 20
+            fi
+          done
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
