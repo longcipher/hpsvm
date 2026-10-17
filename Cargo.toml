@@ -9,19 +9,19 @@ members = ["bin/*", "crates/*"]
 exclude = ["vendor/hpsvm-fd-fixture"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/longcipher/hpsvm"
 
 [workspace.dependencies]
 # local crates
-hpsvm = { path = "crates/hpsvm", version = "0.2.0" }
-hpsvm-cli = { path = "bin/hpsvm-cli", version = "0.2.0" }
-hpsvm-fixture = { path = "crates/hpsvm-fixture", version = "0.2.0", default-features = false }
-hpsvm-inspectors = { path = "crates/hpsvm-inspectors", version = "0.2.0" }
-hpsvm-macros = { path = "crates/hpsvm-macros", version = "0.2.0" }
-hpsvm-test-support = { path = "crates/hpsvm-test-support", version = "0.2.0" }
+hpsvm = { path = "crates/hpsvm", version = "0.2.1" }
+hpsvm-cli = { path = "bin/hpsvm-cli", version = "0.2.1" }
+hpsvm-fixture = { path = "crates/hpsvm-fixture", version = "0.2.1", default-features = false }
+hpsvm-inspectors = { path = "crates/hpsvm-inspectors", version = "0.2.1" }
+hpsvm-macros = { path = "crates/hpsvm-macros", version = "0.2.1" }
+hpsvm-test-support = { path = "crates/hpsvm-test-support", version = "0.2.1" }
 
 # external crates
 #

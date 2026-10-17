@@ -2017,7 +2017,7 @@ dependencies = [
 
 [[package]]
 name = "hpsvm"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "agave-feature-set",
  "agave-precompiles",
@@ -2109,7 +2109,7 @@ dependencies = [
 
 [[package]]
 name = "hpsvm-cli"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "clap",
  "hotpath",
@@ -2149,7 +2149,7 @@ dependencies = [
 
 [[package]]
 name = "hpsvm-fixture"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "hpsvm",
  "hpsvm-fd-fixture",
@@ -2175,7 +2175,7 @@ dependencies = [
 
 [[package]]
 name = "hpsvm-inspectors"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "hpsvm",
  "solana-address 2.9.0",
@@ -2190,7 +2190,7 @@ dependencies = [
 
 [[package]]
 name = "hpsvm-macros"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "bs58",
  "proc-macro2",
@@ -2200,7 +2200,7 @@ dependencies = [
 
 [[package]]
 name = "hpsvm-test-support"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "http"
