@@ -23,16 +23,33 @@ pub struct FixtureExecution {
 pub struct FixtureRunner {
     base_vm: HPSVM,
     program_elfs: HashMap<Address, Vec<u8>>,
+    jit_policy: Option<hpsvm::JitPolicy>,
 }
 
 impl FixtureRunner {
     pub fn new(vm: HPSVM) -> Self {
-        Self { base_vm: vm, program_elfs: HashMap::new() }
+        Self { base_vm: vm, program_elfs: HashMap::new(), jit_policy: None }
     }
 
     pub fn with_program_elf(mut self, program_id: Address, elf: Vec<u8>) -> Self {
         self.program_elfs.insert(program_id, elf);
         self
+    }
+
+    /// Overrides the execution policy for every fixture run.
+    ///
+    /// `None` (default) keeps the base VM's policy. `Some(Off)` forces the
+    /// interpreter even on x86_64 — the equivalence-gate arm. `Some(Eager)`
+    /// is the fidelity reference.
+    pub fn with_jit_policy(mut self, policy: hpsvm::JitPolicy) -> Self {
+        self.jit_policy = Some(policy);
+        self
+    }
+
+    /// Sets the execution policy override (builder-style `with_jit_policy`
+    /// counterpart for `&mut` use).
+    pub fn set_jit_policy(&mut self, policy: hpsvm::JitPolicy) {
+        self.jit_policy = Some(policy);
     }
 
     pub fn run(&mut self, fixture: &Fixture) -> Result<FixtureExecution, FixtureError> {
@@ -75,6 +92,9 @@ impl FixtureRunner {
             }
 
             let mut vm = self.base_vm.clone();
+            if let Some(policy) = self.jit_policy {
+                vm.set_jit_policy(policy);
+            }
             Self::configure_vm(&mut vm, fixture.runtime);
             self.load_programs(&mut vm, &fixture.programs)?;
 
@@ -103,6 +123,9 @@ impl FixtureRunner {
         fixture: &InstructionFixture,
     ) -> Result<ExecutionSnapshot, FixtureError> {
         let mut vm = self.base_vm.clone();
+        if let Some(policy) = self.jit_policy {
+            vm.set_jit_policy(policy);
+        }
         Self::configure_vm(&mut vm, fixture.runtime);
         self.load_programs(&mut vm, &fixture.programs)?;
 

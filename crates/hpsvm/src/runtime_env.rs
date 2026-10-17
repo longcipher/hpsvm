@@ -1,5 +1,4 @@
-//! Runtime-environment construction and the process-wide default-program
-//! executable cache.
+//! Runtime-environment construction.
 //!
 //! `Hpsvm::new()` (and the `with_program_test_defaults` builder path)
 //! repeatedly rebuilds an identical default runtime environment and
@@ -10,28 +9,26 @@
 //! When the configuration matches the exact default (`FeatureSet::all_enabled`,
 //! default compute budget, no register tracing, no custom syscalls) the
 //! runtime environment is immutable and identical across VMs, so a single
-//! `Arc<ProgramRuntimeEnvironments>` is shared process-wide. Verified default
-//! executables (`Arc<ProgramCacheEntry>`) are then memoized keyed by the
-//! shared environment pointer plus the ELF slice identity, letting every VM
-//! after the first skip ELF parsing, verification, and JIT compilation for
-//! the default programs.
+//! `Arc<ProgramRuntimeEnvironments>` is shared process-wide.
+//!
+//! Verified executables are memoized in the process-wide
+//! [`ProgramEntryStore`](crate::programs::entry_store) (slice-pointer fast
+//! path for `include_bytes!` statics plus the content-keyed resident store),
+//! letting every VM after the first skip ELF parsing, verification, and JIT
+//! compilation for already-seen programs.
 //!
 //! Safety: the shared environment is never mutated after creation. Custom
 //! syscall registration and feature-set changes rebuild a fresh environment
 //! and reload programs from account data, leaving the shared cache untouched.
-//! The executable cache is keyed by `Arc` pointer identity of the
+//! The executable caches are keyed by `Arc` pointer identity of the
 //! environment, so only VMs sharing the exact same environment can observe a
-//! cached entry. The ELF slice pointer in the key is stable because the only
-//! producer is `add_program_preverified`, invoked exclusively with
-//! `include_bytes!` statics.
+//! cached entry. The ELF slice pointer in the fast-path key is stable because
+//! the only `CACHED` producer is `add_program_preverified`, invoked
+//! exclusively with `include_bytes!` statics.
 
-use std::{
-    collections::HashMap,
-    sync::{Arc, OnceLock},
-};
+use std::sync::{Arc, OnceLock};
 
 use agave_feature_set::FeatureSet;
-use parking_lot::RwLock;
 use solana_address::Address;
 use solana_compute_budget::compute_budget::ComputeBudget;
 use solana_program_runtime::{
@@ -48,24 +45,10 @@ use crate::{FeatureGate, HPSVMError, Svm, SvmTypesHost, TxFeatureFlags};
 /// Shared default runtime environment, built once per process.
 pub(crate) static DEFAULT_RUNTIME_ENV: OnceLock<Arc<ProgramRuntimeEnvironments>> = OnceLock::new();
 
-/// Cache key for a memoized default-program executable:
-/// `(env_ptr, elf_ptr, elf_len, loader_id)`.
-type DefaultProgramKey = (usize, usize, usize, Address);
-
-/// Memoized verified executables for default programs.
-pub(crate) static DEFAULT_PROGRAM_CACHE: OnceLock<
-    RwLock<HashMap<DefaultProgramKey, Arc<ProgramCacheEntry>>>,
-> = OnceLock::new();
-
-pub(crate) fn default_program_cache()
--> &'static RwLock<HashMap<DefaultProgramKey, Arc<ProgramCacheEntry>>> {
-    DEFAULT_PROGRAM_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
-}
-
 /// Returns the shared default environment pointer iff `envs` *is* the shared
 /// default environment (pointer identity), so only VMs running under it can
 /// reuse memoized executables.
-fn shared_default_env_ptr(envs: &Arc<ProgramRuntimeEnvironments>) -> Option<usize> {
+pub(crate) fn shared_default_env_ptr(envs: &Arc<ProgramRuntimeEnvironments>) -> Option<usize> {
     let shared = DEFAULT_RUNTIME_ENV.get()?;
     Arc::ptr_eq(envs, shared).then_some(Arc::as_ptr(shared) as usize)
 }
@@ -120,7 +103,7 @@ impl<T: SvmTypesHost> Svm<'_, T> {
             let mut loader: BuiltinProgram<InvokeContext<'static, 'static>> =
                 BuiltinProgram::new_loader(config);
             for (_key, (name, value)) in current_runtime.get_function_registry().iter() {
-                let name = std::str::from_utf8(name).unwrap();
+                let name = std::str::from_utf8(name).expect("syscall names are valid UTF-8");
                 loader.register_function(name, value).map_err(|error| {
                     HPSVMError::CustomSyscallRegistration {
                         name: name.to_owned(),
@@ -157,19 +140,20 @@ impl<T: SvmTypesHost> Svm<'_, T> {
             .expect("runtime environment refresh should never fail for internal configuration");
     }
 
-    /// Resolve the [`ProgramCacheEntry`] for a program being loaded, consulting
-    /// the process-wide default-program cache when eligible.
+    /// Resolve the [`ProgramCacheEntry`] for a program being loaded.
     ///
-    /// Cache eligibility requires all of:
-    /// - the caller opted in via `CACHED` (only [`Hpsvm::add_program_preverified`], invoked
-    ///   exclusively with `include_bytes!` statics);
-    /// - the VM is running under the shared default runtime environment (pointer identity), so the
-    ///   memoized executable is valid here;
-    /// - loading at slot 0, so the entry's baked-in slot fields match.
+    /// Lookup order:
+    /// 1. Slice-pointer fast path when eligible (`CACHED`, slot 0, shared default environment) —
+    ///    stable for `include_bytes!` statics.
+    /// 2. Content-keyed resident store keyed by `(env, ELF hash, loader, slot bucket)` — safe for
+    ///    every environment because the key includes the environment `Arc` pointer identity.
+    /// 3. Fresh load: [`load_program_uncompiled`](crate::programs::load_program_uncompiled) under
+    ///    `Lazy`/`Off` on x86_64 (interpreter-first tier), otherwise agave's
+    ///    `ProgramCacheEntry::load` (today's eager path).
     ///
-    /// On a cache hit the expensive `ProgramCacheEntry::load` (ELF parse +
-    /// verify + JIT) is skipped entirely. Misses populate the cache so the next
-    /// default VM reuses the entry.
+    /// On a hit the expensive ELF parse + verify + JIT is skipped entirely.
+    /// Misses populate the resident store (and the fast-path cache when
+    /// eligible) so the next VM reuses the entry.
     pub(crate) fn resolve_program_entry<const CACHED: bool>(
         &self,
         loader_id: &Address,
@@ -177,35 +161,70 @@ impl<T: SvmTypesHost> Svm<'_, T> {
         current_slot: u64,
         program_bytes: &[u8],
     ) -> Result<Arc<ProgramCacheEntry>, HPSVMError> {
-        let cache_key = if CACHED && current_slot == 0 {
-            shared_default_env_ptr(self.accounts.runtime_environments_arc()).map(|env_ptr| {
-                (env_ptr, program_bytes.as_ptr() as usize, program_bytes.len(), *loader_id)
-            })
+        use crate::{
+            accounts_db::IMMEDIATE_DEPLOYMENT_SLOT,
+            programs::{content_key, default_program_cache, program_entry_store},
+        };
+
+        let envs_arc = self.accounts.runtime_environments_arc();
+        let env_ptr = Arc::as_ptr(envs_arc) as usize;
+
+        // Fast path: stable slice identity for default statics.
+        let fast_key = if CACHED && current_slot == 0 {
+            shared_default_env_ptr(envs_arc)
+                .map(|ptr| (ptr, program_bytes.as_ptr() as usize, program_bytes.len(), *loader_id))
         } else {
             None
         };
+        if let Some(key) = fast_key &&
+            let Some(entry) = default_program_cache().read().get(&key).cloned()
+        {
+            return Ok(entry);
+        }
 
-        if let Some(key) = cache_key {
-            let cached = default_program_cache().read().get(&key).cloned();
-            if let Some(entry) = cached {
-                return Ok(entry);
+        // Resident content store: safe for every environment.
+        let store_key = content_key(env_ptr, program_bytes, loader_id, IMMEDIATE_DEPLOYMENT_SLOT);
+        if let Some(entry) = program_entry_store().get(&store_key) {
+            // Backfill the fast path so default VMs keep hitting it first.
+            // Return the fast-path winner to preserve pointer identity under
+            // races (both caches hold the same logical entry).
+            if let Some(key) = fast_key {
+                let winner = default_program_cache()
+                    .write()
+                    .entry(key)
+                    .or_insert_with(|| Arc::clone(&entry))
+                    .clone();
+                return Ok(winner);
             }
+            return Ok(entry);
         }
 
-        let loaded_program = ProgramCacheEntry::load(
-            loader_id,
-            env.clone(),
-            crate::accounts_db::IMMEDIATE_DEPLOYMENT_SLOT,
-            program_bytes,
-            &mut LoadProgramMetrics::default(),
-        )
-        .map_err(HPSVMError::from)?;
-        let arc = Arc::new(loaded_program);
+        let loaded =
+            if self.version.jit_policy.requires_uncompiled_load() && cfg!(target_arch = "x86_64") {
+                crate::programs::load_program_uncompiled(loader_id, env, program_bytes)
+                    .map_err(HPSVMError::from)?
+            } else {
+                ProgramCacheEntry::load(
+                    loader_id,
+                    env.clone(),
+                    crate::accounts_db::IMMEDIATE_DEPLOYMENT_SLOT,
+                    program_bytes,
+                    &mut LoadProgramMetrics::default(),
+                )
+                .map_err(HPSVMError::from)?
+            };
+        let arc = Arc::new(loaded);
 
-        if let Some(key) = cache_key {
-            default_program_cache().write().entry(key).or_insert_with(|| Arc::clone(&arc));
+        // First-writer wins: return the resident entry so concurrent loaders
+        // of the same bytes share one `Arc` (pointer identity).
+        let resident = program_entry_store().insert(store_key, Arc::clone(&arc));
+        if let Some(key) = fast_key {
+            // Fast path mirrors the store winner, not our own load.
+            let winner = Arc::clone(&resident);
+            let cached = default_program_cache().write().entry(key).or_insert(winner).clone();
+            return Ok(cached);
         }
 
-        Ok(arc)
+        Ok(resident)
     }
 }

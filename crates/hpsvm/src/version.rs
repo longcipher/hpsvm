@@ -32,6 +32,7 @@
 //! * log-bytes limit: `Some(10_000)`;
 //! * `sigverify` / `blockhash_check`: `true` (the `Hpsvm::new()` final state);
 //! * `compute_diagnostics`: `true`.
+//! * JIT policy: [`JitPolicy::Eager`](crate::JitPolicy::Eager) (today's behavior).
 //!
 //! Protocol differences between clusters arrive later via [`Version::with_feature`]
 //! overrides, not via the base table.
@@ -108,6 +109,8 @@ pub struct ClusterInfo {
     pub name: &'static str,
 }
 
+use crate::programs::JitPolicy;
+
 /// All execution-shaping configuration in one value.
 ///
 /// `Clone` (not `Copy`): the feature set is reference-counted via `Arc`.
@@ -138,6 +141,11 @@ pub struct Version {
     ///
     /// Carried over from `SvmCfg`.
     pub compute_diagnostics: bool,
+    /// Compiled-program tiering policy.
+    ///
+    /// Defaults to [`JitPolicy::Eager`] (today's behavior). Override per VM
+    /// via [`Version::with_jit_policy`] or the builder's `with_jit_policy`.
+    pub jit_policy: JitPolicy,
 }
 
 /// Process-wide base table, built once. See the module docs for why this is a
@@ -155,6 +163,7 @@ fn build_base_table() -> [Version; 4] {
         sigverify: true,
         blockhash_check: true,
         compute_diagnostics: true,
+        jit_policy: JitPolicy::DEFAULT,
     })
 }
 
@@ -171,6 +180,17 @@ impl Version {
     #[must_use]
     pub fn base(spec_id: ClusterSpecId) -> &'static Self {
         &BASE_VERSIONS.get_or_init(build_base_table)[spec_id as usize]
+    }
+
+    /// Returns a copy of this version with the JIT tiering policy replaced.
+    ///
+    /// The default is [`JitPolicy::Eager`]; `Lazy` opts into
+    /// interpreter-first tiering and `Off` forces the interpreter even on
+    /// x86_64 (diagnostics / equivalence gate).
+    #[must_use]
+    pub const fn with_jit_policy(mut self, policy: JitPolicy) -> Self {
+        self.jit_policy = policy;
+        self
     }
 
     /// Returns a copy of this version with one feature gate flipped.
@@ -387,6 +407,7 @@ mod tests {
             assert!(version.sigverify);
             assert!(version.blockhash_check);
             assert!(version.compute_diagnostics);
+            assert_eq!(version.jit_policy, crate::JitPolicy::Eager);
         }
     }
 

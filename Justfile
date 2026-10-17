@@ -94,16 +94,17 @@ bench-runtime:
   cargo bench -p hpsvm --bench simple_bench -- --noplot --sample-size 10 --measurement-time 1 --warm-up-time 1
   cargo bench -p hpsvm --bench max_perf -- --noplot --sample-size 10 --measurement-time 1 --warm-up-time 1
   cargo bench -p hpsvm --bench core_interfaces -- --noplot --sample-size 10 --measurement-time 1 --warm-up-time 1
+  cargo bench -p hpsvm --bench program_cache -- --noplot --sample-size 10 --measurement-time 1 --warm-up-time 1
 
 # Refresh committed default runtime baselines from the current machine
 bench-runtime-baseline-refresh: bench-runtime
   mkdir -p docs/benchmarks/runtime-baselines
-  python3 scripts/criterion_export.py target/criterion docs/benchmarks/runtime-baselines --include simple_bench --include max_perf --include core_interfaces
+  python3 scripts/criterion_export.py target/criterion docs/benchmarks/runtime-baselines --include simple_bench --include max_perf --include core_interfaces --include program_cache
 
 # Compare a fresh default runtime benchmark run against committed baselines
 bench-runtime-baseline-compare:
   mkdir -p target/runtime-benchmarks
-  python3 scripts/criterion_export.py target/criterion target/runtime-benchmarks --include simple_bench --include max_perf --include core_interfaces
+  python3 scripts/criterion_export.py target/criterion target/runtime-benchmarks --include simple_bench --include max_perf --include core_interfaces --include program_cache
   python3 scripts/criterion_compare.py docs/benchmarks/runtime-baselines target/runtime-benchmarks --output target/runtime-benchmarks/summary.md
 
 # Refresh committed hotpath benchmark baselines from the current machine

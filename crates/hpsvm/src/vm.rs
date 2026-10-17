@@ -61,8 +61,8 @@ use crate::precompiles::load_precompiles;
 use crate::register_tracing::DefaultRegisterTracingCallback;
 use crate::{
     AccountSource, AccountSourceError, AccountsView, BlockEnv, ClusterInfo, ClusterSpecId,
-    CustomSyscallRegistration, Hpsvm, HpsvmBuilder, InspectMode, Inspector, RuntimeLimits, Svm,
-    SvmTypesHost, TransactionOrigin, Version,
+    CustomSyscallRegistration, Hpsvm, HpsvmBuilder, InspectMode, Inspector, JitPolicy,
+    ProgramTierStats, RuntimeLimits, Svm, SvmTypesHost, TransactionOrigin, Version,
     account_source::EmptyAccountSource,
     batch::{
         TransactionBatchError, TransactionBatchExecutionResult, TransactionBatchPlan,
@@ -193,6 +193,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
                     spec_id: ClusterSpecId::MainnetBeta,
                     name: ClusterSpecId::MainnetBeta.name(),
                 },
+                jit_policy: JitPolicy::DEFAULT,
             },
             feature_accounts_loaded: false,
             inspector: Mutex::new(None),
@@ -212,6 +213,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
             precompiles: Arc::new(NativePrecompiles::new()),
             #[cfg(not(feature = "precompiles"))]
             precompiles: Arc::new(NoPrecompiles),
+            tier_promoter: Arc::new(crate::programs::TierPromoter::new(JitPolicy::DEFAULT)),
             _type_family: PhantomData,
             #[cfg(feature = "invocation-inspect-callback")]
             enable_register_tracing: _enable_register_tracing,
@@ -495,6 +497,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
             self.load_spl_programs();
         }
 
+        self.sync_jit_policy();
         self.accounts.rebuild_program_cache().map_err(HPSVMError::from)
     }
 
@@ -536,6 +539,99 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
     /// account diffs and token balances.
     pub const fn set_compute_diagnostics(&mut self, enabled: bool) {
         self.version.compute_diagnostics = enabled;
+    }
+
+    /// **Advanced reconfiguration.** Replaces the compiled-program tiering policy.
+    ///
+    /// `Eager` (default) compiles every program at load time on x86_64.
+    /// `Lazy` interprets until a program crosses its hot threshold, then
+    /// promotes it on a background pool. `Off` forces the interpreter even
+    /// on x86_64 (diagnostics / equivalence gate).
+    pub fn set_jit_policy(&mut self, policy: JitPolicy) {
+        self.version.jit_policy = policy;
+        self.accounts.sync_jit_policy(policy);
+        self.tier_promoter = Arc::new(crate::programs::TierPromoter::new(policy));
+    }
+
+    /// Builder-style policy override, mirroring `with_feature`.
+    ///
+    /// Consumes `self` so call sites can chain it during VM setup.
+    #[must_use]
+    pub fn with_jit_policy(mut self, policy: JitPolicy) -> Self {
+        self.set_jit_policy(policy);
+        self
+    }
+
+    /// Syncs the account load-path policy from the version.
+    ///
+    /// Covers direct `version.jit_policy` assignment bypassing the setter.
+    pub(crate) fn sync_jit_policy(&mut self) {
+        let policy = self.version.jit_policy;
+        if self.accounts.jit_policy() != policy {
+            self.accounts.sync_jit_policy(policy);
+            self.tier_promoter = Arc::new(crate::programs::TierPromoter::new(policy));
+        }
+    }
+
+    /// Returns the compiled-tier execution snapshot.
+    ///
+    /// Assembled from atomics only (agave per-entry `ProgramStatistics` plus
+    /// hpsvm-side promotion counters); never takes a lock on the
+    /// transaction path beyond the short cache-read for the sweep.
+    #[must_use]
+    pub fn program_tier_stats(&self) -> ProgramTierStats {
+        let promotion = self.tier_promoter.stats_handle();
+        ProgramTierStats::collect(
+            self.version.jit_policy,
+            &self.accounts,
+            crate::programs::program_entry_store().len(),
+            &promotion,
+        )
+    }
+
+    /// Post-transaction tier observation (promoter sweep).
+    ///
+    /// Called after each execution; O(entries) atomic reads, off the agave
+    /// path. No-op unless the effective policy is `Lazy` on x86_64.
+    pub(crate) fn observe_tier(&self) {
+        self.tier_promoter.observe(&self.accounts);
+    }
+
+    /// Resolves (and, under `Lazy`, promotes) a program set before execution.
+    ///
+    /// The program-side twin of account `prewarm`: batch stages and fixtures
+    /// front-load the stage's program set so the first transaction never pays
+    /// the load serially. Under `Lazy` the prewarmed set is additionally
+    /// scheduled for promotion. Failures propagate as [`HPSVMError`] with the
+    /// fatal classification preserved.
+    pub fn prewarm_programs(&mut self, program_ids: &[Address]) -> Result<(), HPSVMError> {
+        self.sync_jit_policy();
+        self.accounts.prewarm_programs(program_ids).map_err(HPSVMError::from)?;
+        if self.version.jit_policy.is_lazy() {
+            // Snapshot under the read lock, then promote lock-free: holding
+            // the cache guard across a synchronous `jit_compile` would block
+            // every cache writer for the duration of the compile.
+            let entries: Vec<_> = {
+                let cache = self.accounts.shared_programs_cache();
+                let guard = cache.read();
+                program_ids
+                    .iter()
+                    .filter_map(|program_id| guard.find(program_id))
+                    .filter(|entry| !crate::programs::has_compiled_program(entry))
+                    .collect()
+            };
+            for entry in entries {
+                // Threshold-0 is the deterministic test mode: promote
+                // synchronously so the next transaction observes compiled
+                // code. Otherwise enqueue to the background pool.
+                if self.version.jit_policy.hot_threshold() == Some(0) {
+                    self.tier_promoter.promote_blocking(entry);
+                } else {
+                    self.tier_promoter.promote(entry);
+                }
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn set_sysvars(&mut self) {
@@ -610,6 +706,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
             // reconfigure may have mutated it through the backup's handle.
             // The cache is derived from the overlay, so rebuild it from the
             // restored accounts to recover the pre-call contents.
+            self.sync_jit_policy();
             if let Err(rebuild_error) = self.accounts.rebuild_program_cache() {
                 tracing::error!(
                     ?rebuild_error,
@@ -772,6 +869,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
     /// protocol-consistent state transition.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn set_account(&mut self, address: Address, data: Account) -> Result<(), HPSVMError> {
+        self.sync_jit_policy();
         self.accounts.add_account(address, data.into())?;
         self.sync_block_env_slot();
         Ok(())
@@ -986,6 +1084,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
         program_bytes: &[u8],
         loader_id: &Address,
     ) -> Result<(), HPSVMError> {
+        self.sync_jit_policy();
         let program_id = program_id.into();
         let current_slot = self.accounts.current_slot();
 
@@ -1371,6 +1470,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
         svm: &'svm mut Svm<'host, T>,
         tx: VersionedTransaction,
     ) -> Result<ExecutedTx<'svm, 'host, T>, StagedFailure> {
+        svm.sync_jit_policy();
         let signature = tx.signatures.first().copied().unwrap_or_default();
         let mut detached = match svm.dispatch_detached(tx) {
             Ok(detached) => detached,
@@ -1453,11 +1553,15 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
             bytes_limit: self.version.limits.log_bytes_limit,
             ..Default::default()
         }));
-        if self.inspector_live() {
+        let output = if self.inspector_live() {
             self.execute_readonly_impl::<{ InspectMode::DynInspector }>(tx, log_collector)
         } else {
             self.execute_readonly_impl::<{ InspectMode::NoInspector }>(tx, log_collector)
-        }
+        };
+        // Post-transaction tier sweep: O(entries) atomic reads, off the
+        // agave path. No-op unless the effective policy is `Lazy` on x86_64.
+        self.observe_tier();
+        output
     }
 
     fn execute_readonly_impl<const MODE: InspectMode>(
@@ -1637,6 +1741,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
         });
 
         self.try_refresh_runtime_environments()?;
+        self.sync_jit_policy();
         self.accounts.rebuild_program_cache().map_err(HPSVMError::from)?;
 
         Ok(())
@@ -1851,5 +1956,480 @@ mod tests {
 
         assert!(result.is_ok());
         assert_eq!(svm.get_balance(&recipient), Some(64));
+    }
+}
+
+#[cfg(test)]
+mod jit_parity_tests {
+    use std::sync::Arc;
+
+    use agave_feature_set::FeatureSet;
+    use solana_address::Address;
+    use solana_instruction::Instruction;
+    use solana_keypair::Keypair;
+    use solana_message::{Message, VersionedMessage};
+    use solana_signer::Signer;
+    use solana_transaction::versioned::VersionedTransaction;
+
+    use super::*;
+    use crate::{JitPolicy, ProgramTierStats};
+
+    fn memo_elf_v3() -> &'static [u8] {
+        include_bytes!("../elf/spl_memo-3.0.0.so")
+    }
+
+    fn memo_elf_v1() -> &'static [u8] {
+        include_bytes!("../elf/spl_memo-1.0.0.so")
+    }
+
+    fn fresh_non_default_vm() -> Hpsvm {
+        // `FeatureSet::default()` (all off) never hits the shared default
+        // environment, so each VM gets a fresh `Arc` and a fresh resident
+        // store key — isolating promotion/interpreter counts from other tests
+        // that share the global store.
+        Hpsvm::builder()
+            .with_feature_set(FeatureSet::default())
+            .with_builtins()
+            .with_sysvars()
+            .with_lamports(1_000_000_000)
+            .with_sigverify(true)
+            .with_blockhash_check(true)
+            .build()
+            .expect("non-default VM should build")
+    }
+
+    fn memo_instruction(program_id: Address) -> Instruction {
+        Instruction { program_id, accounts: vec![], data: b"hello jit".to_vec() }
+    }
+
+    fn memo_transaction(svm: &Hpsvm, payer: &Keypair, program_id: Address) -> VersionedTransaction {
+        let ix = memo_instruction(program_id);
+        let msg =
+            Message::new_with_blockhash(&[ix], Some(&payer.pubkey()), &svm.latest_blockhash());
+        VersionedTransaction::try_new(VersionedMessage::Legacy(msg), &[payer])
+            .expect("tx should build")
+    }
+
+    #[test]
+    fn default_vms_share_default_program_executables() {
+        // Phase 0.1: the memo move must preserve cache-hit behavior.
+        let a = Hpsvm::new();
+        let b = Hpsvm::new();
+        let memo_id = solana_address::address!("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
+        let a_entry = a
+            .accounts
+            .shared_programs_cache()
+            .read()
+            .find(&memo_id)
+            .expect("default VM loads memo");
+        let b_entry =
+            b.accounts.shared_programs_cache().read().find(&memo_id).expect("second VM loads memo");
+        assert!(Arc::ptr_eq(&a_entry, &b_entry), "default VMs must share the memoized executable");
+    }
+
+    #[test]
+    fn every_constructor_yields_eager_and_builder_round_trips() {
+        // Phase 0.2: policy as runtime data, default Eager.
+        assert_eq!(Hpsvm::new().version.jit_policy, JitPolicy::Eager);
+        assert_eq!(
+            Hpsvm::builder()
+                .with_program_test_defaults()
+                .build()
+                .expect("build")
+                .version
+                .jit_policy,
+            JitPolicy::Eager
+        );
+        let lazy = JitPolicy::Lazy { hot_threshold: 8 };
+        let vm = Hpsvm::builder()
+            .with_program_test_defaults()
+            .with_jit_policy(lazy)
+            .build()
+            .expect("build with policy");
+        assert_eq!(vm.version.jit_policy, lazy);
+        let off_vm = Hpsvm::new().with_jit_policy(JitPolicy::Off);
+        assert_eq!(off_vm.version.jit_policy, JitPolicy::Off);
+        let mut mutable = Hpsvm::new();
+        mutable.set_jit_policy(lazy);
+        assert_eq!(mutable.version.jit_policy, lazy);
+    }
+
+    #[test]
+    fn uncompiled_load_is_structurally_equal_modulo_compiled() {
+        // Phase 1.1: mirror agave's load minus jit_compile.
+        use solana_program_runtime::{
+            loaded_programs::{ProgramRuntimeEnvironment, ProgramRuntimeEnvironments},
+            program_cache_entry::ProgramCacheEntry,
+            program_metrics::LoadProgramMetrics,
+            solana_sbpf::program::BuiltinProgram,
+        };
+
+        let loader = solana_sdk_ids::bpf_loader::id();
+        let env_inner =
+            ProgramRuntimeEnvironment::from(BuiltinProgram::new_loader(Default::default()));
+        let envs = ProgramRuntimeEnvironments::new(env_inner.clone(), env_inner.clone());
+        let env = envs.get_env_for_execution();
+        let elf = memo_elf_v3();
+
+        let eager = ProgramCacheEntry::load(
+            &loader,
+            env.clone(),
+            crate::accounts_db::IMMEDIATE_DEPLOYMENT_SLOT,
+            elf,
+            &mut LoadProgramMetrics::default(),
+        )
+        .expect("eager load should succeed");
+        let uncompiled = crate::programs::load_program_uncompiled(&loader, env, elf)
+            .expect("uncompiled load should succeed");
+        // The `dev-context-only-utils` PartialEq compares owner, deployment
+        // slot and entry-type discriminant — proving structural identity.
+        assert_eq!(eager, uncompiled);
+        #[cfg(target_arch = "x86_64")]
+        {
+            assert!(
+                crate::programs::has_compiled_program(&eager),
+                "eager entry must be compiled on x86_64"
+            );
+            assert!(
+                !crate::programs::has_compiled_program(&uncompiled),
+                "uncompiled entry must report no compiled program"
+            );
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            assert!(!crate::programs::has_compiled_program(&eager));
+            assert!(!crate::programs::has_compiled_program(&uncompiled));
+        }
+    }
+
+    #[test]
+    fn uncompiled_entry_executes_successfully_interpreted() {
+        // Phase 1.1 execution arm (x86_64 runs interpreted; elsewhere skips).
+        if !cfg!(target_arch = "x86_64") {
+            return;
+        }
+        let mut svm = fresh_non_default_vm().with_jit_policy(JitPolicy::Off);
+        let program_id = Address::new_unique();
+        svm.add_program_with_loader(program_id, memo_elf_v3(), solana_sdk_ids::bpf_loader::id())
+            .expect("add should succeed");
+        // Off must have produced an interpreter-first entry.
+        let entry = svm
+            .accounts
+            .shared_programs_cache()
+            .read()
+            .find(&program_id)
+            .expect("entry must exist");
+        assert!(!crate::programs::has_compiled_program(&entry));
+        let payer = Keypair::new();
+        svm.airdrop(&payer.pubkey(), 10_000_000).unwrap();
+        let tx = memo_transaction(&svm, &payer, program_id);
+        let result = svm.send_transaction(tx);
+        assert!(result.is_ok(), "interpreted execution should succeed: {result:?}");
+    }
+
+    #[test]
+    fn resident_store_hits_misses_and_env_scoping() {
+        // Phase 2.1: content addressing + environment scoping.
+        let mut svm = fresh_non_default_vm();
+        let elf_a = memo_elf_v3();
+        let elf_b = memo_elf_v1();
+        assert_ne!(elf_a, elf_b, "vendored memo ELFs must differ for the miss test");
+
+        let id_a1 = Address::new_unique();
+        let id_a2 = Address::new_unique();
+        svm.add_program_with_loader(id_a1, elf_a, solana_sdk_ids::bpf_loader::id())
+            .expect("add a1");
+        let entry_a1 = svm.accounts.shared_programs_cache().read().find(&id_a1).expect("a1 entry");
+        // Same bytes under the same env re-link the same Arc (different
+        // program id, same content key since the key omits the address).
+        svm.add_program_with_loader(id_a2, elf_a, solana_sdk_ids::bpf_loader::id())
+            .expect("add a2 same bytes");
+        let entry_a2 = svm.accounts.shared_programs_cache().read().find(&id_a2).expect("a2 entry");
+        assert!(
+            Arc::ptr_eq(&entry_a1, &entry_a2),
+            "identical bytes under one env must share the resident entry"
+        );
+
+        // Different valid bytes miss.
+        let id_b = Address::new_unique();
+        svm.add_program_with_loader(id_b, elf_b, solana_sdk_ids::bpf_loader_deprecated::id())
+            .expect("add b");
+        let entry_b = svm.accounts.shared_programs_cache().read().find(&id_b).expect("b entry");
+        assert!(!Arc::ptr_eq(&entry_a1, &entry_b), "different bytes must miss");
+
+        // Same bytes under a different env miss.
+        let mut other = fresh_non_default_vm();
+        let id_other = Address::new_unique();
+        other
+            .add_program_with_loader(id_other, elf_a, solana_sdk_ids::bpf_loader::id())
+            .expect("add other env");
+        let entry_other =
+            other.accounts.shared_programs_cache().read().find(&id_other).expect("other entry");
+        assert!(
+            !Arc::ptr_eq(&entry_a1, &entry_other),
+            "entries must not cross environment identities"
+        );
+    }
+
+    #[test]
+    fn rebuild_relinks_unchanged_programs() {
+        // Phase 2.2: rebuild reuses resident entries for unchanged accounts.
+        let mut svm = fresh_non_default_vm();
+        let elf_a = memo_elf_v3();
+        let elf_b = memo_elf_v1();
+        let id_a = Address::new_unique();
+        let id_b = Address::new_unique();
+        let loader = solana_sdk_ids::bpf_loader::id();
+        svm.add_program_with_loader(id_a, elf_a, loader).expect("add a");
+        svm.add_program_with_loader(id_b, elf_a, loader).expect("add b same bytes");
+        let before_a = svm.accounts.shared_programs_cache().read().find(&id_a).expect("a before");
+        let before_b = svm.accounts.shared_programs_cache().read().find(&id_b).expect("b before");
+        assert!(Arc::ptr_eq(&before_a, &before_b));
+
+        // Upgrade `id_b` to different bytes via direct account surgery, then
+        // rebuild: `id_a` must re-link, `id_b` must be fresh.
+        // `add_program` for bpf_loader writes the ELF directly into the
+        // program account, so overwriting via `set_account` with new bytes
+        // simulates an upgrade without the loader-v3 programdata indirection.
+        {
+            use solana_account::AccountSharedData;
+            let lamports = svm.minimum_balance_for_rent_exemption(elf_b.len());
+            let mut upgraded = AccountSharedData::new(lamports, elf_b.len(), &loader);
+            upgraded.set_executable(true);
+            upgraded.set_data_from_slice(elf_b);
+            svm.accounts.add_account_no_checks(id_b, upgraded);
+            // `add_account_no_checks` bypasses program loading; rebuild below
+            // is what reloads (mirrors the discard path).
+        }
+        svm.sync_jit_policy();
+        svm.accounts.rebuild_program_cache().expect("rebuild should succeed");
+        let after_a = svm.accounts.shared_programs_cache().read().find(&id_a).expect("a after");
+        let after_b = svm.accounts.shared_programs_cache().read().find(&id_b).expect("b after");
+        assert!(
+            Arc::ptr_eq(&before_a, &after_a),
+            "unchanged program must re-link the resident entry"
+        );
+        assert!(!Arc::ptr_eq(&before_b, &after_b), "upgraded program must resolve a fresh entry");
+    }
+
+    #[test]
+    fn lazy_zero_promotes_synchronously_and_stats_reflect_it() {
+        // Phase 3.1 (deterministic arm) + Phase 5.1.
+        if !cfg!(target_arch = "x86_64") {
+            let svm = fresh_non_default_vm().with_jit_policy(JitPolicy::Lazy { hot_threshold: 0 });
+            let stats = svm.program_tier_stats();
+            assert_eq!(stats.effective_policy, JitPolicy::Off);
+            assert_eq!(stats.promotions_attempted, 0);
+            return;
+        }
+        let mut svm = fresh_non_default_vm().with_jit_policy(JitPolicy::Lazy { hot_threshold: 0 });
+        let program_id = Address::new_unique();
+        svm.add_program_with_loader(program_id, memo_elf_v3(), solana_sdk_ids::bpf_loader::id())
+            .expect("add");
+        // Lazy-0 loads uncompiled.
+        let before = svm.accounts.shared_programs_cache().read().find(&program_id).expect("entry");
+        assert!(!crate::programs::has_compiled_program(&before));
+        let payer = Keypair::new();
+        svm.airdrop(&payer.pubkey(), 10_000_000).unwrap();
+        let tx = memo_transaction(&svm, &payer, program_id);
+        let result = svm.send_transaction(tx);
+        assert!(result.is_ok(), "{result:?}");
+        // Post-transaction sweep promotes synchronously under threshold 0.
+        let after =
+            svm.accounts.shared_programs_cache().read().find(&program_id).expect("entry after");
+        assert!(
+            crate::programs::has_compiled_program(&after),
+            "threshold-0 must promote after first use"
+        );
+        let stats = svm.program_tier_stats();
+        assert_eq!(stats.policy, JitPolicy::Lazy { hot_threshold: 0 });
+        assert_eq!(stats.effective_policy, JitPolicy::Lazy { hot_threshold: 0 });
+        assert!(stats.promotions_attempted >= 1);
+        assert!(stats.promotions_succeeded >= 1);
+        assert!(stats.cache_entries >= 1);
+        assert!(stats.resident_entries >= 1);
+    }
+
+    #[test]
+    fn promotion_failure_leaves_entry_interpreted_and_tx_succeeds() {
+        if !cfg!(target_arch = "x86_64") {
+            return;
+        }
+        let mut svm = fresh_non_default_vm().with_jit_policy(JitPolicy::Lazy { hot_threshold: 0 });
+        let program_id = Address::new_unique();
+        svm.add_program_with_loader(program_id, memo_elf_v3(), solana_sdk_ids::bpf_loader::id())
+            .expect("add");
+        svm.tier_promoter.set_inject_failure(true);
+        let payer = Keypair::new();
+        svm.airdrop(&payer.pubkey(), 10_000_000).unwrap();
+        let tx = memo_transaction(&svm, &payer, program_id);
+        let result = svm.send_transaction(tx);
+        assert!(result.is_ok(), "promotion failure must not fail the transaction: {result:?}");
+        let entry = svm.accounts.shared_programs_cache().read().find(&program_id).expect("entry");
+        assert!(
+            !crate::programs::has_compiled_program(&entry),
+            "failed promotion must leave the entry interpreted"
+        );
+        let stats = svm.program_tier_stats();
+        assert!(stats.promotions_failed >= 1);
+    }
+
+    #[test]
+    fn eager_and_off_never_promote() {
+        let mut eager = fresh_non_default_vm().with_jit_policy(JitPolicy::Eager);
+        let mut off = fresh_non_default_vm().with_jit_policy(JitPolicy::Off);
+        let elf = memo_elf_v3();
+        let loader = solana_sdk_ids::bpf_loader::id();
+        let id_e = Address::new_unique();
+        let id_o = Address::new_unique();
+        eager.add_program_with_loader(id_e, elf, loader).expect("add eager");
+        off.add_program_with_loader(id_o, elf, loader).expect("add off");
+        // Drive one interpreted execution under Off (Eager is already
+        // compiled on x86_64; Off stays interpreted).
+        if cfg!(target_arch = "x86_64") {
+            let payer = Keypair::new();
+            off.airdrop(&payer.pubkey(), 10_000_000).unwrap();
+            let tx = memo_transaction(&off, &payer, id_o);
+            let result = off.send_transaction(tx);
+            assert!(result.is_ok());
+            let entry = off.accounts.shared_programs_cache().read().find(&id_o).expect("off entry");
+            assert!(!crate::programs::has_compiled_program(&entry));
+        }
+        assert_eq!(eager.program_tier_stats().promotions_attempted, 0);
+        assert_eq!(off.program_tier_stats().promotions_attempted, 0);
+        // Repeated sweeps are idempotent (no panic, no promotion).
+        eager.observe_tier();
+        off.observe_tier();
+        assert_eq!(eager.program_tier_stats().promotions_attempted, 0);
+        assert_eq!(off.program_tier_stats().promotions_attempted, 0);
+    }
+
+    #[test]
+    fn prewarm_resolves_and_promotes_under_lazy_zero() {
+        if !cfg!(target_arch = "x86_64") {
+            return;
+        }
+        let mut svm = fresh_non_default_vm().with_jit_policy(JitPolicy::Lazy { hot_threshold: 0 });
+        let program_id = Address::new_unique();
+        svm.add_program_with_loader(program_id, memo_elf_v3(), solana_sdk_ids::bpf_loader::id())
+            .expect("add");
+        let before = svm.accounts.shared_programs_cache().read().find(&program_id).expect("entry");
+        assert!(!crate::programs::has_compiled_program(&before));
+        svm.prewarm_programs(&[program_id]).expect("prewarm should succeed");
+        let after = svm
+            .accounts
+            .shared_programs_cache()
+            .read()
+            .find(&program_id)
+            .expect("entry after prewarm");
+        assert!(crate::programs::has_compiled_program(&after), "Lazy-0 prewarm must promote");
+    }
+
+    #[test]
+    fn tier_stats_are_zeroed_off_target() {
+        let svm = Hpsvm::new();
+        let stats: ProgramTierStats = svm.program_tier_stats();
+        assert_eq!(stats.policy, JitPolicy::Eager);
+        if cfg!(target_arch = "x86_64") {
+            assert_eq!(stats.effective_policy, JitPolicy::Eager);
+        } else {
+            assert_eq!(stats.effective_policy, JitPolicy::Off);
+            assert_eq!(stats.promotions_attempted, 0);
+        }
+    }
+
+    #[test]
+    fn jit_policy_with_round_trips_through_version() {
+        use crate::ClusterSpecId;
+        let base = crate::Version::base(ClusterSpecId::MainnetBeta).clone();
+        assert_eq!(base.jit_policy, JitPolicy::Eager);
+        let lazy = base.with_jit_policy(JitPolicy::Lazy { hot_threshold: 3 });
+        assert_eq!(lazy.jit_policy, JitPolicy::Lazy { hot_threshold: 3 });
+    }
+}
+
+#[cfg(test)]
+mod jit_threshold_boundary_tests {
+    use std::time::{Duration, Instant};
+
+    use solana_address::Address;
+    use solana_keypair::Keypair;
+    use solana_message::{Message, VersionedMessage};
+    use solana_signer::Signer;
+    use solana_transaction::versioned::VersionedTransaction;
+
+    use super::*;
+    use crate::JitPolicy;
+
+    fn memo_elf() -> &'static [u8] {
+        include_bytes!("../elf/spl_memo-3.0.0.so")
+    }
+
+    /// Below threshold: never compiled. At threshold: promoted (async pool,
+    /// polled). Kills the `<`/`==`/`>`/`<=` threshold mutants and the
+    /// `promote` no-op/`!` mutants.
+    #[test]
+    fn hot_threshold_boundary_promotes_exactly_at_threshold() {
+        if !cfg!(target_arch = "x86_64") {
+            return;
+        }
+        let mut svm = Hpsvm::builder()
+            .with_feature_set(agave_feature_set::FeatureSet::default())
+            .with_builtins()
+            .with_sysvars()
+            .with_lamports(1_000_000_000)
+            .with_sigverify(true)
+            .with_blockhash_check(true)
+            .build()
+            .expect("VM should build")
+            .with_jit_policy(JitPolicy::Lazy { hot_threshold: 2 });
+        svm.set_transaction_history(0);
+        let program_id = Address::new_unique();
+        svm.add_program_with_loader(program_id, memo_elf(), solana_sdk_ids::bpf_loader::id())
+            .expect("add should succeed");
+        let payer = Keypair::new();
+        svm.airdrop(&payer.pubkey(), 10_000_000).unwrap();
+        let tx_for = |svm: &Hpsvm, nonce: u8| {
+            let mut data = b"hello jit".to_vec();
+            data.push(nonce);
+            let ix = solana_instruction::Instruction { program_id, accounts: vec![], data };
+            let msg =
+                Message::new_with_blockhash(&[ix], Some(&payer.pubkey()), &svm.latest_blockhash());
+            VersionedTransaction::try_new(VersionedMessage::Legacy(msg), &[&payer])
+                .expect("tx should build")
+        };
+
+        // First execution: 1 interpreted invocation < 2 → no promotion.
+        let result = svm.send_transaction(tx_for(&svm, 0));
+        assert!(result.is_ok(), "{result:?}");
+        // The post-tx sweep enqueues nothing below threshold; the entry must
+        // still be interpreted (no async job to poll for).
+        std::thread::sleep(Duration::from_millis(50));
+        let after_first =
+            svm.accounts.shared_programs_cache().read().find(&program_id).expect("entry");
+        assert!(
+            !crate::programs::has_compiled_program(&after_first),
+            "below threshold must stay interpreted"
+        );
+
+        // Second execution: count reaches 2 → promotion enqueued. Poll the
+        // pool (JIT compile is fast for memo, but async).
+        let result = svm.send_transaction(tx_for(&svm, 1));
+        assert!(result.is_ok(), "{result:?}");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let entry =
+                svm.accounts.shared_programs_cache().read().find(&program_id).expect("entry");
+            if crate::programs::has_compiled_program(&entry) {
+                break;
+            }
+            if Instant::now() > deadline {
+                panic!("threshold promotion did not publish within 10s");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let stats = svm.program_tier_stats();
+        assert!(stats.promotions_attempted >= 1);
+        assert!(stats.promotions_succeeded >= 1);
     }
 }

@@ -1,0 +1,34 @@
+{
+  "type": "criterion_report",
+  "benchmark_group": "program_cache",
+  "benchmarks": [
+    {
+      "name": "cold_add_program",
+      "mean_ns": 99479.23556397979,
+      "median_ns": 99599.08575418993,
+      "slope_ns": 99070.65206413699,
+      "std_dev_ns": 868.3670817919677
+    },
+    {
+      "name": "warm_add_program",
+      "mean_ns": 41198.220962326704,
+      "median_ns": 43452.60946353225,
+      "slope_ns": 44109.093243465395,
+      "std_dev_ns": 4431.01544925622
+    },
+    {
+      "name": "rebuild_after_mutation",
+      "mean_ns": 28567.089827910713,
+      "median_ns": 29163.553849798627,
+      "slope_ns": 29291.262746871704,
+      "std_dev_ns": 1257.9923293116203
+    },
+    {
+      "name": "prewarm_programs",
+      "mean_ns": 148.94920435960518,
+      "median_ns": 149.00593092414988,
+      "slope_ns": 149.06321434756532,
+      "std_dev_ns": 0.6300388225416751
+    }
+  ]
+}

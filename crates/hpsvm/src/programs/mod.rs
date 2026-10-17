@@ -1,7 +1,16 @@
+pub(crate) mod entry_store;
+pub(crate) mod jit_policy;
+pub(crate) mod tier_stats;
+pub(crate) mod tiering;
+
+pub(crate) use entry_store::{content_key, default_program_cache, program_entry_store};
+pub use jit_policy::JitPolicy;
 use solana_address::{Address, address};
 use solana_sdk_ids::{
     address_lookup_table, bpf_loader, bpf_loader_deprecated, bpf_loader_upgradeable, config, stake,
 };
+pub use tier_stats::ProgramTierStats;
+pub(crate) use tiering::{TierPromoter, has_compiled_program, load_program_uncompiled};
 
 use crate::{FeatureGate, Svm, SvmTypesHost, TxFeatureFlags};
 
@@ -81,16 +90,17 @@ fn load_non_spl_default_programs<T: SvmTypesHost>(svm: &mut Svm<'_, T>) {
     // versions in `Cargo.toml`, so bumping the dependencies does not refresh
     // them and they can drift out of step with the programs loaded here.
     //
-    // `core_bpf_stake-1.0.1.so` is known to be affected: its `DelegateStake`
-    // handler cannot decode a vote account written by the current
-    // `solana-vote-interface`, so `DelegateStake` and `DeactivateDelinquent`
-    // fail with `InvalidAccountData` while the rest of the stake program works.
-    // `crates/hpsvm/tests/stake_program.rs` pins that behaviour in
-    // `delegate_is_blocked_by_the_stale_vendored_stake_elf` so the drift is
-    // visible and fails loudly once the binary is rebuilt.
+    // `core_bpf_stake.so` is the current mainnet build (dumped 2026-10-17
+    // via `solana program dump -u mainnet-beta
+    // Stake11111111111111111111111111111111111111`), matching the 5.x
+    // instruction builders that read sysvars via syscall instead of taking
+    // them as accounts. The previous `core_bpf_stake-1.0.1.so` predated that
+    // interface and failed `Initialize`/`Authorize`/`DelegateStake` with
+    // `NotEnoughAccountKeys`.
     //
-    // To refresh, rebuild each program from its upstream source and commit the
-    // result; nothing in this workspace can regenerate them.
+    // To refresh any vendored program, rebuild it from its upstream source
+    // (or re-dump a released build) and commit the result; nothing in this
+    // workspace can regenerate them.
     svm.add_program_preverified(
         config::ID,
         include_bytes!("../../elf/config.so"),
@@ -105,8 +115,8 @@ fn load_non_spl_default_programs<T: SvmTypesHost>(svm: &mut Svm<'_, T>) {
     .expect("failed to load address-lookup-table program");
     svm.add_program_preverified(
         stake::ID,
-        include_bytes!("../../elf/core_bpf_stake-1.0.1.so"),
+        include_bytes!("../../elf/core_bpf_stake.so"),
         &bpf_loader_upgradeable::id(),
     )
-    .expect("failed to load core-bpf-stake 1.0.1");
+    .expect("failed to load core-bpf-stake");
 }

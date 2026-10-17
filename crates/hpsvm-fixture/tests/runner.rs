@@ -480,3 +480,39 @@ fn instruction_fixture_pre_accounts_are_installed() {
         .expect("the recipient must be in the replay");
     assert_eq!(actual, expected);
 }
+
+/// Forced-interpreted (`Off`) and eager (`Eager`) runs of the same fixture
+/// produce identical post-state, logs, return data and status.
+///
+/// This is the Finding-5 equivalence gate's harness-plumbing arm: it pins
+/// the policy override threading (`with_jit_policy` → cloned VM → program
+/// loads). The transfer touches no SBF programs, so SBF
+/// interpreter-vs-JIT equivalence itself is covered by the `hpsvm` memo
+/// tests with isolated environments instead — the process-wide resident
+/// store shares entries across policies on one environment, which would
+/// make a shared-env SBF comparison vacuous.
+#[test]
+fn off_and_eager_produce_identical_results() {
+    use hpsvm::JitPolicy;
+
+    let fixture = build_fixture();
+    let mut off_runner = FixtureRunner::new(HPSVM::new()).with_jit_policy(JitPolicy::Off);
+    let mut eager_runner = FixtureRunner::new(HPSVM::new()).with_jit_policy(JitPolicy::Eager);
+
+    let off = off_runner.run(&fixture).unwrap().snapshot;
+    let eager = eager_runner.run(&fixture).unwrap().snapshot;
+
+    // Hard gate: everything but CU must match.
+    assert!(off.compare_with(
+        &eager,
+        &Compare::everything_but_compute_units(),
+        &ResultConfig { panic: false, verbose: true },
+    ));
+    // Report line: CU must also match for a program-free transfer; a
+    // JIT-meter granularity divergence would show up here, not silently.
+    assert_eq!(
+        off.compute_units_consumed, eager.compute_units_consumed,
+        "CU divergence between Off and Eager (JIT meter granularity)"
+    );
+    assert_eq!(off, eager);
+}

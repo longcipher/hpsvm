@@ -102,22 +102,16 @@ solana-signature = "3.6.0"
 solana-signer = "4.0.0"
 solana-slot-hashes = "4.0.0"
 solana-slot-history = "3.2.0"
-# Pinned to 4.4.0 on purpose, not left behind.
-#
 # This crate is only an instruction *encoder* for the stake tests; the program hpsvm
-# actually executes is the vendored `crates/hpsvm/elf/core_bpf_stake-1.0.1.so`.
-# 5.x changed every builder to stop passing the sysvar accounts (`rent` on
-# `initialize`, `clock` on `authorize`, and so on) because the program now reads
-# them through the `sol_get_sysvar` syscall. The vendored ELF predates that change
-# and still expects those accounts at their old positions, so against 5.x every
-# stake instruction fails with `NotEnoughAccountKeys` before the program inspects
-# anything.
+# actually executes is the vendored `crates/hpsvm/elf/core_bpf_stake.so`
+# (current mainnet build, dumped 2026-10-17). Both sides are on the 5.x
+# interface: builders omit the sysvar accounts (`rent` on `initialize`,
+# `clock` on `authorize`, and so on) because the program reads them through
+# the `sol_get_sysvar` syscall.
 #
 # Two copies coexist (agave pulls 5.1.1 for its own use). That is harmless here:
 # the encoder only produces instruction bytes, and no Rust type ever crosses
-# between it and the BPF ELF. Raise this to 5.x once the vendored stake ELF is
-# rebuilt against the 5.1.1 interface — see `delegate_is_blocked_by_the_stale_vendored_stake_elf`
-# in `crates/hpsvm/tests/stake_program.rs`, which already tracks the ELF's staleness.
+# between it and the BPF ELF.
 solana-stake-interface = "5.1.1"
 solana-svm-callback = "4.5.0-alpha.2"
 solana-svm-log-collector = "4.5.0-alpha.1"

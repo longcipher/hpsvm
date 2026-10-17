@@ -203,6 +203,7 @@ impl<'svm, 'a, T: SvmTypesHost> ExecutedTx<'svm, 'a, T> {
                 svm.accounts.rollback(checkpoint);
                 if cache_dirty {
                     svm.accounts.rebuild_sysvar_cache();
+                    svm.sync_jit_policy();
                     svm.accounts.rebuild_program_cache().expect(
                         "rollback restores previously valid state, so the cache rebuild cannot fail",
                     );
@@ -237,6 +238,7 @@ impl<'svm, 'a, T: SvmTypesHost> ExecutedTx<'svm, 'a, T> {
         self.svm.accounts.rollback(self.checkpoint);
         if self.cache_dirty {
             self.svm.accounts.rebuild_sysvar_cache();
+            self.svm.sync_jit_policy();
             self.svm.accounts.rebuild_program_cache().expect(
                 "rollback restores previously valid state, so the cache rebuild cannot fail",
             );

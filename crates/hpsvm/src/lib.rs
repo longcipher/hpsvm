@@ -171,6 +171,37 @@
 //! }
 //! ```
 //!
+//! # Compiled-program tiering
+//!
+//! Program compilation is tiered, cached and observable — the harness around
+//! agave's `solana-sbpf` JIT, not a fork of it:
+//!
+//! * [`JitPolicy`] on [`Version`] selects the tier (`Eager` compiles every program at load time on
+//!   x86_64; `Lazy` interprets until a program crosses its hot threshold, then promotes it on a
+//!   background pool; `Off` forces the interpreter even on x86_64). The default is `Eager`,
+//!   byte-identical to the pre-tiering implementation.
+//! * The resident entry store (content-keyed by environment identity, ELF hash, loader and slot
+//!   bucket) re-links already-compiled entries across VMs and across `rebuild_program_cache`
+//!   instead of recompiling them.
+//! * [`Svm::prewarm_programs`] front-loads a batch stage's program set before its first transaction
+//!   (and schedules promotion under `Lazy`).
+//! * [`Svm::program_tier_stats`] reports policy, resident/cache entries, agave compilations and
+//!   invocation splits, plus promotion outcomes — all from atomics, with `Off` as the effective
+//!   policy off x86_64.
+//!
+//! ```rust
+//! use hpsvm::{Hpsvm, JitPolicy};
+//!
+//! let mut svm = Hpsvm::new().with_jit_policy(JitPolicy::Off);
+//! assert_eq!(svm.version().jit_policy, JitPolicy::Off);
+//! svm.prewarm_programs(&[]).expect("empty prewarm is a no-op");
+//! let stats = svm.program_tier_stats();
+//! // `Off` is effective on every target, so this doctest holds on x86_64
+//! // and elsewhere alike.
+//! assert_eq!(stats.effective_policy, JitPolicy::Off);
+//! assert_eq!(stats.promotions_attempted, 0);
+//! ```
+//!
 //! # Time travel
 //!
 //! Programs reading the `Clock` sysvar can be tested across time with
@@ -360,6 +391,7 @@ pub use inspector::{InspectMode, Inspector, OriginFilter, OriginFiltered, Transa
 #[cfg(feature = "precompiles")]
 pub use precompile_registry::NativePrecompiles;
 pub use precompile_registry::{NoPrecompiles, Precompile, PrecompileProvider, PrecompileSet};
+pub use programs::{JitPolicy, ProgramTierStats};
 pub use state_change_set::StateChangeSet;
 pub use state_change_sink::{AccountChange, AccountChangeRecord, StateChangeSink};
 pub use svm_instruction::{SvmInstructionAccount, SvmInstructionCtx};
@@ -425,8 +457,8 @@ pub struct Svm<'a, T: SvmTypesHost> {
     block_env: BlockEnv<T::BlockEnvExt>,
     history: TransactionHistory,
     sysvars_loaded: bool,
-    /// Per-instance precompile dispatch: which program ids execute as
-    /// precompiles and what runs for each of them.
+    /// Per-instance precompile dispatch: which program ids run as precompiles
+    /// and what runs for each of them.
     ///
     /// Defaults to the agave-backed native set when the `precompiles`
     /// feature is on and to [`NoPrecompiles`] otherwise. Replaced wholesale
@@ -434,6 +466,12 @@ pub struct Svm<'a, T: SvmTypesHost> {
     /// share the allocation. Providers are `'static` so batch worker VMs can
     /// share them across Rayon threads.
     precompiles: Arc<dyn PrecompileProvider<T>>,
+    /// Compiled-program tier promoter (interpreter-first tiering).
+    ///
+    /// Shared across clones via `Arc` so batch workers and simulates observe
+    /// the same promotion counters. Rebuilt whenever the JIT policy changes;
+    /// disabled (no pool) unless the effective policy is `Lazy` on x86_64.
+    tier_promoter: Arc<crate::programs::TierPromoter>,
     /// Binds the host lifetime and the type family to the value without letting
     /// either affect the VM's auto traits.
     ///
@@ -515,6 +553,7 @@ impl<T: SvmTypesHost> Clone for Svm<'_, T> {
             block_env: self.block_env,
             history: self.history.clone(),
             precompiles: Arc::clone(&self.precompiles),
+            tier_promoter: Arc::clone(&self.tier_promoter),
             sysvars_loaded: self.sysvars_loaded,
             _type_family: PhantomData,
             #[cfg(feature = "invocation-inspect-callback")]

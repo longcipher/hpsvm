@@ -210,3 +210,7 @@ harness = false
 [[bench]]
 name = "core_interfaces"
 harness = false
+
+[[bench]]
+name = "program_cache"
+harness = false

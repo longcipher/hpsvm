@@ -39,6 +39,7 @@ use solana_transaction_error::AddressLoaderError;
 use crate::{
     account_source::{AccountSource, AccountSourceError, EmptyAccountSource},
     error::{DbError, DbResult, ExecutionError, HPSVMError, InvalidSysvarDataError},
+    programs::JitPolicy,
 };
 
 const FEES_ID: Address = Address::from_str_const("SysvarFees111111111111111111111111111111111");
@@ -157,6 +158,16 @@ pub(crate) struct Accounts {
     pub(crate) programs_cache: SharedProgramCache,
     sysvar_cache: SysvarCache,
     environments: Arc<ProgramRuntimeEnvironments>,
+    /// Tiering policy observed by the program load path.
+    ///
+    /// Synced from `Version::jit_policy` by the owning `Svm` before every
+    /// load/rebuild. `Accounts` owns a copy so `add_account` and
+    /// `rebuild_program_cache` (which have no `Version` handle) can select
+    /// the eager vs uncompiled load path and consult the resident store.
+    /// Direct `Version` field assignment without going through
+    /// `Svm::set_jit_policy` is still honored because `Svm` re-syncs before
+    /// each load (see `sync_jit_policy` call sites).
+    jit_policy: JitPolicy,
     /// Ordered undo log for account state (`inner` + `removed`).
     ///
     /// Each entry records the pre-mutation state of one address, so
@@ -211,6 +222,17 @@ impl AccountSourceLoadFailure {
     }
 }
 
+/// Deterministic program-prewarm failure: the bytes for `program_id` cannot
+/// be verified/loaded. Carries the program address for context while keeping
+/// the non-fatal classification program-cache load failures always get
+/// (see `impl From<InstructionError> for DbError`).
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("failed to prewarm program {program_id}: {source}")]
+pub(crate) struct PrewarmProgramError {
+    program_id: Address,
+    source: InstructionError,
+}
+
 #[derive(Debug)]
 enum LookupTableLoadError {
     AddressLookup(AddressLookupError),
@@ -256,6 +278,7 @@ impl Clone for Accounts {
             programs_cache: Arc::clone(&self.programs_cache),
             sysvar_cache: self.sysvar_cache.clone(),
             environments: self.environments.clone(),
+            jit_policy: self.jit_policy,
             journal: self.journal.clone(),
         }
     }
@@ -271,6 +294,7 @@ impl Default for Accounts {
             programs_cache: Arc::new(RwLock::new(ProgramCacheForTxBatch::default())),
             sysvar_cache: SysvarCache::default(),
             environments: Arc::new(ProgramRuntimeEnvironments::new(env.clone(), env)),
+            jit_policy: JitPolicy::DEFAULT,
             journal: Vec::new(),
         }
     }
@@ -533,6 +557,26 @@ impl Accounts {
         self.programs_cache.read().find(program_id).is_some()
     }
 
+    /// Snapshots the committed program entries for tier observation/stats.
+    ///
+    /// Collects the resident `Arc` for every program account currently in
+    /// the overlay. Entries missing from the cache (never loaded) are
+    /// skipped. The snapshot holds `Arc`s, so the sweep never holds the
+    /// cache lock while promoting.
+    pub(crate) fn program_entries_snapshot(&self) -> Vec<Arc<ProgramCacheEntry>> {
+        let guard = self.programs_cache.read();
+        let mut out = Vec::new();
+        for (program_id, account) in &self.cache.inner {
+            if !is_cached_program_account(program_id, account) {
+                continue;
+            }
+            if let Some(entry) = guard.find(program_id) {
+                out.push(entry);
+            }
+        }
+        out
+    }
+
     #[inline]
     pub(crate) fn runtime_environments(&self) -> &ProgramRuntimeEnvironments {
         &self.environments
@@ -558,6 +602,19 @@ impl Accounts {
     /// reused by every subsequent `Hpsvm::new()`.
     pub(crate) fn set_runtime_environments_arc(&mut self, envs: Arc<ProgramRuntimeEnvironments>) {
         self.environments = envs;
+    }
+
+    /// Returns the tiering policy observed by the load path.
+    pub(crate) const fn jit_policy(&self) -> JitPolicy {
+        self.jit_policy
+    }
+
+    /// Syncs the load-path policy from the owning `Svm`.
+    ///
+    /// Called by `Svm` before every load/rebuild so direct `Version` field
+    /// assignment stays honored without a setter round-trip.
+    pub(crate) const fn sync_jit_policy(&mut self, policy: JitPolicy) {
+        self.jit_policy = policy;
     }
 
     pub(crate) const fn sysvar_cache(&self) -> &SysvarCache {
@@ -599,7 +656,7 @@ impl Accounts {
         // programdata account lookup), so passing a reference to the local
         // `account` avoids the post-insert `get_account_ref` lookup entirely.
         let program_entry =
-            if has_cached_program { Some(Arc::new(self.load_program(&account)?)) } else { None };
+            if has_cached_program { Some(self.load_program(&account)?) } else { None };
 
         // Record AFTER validation and program loading succeed: a failed call
         // returns above without touching `inner` / `removed`, so it must not
@@ -663,8 +720,11 @@ impl Accounts {
             .collect();
 
         for (pubkey, account) in program_entries {
+            // `load_program` consults the resident content store first, so
+            // unchanged program accounts re-link the resident `Arc` instead
+            // of re-parsing, re-verifying and re-JIT-compiling.
             let loaded_program = self.load_program(account)?;
-            cache.replenish(pubkey, Arc::new(loaded_program));
+            cache.replenish(pubkey, loaded_program);
         }
 
         // The cache is shared through an `Arc`, so publish the rebuilt map
@@ -713,26 +773,24 @@ impl Accounts {
     fn load_program(
         &self,
         program_account: &AccountSharedData,
-    ) -> Result<ProgramCacheEntry, InstructionError> {
-        let metrics = &mut LoadProgramMetrics::default();
+    ) -> Result<Arc<ProgramCacheEntry>, InstructionError> {
+        use crate::programs::{content_key, load_program_uncompiled, program_entry_store};
 
         let owner = program_account.owner();
-        let program_runtime = self.environments.get_env_for_execution().clone();
         let slot =
             self.sysvar_cache.get_clock().expect("clock sysvar should always be available").slot;
 
-        if bpf_loader::check_id(owner) || bpf_loader_deprecated::check_id(owner) {
-            ProgramCacheEntry::load(
-                owner,
-                program_runtime,
-                IMMEDIATE_DEPLOYMENT_SLOT,
-                program_account.data(),
-                metrics,
-            )
-            .map_err(|e| {
-                tracing::error!("Failed to load program: {e:?}");
-                InstructionError::InvalidAccountData
-            })
+        // Resolve the ELF bytes and the loader key used for the entry.
+        // The borrow of `programdata_account` (upgradeable path) lives for
+        // the whole load; other paths borrow directly from `program_account`.
+        // A missing upgradeable programdata account yields a per-slot closed
+        // tombstone (not content-addressed), so it bypasses the resident
+        // store below.
+        let programdata_account: Option<AccountSharedData>;
+        let (elf_bytes, loader_key): (&[u8], Address) = if bpf_loader::check_id(owner) ||
+            bpf_loader_deprecated::check_id(owner)
+        {
+            (program_account.data(), *owner)
         } else if bpf_loader_upgradeable::check_id(owner) {
             let Ok(UpgradeableLoaderState::Program { programdata_address }) =
                 program_account.state()
@@ -742,54 +800,101 @@ impl Accounts {
                 );
                 return Err(InstructionError::InvalidAccountData);
             };
-            let Some(programdata_account) = self.get_account(&programdata_address) else {
-                return Ok(ProgramCacheEntry::new_closed_tombstone(
+            // A missing programdata account yields a per-slot closed
+            // tombstone rather than a content-addressed entry.
+            let Some(account) = self.get_account(&programdata_address) else {
+                return Ok(Arc::new(ProgramCacheEntry::new_closed_tombstone(
                     slot,
                     ProgramCacheEntryOwner::LoaderV3,
-                ));
+                )));
             };
-            let program_data = programdata_account.data();
-            if let Some(programdata) =
-                program_data.get(UpgradeableLoaderState::size_of_programdata_metadata()..)
-            {
-                ProgramCacheEntry::load(
-                    owner,
-                    program_runtime,
-                    IMMEDIATE_DEPLOYMENT_SLOT,
-                    programdata,
-                    metrics).map_err(|e| {
-                        tracing::error!("Error encountered when calling ProgramCacheEntry::load() for bpf_loader_upgradeable: {e:?}");
-                        InstructionError::InvalidAccountData
-                    })
-            } else {
+            programdata_account = Some(account);
+            let data = programdata_account.as_ref().expect("just assigned").data();
+            let Some(programdata) =
+                data.get(UpgradeableLoaderState::size_of_programdata_metadata()..)
+            else {
                 tracing::error!("Index out of bounds using bpf_loader_upgradeable.");
-                Err(InstructionError::InvalidAccountData)
-            }
+                return Err(InstructionError::InvalidAccountData);
+            };
+            (programdata, *owner)
         } else if loader_v4::check_id(owner) {
-            if let Some(elf_bytes) =
+            let Some(elf_bytes) =
                 program_account.data().get(LoaderV4State::program_data_offset()..)
-            {
-                ProgramCacheEntry::load(
-                    &loader_v4::id(),
-                    program_runtime,
-                    IMMEDIATE_DEPLOYMENT_SLOT,
-                    elf_bytes,
-                    metrics,
-                )
-                .map_err(|_| {
-                    tracing::error!(
-                        "Error encountered when calling LoadedProgram::new() for loader_v4."
-                    );
-                    InstructionError::InvalidAccountData
-                })
-            } else {
+            else {
                 tracing::error!("Index out of bounds using loader_v4.");
-                Err(InstructionError::InvalidAccountData)
-            }
+                return Err(InstructionError::InvalidAccountData);
+            };
+            (elf_bytes, loader_v4::id())
         } else {
             tracing::error!("Owner does not match any expected loader.");
-            Err(InstructionError::IncorrectProgramId)
+            return Err(InstructionError::IncorrectProgramId);
+        };
+
+        // Resident content store: re-link when the exact bytes were seen
+        // before under the same environment.
+        let env_ptr = Arc::as_ptr(&self.environments) as usize;
+        let store_key = content_key(env_ptr, elf_bytes, &loader_key, IMMEDIATE_DEPLOYMENT_SLOT);
+        if let Some(resident) = program_entry_store().get(&store_key) {
+            return Ok(resident);
         }
+
+        let program_runtime = self.environments.get_env_for_execution().clone();
+        let entry: ProgramCacheEntry = if self.jit_policy.requires_uncompiled_load() &&
+            cfg!(target_arch = "x86_64")
+        {
+            load_program_uncompiled(&loader_key, &program_runtime, elf_bytes).map_err(|error| {
+                tracing::error!("Failed to load program (uncompiled): {error:?}");
+                error
+            })?
+        } else {
+            let metrics = &mut LoadProgramMetrics::default();
+            ProgramCacheEntry::load(
+                &loader_key,
+                program_runtime,
+                IMMEDIATE_DEPLOYMENT_SLOT,
+                elf_bytes,
+                metrics,
+            )
+            .map_err(|error| {
+                tracing::error!("Failed to load program: {error:?}");
+                InstructionError::InvalidAccountData
+            })?
+        };
+        let arc = Arc::new(entry);
+        Ok(program_entry_store().insert(store_key, arc))
+    }
+
+    /// Resolves (and, under `Lazy`, promotes) the program set for a batch
+    /// stage or fixture before execution, off the transaction path.
+    ///
+    /// Programs already resident re-link with no reload; missing programs
+    /// load through [`Accounts::load_program`]. Under `Lazy` the prewarmed
+    /// set is additionally scheduled for promotion. Failures propagate as
+    /// [`DbError`] so the caller preserves the fatal classification,
+    /// mirroring account `prewarm`.
+    pub(crate) fn prewarm_programs(&mut self, program_ids: &[Address]) -> DbResult<()> {
+        // Collect the program accounts first so the borrow of `self.cache`
+        // ends before `load_program` re-borrows `self`.
+        let mut to_resolve: Vec<(Address, AccountSharedData)> = Vec::new();
+        for program_id in program_ids {
+            if self.programs_cache.read().find(program_id).is_some() {
+                continue;
+            }
+            let Some(account) = self.cache.inner.get(program_id).cloned() else {
+                continue;
+            };
+            if !is_cached_program_account(program_id, &account) {
+                continue;
+            }
+            to_resolve.push((*program_id, account));
+        }
+        for (program_id, account) in to_resolve {
+            let entry = self
+                .load_program(&account)
+                .map_err(|source| DbError::non_fatal(PrewarmProgramError { program_id, source }))?;
+            self.programs_cache.write().replenish(program_id, entry);
+        }
+        Ok(())
     }
 
     fn try_load_lookup_table_addresses(
@@ -1732,5 +1837,29 @@ mod tests {
             svm.accounts.has_program_cache_entry(&program_id),
             "deployed builtin must still resolve after failed/discarded transactions"
         );
+    }
+
+    #[test]
+    fn prewarm_program_load_failure_is_deterministic_not_fatal() {
+        use solana_sdk_ids::bpf_loader;
+
+        let mut svm = Hpsvm::builder().with_sysvars().build().expect("minimal VM should build");
+        let program_id = Address::new_unique();
+        // Bypass loading so the bogus bytes reach `prewarm_programs`.
+        svm.accounts.add_account_no_checks(
+            program_id,
+            journal_test_account(1, b"definitely not an elf", &bpf_loader::id(), true, 0),
+        );
+
+        let error = svm.accounts.prewarm_programs(&[program_id]).expect_err("bogus ELF must fail");
+        assert!(
+            !error.is_fatal(),
+            "unverifiable program bytes are deterministic for this input, not infrastructure failure"
+        );
+        let context = error
+            .downcast_ref::<PrewarmProgramError>()
+            .expect("concrete prewarm context must survive erasure");
+        assert_eq!(context.program_id, program_id);
+        assert_eq!(context.source, solana_transaction::InstructionError::InvalidAccountData);
     }
 }

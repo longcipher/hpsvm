@@ -42,6 +42,7 @@ struct BuildPlan {
     sigverify: Option<bool>,
     blockhash_check: Option<bool>,
     compute_diagnostics: Option<bool>,
+    jit_policy: Option<crate::programs::JitPolicy>,
     lamports: Option<u64>,
     include_sysvars: bool,
     include_feature_accounts: bool,
@@ -67,6 +68,7 @@ impl BuildPlan {
             sigverify: None,
             blockhash_check: None,
             compute_diagnostics: None,
+            jit_policy: None,
             lamports: None,
             include_sysvars: false,
             include_feature_accounts: false,
@@ -292,6 +294,16 @@ impl<State: FeatureConfigState> HpsvmBuilder<State> {
         self
     }
 
+    /// Select the compiled-program tiering policy.
+    ///
+    /// Defaults to [`JitPolicy::Eager`](crate::JitPolicy::Eager). `Lazy`
+    /// opts into interpreter-first tiering; `Off` forces the interpreter
+    /// even on x86_64.
+    pub fn with_jit_policy(mut self, policy: crate::programs::JitPolicy) -> Self {
+        self.plan.jit_policy = Some(policy);
+        self
+    }
+
     /// Change the initial lamports in the airdrop account.
     pub fn with_lamports(mut self, lamports: u64) -> Self {
         self.plan.lamports = Some(lamports);
@@ -348,6 +360,7 @@ impl<State: FeatureConfigState> HpsvmBuilder<State> {
             sigverify,
             blockhash_check,
             compute_diagnostics,
+            jit_policy,
             lamports,
             include_sysvars,
             include_feature_accounts,
@@ -388,6 +401,11 @@ impl<State: FeatureConfigState> HpsvmBuilder<State> {
         if let Some(compute_budget) = compute_budget {
             svm.set_compute_budget(compute_budget);
         }
+        // Apply the JIT policy before any program loading so `Lazy`/`Off`
+        // VMs never pay the eager compile for builtins/default programs.
+        if let Some(jit_policy) = jit_policy {
+            svm.set_jit_policy(jit_policy);
+        }
         if let Some(transaction_history) = transaction_history {
             svm.set_transaction_history(transaction_history);
         }
@@ -404,6 +422,7 @@ impl<State: FeatureConfigState> HpsvmBuilder<State> {
         }
         if needs_early_runtime_refresh {
             svm.try_refresh_runtime_environments()?;
+            svm.sync_jit_policy();
             svm.accounts.rebuild_program_cache().map_err(HPSVMError::from)?;
         }
 

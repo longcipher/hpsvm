@@ -191,6 +191,30 @@ pub(crate) fn send_transaction_batch<T: SvmTypesHost>(
             return Err(TransactionBatchError::AccountSource { index, pubkey, source });
         }
 
+        // Program-side twin of the account prewarm (JIT spec F3): resolve
+        // the stage's program set before spawning workers so the first
+        // transaction never pays the program-set load serially. Under `Lazy`
+        // the set is additionally scheduled for promotion.
+        if let Err(error) = vm.prewarm_programs(&read_set) {
+            // Like the account prewarm above, this only fails when `read_set`
+            // is non-empty (empty prewarm is a no-op), so indexing the head
+            // is safe. `Svm::prewarm_programs` only surfaces `Database`
+            // errors; anything else is defensively mapped to `Other`.
+            let index = stage.transaction_indexes[0];
+            let pubkey = read_set[0];
+            let source = match &error {
+                crate::error::HPSVMError::Database(db) => {
+                    db.downcast_ref::<AccountSourceError>().cloned().unwrap_or_else(|| {
+                        AccountSourceError::with_kind(AccountSourceErrorKind::Other, db.to_string())
+                    })
+                }
+                other => {
+                    AccountSourceError::with_kind(AccountSourceErrorKind::Other, other.to_string())
+                }
+            };
+            return Err(TransactionBatchError::AccountSource { index, pubkey, source });
+        }
+
         let mut stage_results =
             execute_transaction_batch_stage(vm, stage_index, stage, &transactions);
         stage_results.sort_by_key(|result| result.index);
@@ -366,6 +390,7 @@ fn worker_vm<T: SvmTypesHost>(
         block_env: vm.block_env,
         history: (*runtime.history).clone(),
         precompiles: Arc::clone(&vm.precompiles),
+        tier_promoter: Arc::clone(&vm.tier_promoter),
         sysvars_loaded: vm.sysvars_loaded,
         _type_family: PhantomData,
         #[cfg(feature = "invocation-inspect-callback")]
