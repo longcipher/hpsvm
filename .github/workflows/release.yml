@@ -102,11 +102,15 @@ jobs:
         # yet on the index — the bug that blocked the 0.1.19 release.
         #
         # `--no-verify` skips the packaged-tarball build. Verification would
-        # compile hpsvm-fixture's optional `fd-codec` dependency
-        # (`mollusk-svm-fuzz-fixture-firedancer` 0.16.2, published on crates.io)
-        # against the agave 4.3 line, which does not build on this toolchain
-        # line; the feature is opt-in and guarded by a `compile_error!` in
-        # `src/fd.rs`, so the published crate stays resolvable without it.
+        # compile hpsvm-fixture's optional `fd-codec` dependency against the
+        # agave 4.3 line, which does not build on this toolchain line; the
+        # feature is opt-in, so the published crate stays resolvable without it.
+        #
+        # `hpsvm-fd-fixture` is the FireDancer codec fork that `fd-codec` backs
+        # onto (upstream `mollusk-svm-fuzz-fixture-firedancer` pins agave 4.3).
+        # It is not a workspace member — its source lives in `vendor/` — so it
+        # is published first, outside the guarded member list below, and the
+        # retry loop covers index propagation before `hpsvm-fixture` needs it.
         run: |
           set -euo pipefail
           publish_one() {
@@ -132,6 +136,11 @@ jobs:
             echo "ERROR: failed to publish $name after retries"
             return 1
           }
+
+          # The fork is its own package rooted at vendor/hpsvm-fd-fixture, not a
+          # workspace member, so publish it from its directory in a subshell.
+          (cd vendor/hpsvm-fd-fixture && publish_one hpsvm-fd-fixture)
+          sleep 20
 
           # Dependency order (dev-dependencies included):
           #   hpsvm-macros        no local deps

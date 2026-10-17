@@ -1,0 +1,54 @@
+[package]
+name = "hpsvm-fd-fixture"
+version = "0.16.2"
+edition = "2021"
+authors = ["Anza Technology Maintainers <maintainers@anza.xyz>"]
+description = "Fork of mollusk-svm-fuzz-fixture-firedancer with version requirements widened for the agave 4.5 line"
+license-file = "LICENSE"
+repository = "https://github.com/longcipher/hpsvm"
+readme = "README.md"
+build = "build.rs"
+
+[lib]
+name = "hpsvm_fd_fixture"
+path = "src/lib.rs"
+
+# The three Solana runtime requirements are the only difference from upstream
+# 0.16.2: widened from `4.3.0` to `*` so the crate resolves against the agave
+# 4.5.0-alpha line (and any future 4.x) in addition to 4.3. A range such as
+# `>=4.3.0` cannot work: semver ranges exclude pre-releases, and the agave 4.5
+# line ships only as `4.5.0-alpha.x`. No source file was modified. See
+# `vendor/PATCHES.md` in the hpsvm repository for the full rationale.
+[dependencies.agave-feature-set]
+version = "*"
+features = ["agave-unstable-api"]
+
+[dependencies.mollusk-svm-fuzz-fs]
+version = "0.16.2"
+
+[dependencies.prost]
+version = "0.14"
+
+[dependencies.serde]
+version = "1.0.203"
+features = ["derive"]
+
+[dependencies.serde_json]
+version = "1.0.150"
+
+[dependencies.solana-account]
+version = "*"
+
+[dependencies.solana-keccak-hasher]
+version = "3.1.0"
+features = ["sha3"]
+
+[dependencies.solana-pubkey]
+version = "4.1.0"
+
+[dependencies.solana-transaction-context]
+version = "*"
+features = ["agave-unstable-api"]
+
+[build-dependencies.prost-build]
+version = "0.14"

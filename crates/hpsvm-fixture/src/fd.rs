@@ -5,7 +5,7 @@ use std::{
     io::{BufReader, BufWriter},
 };
 
-use mollusk_svm_fuzz_fixture_firedancer as fd_codec;
+use hpsvm_fd_fixture as fd_codec;
 use prost::Message;
 use solana_address::Address;
 

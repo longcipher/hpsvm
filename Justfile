@@ -128,8 +128,11 @@ publish-check:
 # Publish all crates to crates.io, in dependency order (dev-deps included).
 # Mirrors the `Publish to crates.io` step in .github/workflows/release.yml:
 # every workspace member declared in `[workspace.dependencies]` is published,
-# and the cargo-metadata guard there fails the release if the list rots.
+# preceded by the `hpsvm-fd-fixture` fork (source in vendor/), and the
+# cargo-metadata guard there fails the release if the member list rots.
 publish:
+  (cd vendor/hpsvm-fd-fixture && cargo publish --registry crates-io --allow-dirty --no-verify)
+  sleep 20
   cargo publish -p hpsvm-macros --registry crates-io --allow-dirty --no-verify
   sleep 20
   cargo publish -p hpsvm-test-support --registry crates-io --allow-dirty --no-verify

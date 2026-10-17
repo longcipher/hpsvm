@@ -6,13 +6,13 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use hpsvm_fd_fixture as fd_codec;
 use hpsvm_fixture::{
     AccountCompareScope, AccountSnapshot, AdapterError, Compare, ExecutionSnapshot,
     ExecutionSnapshotFields, ExecutionStatus, FiredancerFixture, Fixture, FixtureExpectations,
     FixtureHeader, FixtureInput, FixtureKind, InstructionAccountMeta, InstructionFixture,
     RuntimeFixtureConfig,
 };
-use mollusk_svm_fuzz_fixture_firedancer as fd_codec;
 use solana_address::Address;
 
 fn address_bytes(fill: u8) -> Vec<u8> {

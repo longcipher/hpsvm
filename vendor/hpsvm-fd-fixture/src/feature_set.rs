@@ -1,9 +1,10 @@
 //! Runtime feature set.
 
-use {
-    super::proto::FeatureSet as ProtoFeatureSet, agave_feature_set::FeatureSet,
-    solana_keccak_hasher::Hasher, solana_pubkey::Pubkey,
-};
+use agave_feature_set::FeatureSet;
+use solana_keccak_hasher::Hasher;
+use solana_pubkey::Pubkey;
+
+use super::proto::FeatureSet as ProtoFeatureSet;
 
 // Omit "test features" (they have the same u64 ID).
 pub static OMITTED_FEATURES: &[Pubkey] = &[
@@ -21,9 +22,8 @@ impl From<ProtoFeatureSet> for FeatureSet {
 
         value.features.iter().for_each(|int_id| {
             let discriminator = int_id.to_le_bytes();
-            let feature_id = inactive
-                .iter()
-                .find(|feature_id| feature_id.to_bytes()[0..8].eq(&discriminator));
+            let feature_id =
+                inactive.iter().find(|feature_id| feature_id.to_bytes()[0..8].eq(&discriminator));
             if let Some(feature_id) = feature_id {
                 feature_set.activate(feature_id, 0);
             }

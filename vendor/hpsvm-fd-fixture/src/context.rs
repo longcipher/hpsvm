@@ -1,15 +1,14 @@
-use {
-    super::proto::{
-        EpochContext as ProtoEpochContext, InstrContext as ProtoContext,
-        SlotContext as ProtoSlotContext,
-    },
-    crate::account::SeedAddress,
-    agave_feature_set::FeatureSet,
-    solana_account::Account,
-    solana_keccak_hasher::Hasher,
-    solana_pubkey::Pubkey,
-    solana_transaction_context::InstructionAccount,
+use agave_feature_set::FeatureSet;
+use solana_account::Account;
+use solana_keccak_hasher::Hasher;
+use solana_pubkey::Pubkey;
+use solana_transaction_context::InstructionAccount;
+
+use super::proto::{
+    EpochContext as ProtoEpochContext, InstrContext as ProtoContext,
+    SlotContext as ProtoSlotContext,
 };
+use crate::account::SeedAddress;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SlotContext {
@@ -39,17 +38,13 @@ pub struct EpochContext {
 
 impl From<ProtoEpochContext> for EpochContext {
     fn from(value: ProtoEpochContext) -> Self {
-        Self {
-            feature_set: value.features.map(Into::into).unwrap_or_default(),
-        }
+        Self { feature_set: value.features.map(Into::into).unwrap_or_default() }
     }
 }
 
 impl From<EpochContext> for ProtoEpochContext {
     fn from(value: EpochContext) -> Self {
-        Self {
-            features: Some(value.feature_set.into()),
-        }
+        Self { features: Some(value.feature_set.into()) }
     }
 }
 
@@ -74,10 +69,8 @@ pub struct Context {
 
 impl From<ProtoContext> for Context {
     fn from(value: ProtoContext) -> Self {
-        let program_id_bytes: [u8; 32] = value
-            .program_id
-            .try_into()
-            .expect("Invalid bytes for program ID");
+        let program_id_bytes: [u8; 32] =
+            value.program_id.try_into().expect("Invalid bytes for program ID");
         let program_id = Pubkey::new_from_array(program_id_bytes);
 
         let accounts: Vec<(Pubkey, Account, Option<SeedAddress>)> =
@@ -102,11 +95,7 @@ impl From<Context> for ProtoContext {
     fn from(value: Context) -> Self {
         let accounts = value.accounts.into_iter().map(Into::into).collect();
 
-        let instr_accounts = value
-            .instruction_accounts
-            .into_iter()
-            .map(Into::into)
-            .collect();
+        let instr_accounts = value.instruction_accounts.into_iter().map(Into::into).collect();
 
         Self {
             program_id: value.program_id.to_bytes().to_vec(),

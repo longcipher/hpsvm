@@ -36,7 +36,7 @@ thiserror.workspace = true
 wincode = { workspace = true }
 
 [dev-dependencies]
-mollusk-svm-fuzz-fixture-firedancer.workspace = true
+hpsvm-fd-fixture.workspace = true
 solana-account.workspace = true
 solana-instruction.workspace = true
 solana-keypair.workspace = true

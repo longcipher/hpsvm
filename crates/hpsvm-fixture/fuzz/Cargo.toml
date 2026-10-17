@@ -12,12 +12,12 @@ cargo-fuzz = true
 [workspace]
 members = ["."]
 
-# Being its own workspace root means it needs its own copy of the vendored
-# FireDancer codec patch; without this it would resolve the crates.io release,
-# which pins `agave-feature-set = "4.3.0"` and cannot coexist with the agave
-# 4.5.0-alpha.1 that `hpsvm-fixture` now pulls in. See `vendor/PATCHES.md`.
+# Being its own workspace root means it needs its own copy of the FireDancer
+# codec dependency: it points directly at the `vendor/hpsvm-fd-fixture` fork
+# (upstream `mollusk-svm-fuzz-fixture-firedancer` pins agave 4.3 and cannot
+# resolve against the agave 4.5 line). See `vendor/PATCHES.md`.
 [patch.crates-io]
-mollusk-svm-fuzz-fixture-firedancer = { path = "../../../vendor/mollusk-svm-fuzz-fixture-firedancer" }
+hpsvm-fd-fixture = { path = "../../../vendor/hpsvm-fd-fixture" }
 
 [[bin]]
 name = "decode_binary_fixture"
@@ -54,8 +54,9 @@ libfuzzer-sys = "0.4"
 # needs the protobuf crate directly. This is its own workspace, so the version
 # is literal, and it must match the `hpsvm-fixture` dependency it shares proto
 # types with - two different majors here would mean two incompatible
-# `InstrFixture` types at the boundary.
-mollusk-svm-fuzz-fixture-firedancer = "0.16.0"
+# `InstrFixture` types at the boundary. The patch above redirects it to the
+# vendored fork so the agave 4.5 line resolves.
+hpsvm-fd-fixture = "0.16.2"
 prost = "0.14"
 serde_json = "1"
 wincode = "0.6"

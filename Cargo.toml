@@ -1,6 +1,12 @@
 [workspace]
 resolver = "3"
 members = ["bin/*", "crates/*"]
+# `hpsvm-fd-fixture` is a vendored third-party source kept byte-identical to
+# upstream except for three widened version requirements (see
+# `vendor/PATCHES.md`), so it must not be reformatted or linted by the
+# workspace gates. It is consumed as a path dependency and published as its own
+# crate, which does not require membership.
+exclude = ["vendor/hpsvm-fd-fixture"]
 
 [workspace.package]
 version = "0.2.0"
@@ -26,12 +32,6 @@ hpsvm-test-support = { path = "crates/hpsvm-test-support", version = "0.2.0" }
 # versions of those types. 4.3.0 is the newest *stable* agave, but it requires the
 # solana 4.x types, so mixing it with the 5.x crates above would put two
 # incompatible copies of `Account`, `Message`, and `Transaction` in one build.
-#
-# `mollusk-svm-fuzz-fixture-firedancer` is consumed from `vendor/` via the
-# `[patch.crates-io]` entry below. Every published version of it (through 0.16.0)
-# requires `agave-feature-set = "4.3.0"`, which cannot resolve against the 4.4
-# line; the vendored copy widens three version requirements and changes no source.
-# See `vendor/PATCHES.md`.
 agave-feature-set = "4.5.0-alpha.2"
 agave-precompiles = "4.5.0-alpha.2"
 agave-reserved-account-keys = "4.5.0-alpha.2"
@@ -43,9 +43,14 @@ ed25519-dalek = "3.0.0"
 hashbrown = "0.17.1"
 hex = "0.4.3"
 hotpath = "0.28.6"
+# Fork of `mollusk-svm-fuzz-fixture-firedancer`: upstream pins agave 4.3, which
+# cannot resolve against the 4.5 line. Built from `vendor/` through the path and
+# depended on by version once published, so `hpsvm-fixture` packages without a
+# `[patch.crates-io]` entry (patches are stripped at publish time). See
+# `vendor/PATCHES.md`.
+hpsvm-fd-fixture = { path = "vendor/hpsvm-fd-fixture", version = "0.16.2" }
 k256 = { version = "0.14.0", features = ["arithmetic"] }
 lru = "0.18.5"
-mollusk-svm-fuzz-fixture-firedancer = "0.16.2"
 nu-ansi-term = "0.50.3"
 parking_lot = "0.12.5"
 # Proc-macro toolchain for `hpsvm-macros`, the future home of
@@ -327,14 +332,6 @@ deprecated = "allow"
 
 [workspace.lints.rustdoc]
 all = "warn"
-
-# The vendored FireDancer fixture codec has no release built against agave 4.4, so
-# its three Solana requirements are widened locally to resolve alongside the 4.4
-# line. Only the manifest changed; the source compiles unchanged. See
-# `vendor/PATCHES.md`, and delete this entry with that directory once upstream
-# ships an agave 4.4 build.
-[patch.crates-io]
-mollusk-svm-fuzz-fixture-firedancer = { path = "vendor/mollusk-svm-fuzz-fixture-firedancer" }
 
 # Dev profile tuned for faster compilation while Polonius is enabled.
 # `line-tables-only` keeps panic backtraces without the cost of full debug info,

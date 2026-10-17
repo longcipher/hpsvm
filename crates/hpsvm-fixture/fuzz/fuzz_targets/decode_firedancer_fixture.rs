@@ -11,7 +11,7 @@
 
 use hpsvm_fixture::{AdapterError, FiredancerFixture, Fixture};
 use libfuzzer_sys::fuzz_target;
-use mollusk_svm_fuzz_fixture_firedancer as fd_codec;
+use hpsvm_fd_fixture as fd_codec;
 use prost::Message;
 
 fuzz_target!(|data: &[u8]| {

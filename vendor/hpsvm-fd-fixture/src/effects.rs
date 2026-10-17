@@ -1,9 +1,11 @@
 //! Post-invocation effects of an instruction.
 
-use {
-    super::proto::InstrEffects as ProtoEffects, crate::account::SeedAddress,
-    solana_account::Account, solana_keccak_hasher::Hasher, solana_pubkey::Pubkey,
-};
+use solana_account::Account;
+use solana_keccak_hasher::Hasher;
+use solana_pubkey::Pubkey;
+
+use super::proto::InstrEffects as ProtoEffects;
+use crate::account::SeedAddress;
 
 /// Represents the effects of a single instruction.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -22,13 +24,7 @@ pub struct Effects {
 
 impl From<ProtoEffects> for Effects {
     fn from(value: ProtoEffects) -> Self {
-        let ProtoEffects {
-            result,
-            custom_err,
-            modified_accounts,
-            cu_avail,
-            return_data,
-        } = value;
+        let ProtoEffects { result, custom_err, modified_accounts, cu_avail, return_data } = value;
 
         let modified_accounts: Vec<(Pubkey, Account, Option<SeedAddress>)> =
             modified_accounts.into_iter().map(Into::into).collect();

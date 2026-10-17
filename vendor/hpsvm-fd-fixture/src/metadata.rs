@@ -1,6 +1,8 @@
 //! Program invocation metadata.
 
-use {super::proto::FixtureMetadata as ProtoFixtureMetadata, solana_keccak_hasher::Hasher};
+use solana_keccak_hasher::Hasher;
+
+use super::proto::FixtureMetadata as ProtoFixtureMetadata;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Metadata {
@@ -10,17 +12,13 @@ pub struct Metadata {
 
 impl From<ProtoFixtureMetadata> for Metadata {
     fn from(value: ProtoFixtureMetadata) -> Self {
-        Self {
-            entrypoint: value.fn_entrypoint,
-        }
+        Self { entrypoint: value.fn_entrypoint }
     }
 }
 
 impl From<Metadata> for ProtoFixtureMetadata {
     fn from(value: Metadata) -> Self {
-        Self {
-            fn_entrypoint: value.entrypoint,
-        }
+        Self { fn_entrypoint: value.entrypoint }
     }
 }
 

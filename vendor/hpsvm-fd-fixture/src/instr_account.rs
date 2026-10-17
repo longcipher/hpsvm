@@ -1,17 +1,13 @@
 //! Instruction account.
 
-use {
-    super::proto::InstrAcct as ProtoInstrAccount, solana_keccak_hasher::Hasher,
-    solana_transaction_context::InstructionAccount,
-};
+use solana_keccak_hasher::Hasher;
+use solana_transaction_context::InstructionAccount;
+
+use super::proto::InstrAcct as ProtoInstrAccount;
 
 impl From<ProtoInstrAccount> for InstructionAccount {
     fn from(value: ProtoInstrAccount) -> Self {
-        let ProtoInstrAccount {
-            index,
-            is_writable,
-            is_signer,
-        } = value;
+        let ProtoInstrAccount { index, is_writable, is_signer } = value;
         Self::new(index as u16, is_signer, is_writable)
     }
 }
