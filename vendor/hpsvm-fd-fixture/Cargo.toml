@@ -13,14 +13,17 @@ build = "build.rs"
 name = "hpsvm_fd_fixture"
 path = "src/lib.rs"
 
-# The three Solana runtime requirements are the only difference from upstream
-# 0.16.2: widened from `4.3.0` to `*` so the crate resolves against the agave
-# 4.5.0-alpha line (and any future 4.x) in addition to 4.3. A range such as
-# `>=4.3.0` cannot work: semver ranges exclude pre-releases, and the agave 4.5
-# line ships only as `4.5.0-alpha.x`. No source file was modified. See
+# The three Solana runtime requirements are the only manifest difference from
+# upstream 0.16.2: widened from `4.3.0` so the crate resolves against the agave
+# 4.5.0-alpha line. A plain range such as `>=4.3.0` cannot work: semver ranges
+# exclude pre-releases, and the agave 4.5 line ships only as `4.5.0-alpha.x`, so
+# the floor itself must name the pre-release. crates.io rejects `*`, hence the
+# explicit floors. The only source difference is the `InstructionAccount` import
+# path, which moved under `instruction_accounts::` in
+# `solana-transaction-context` 4.x (three `use` lines; no logic change). See
 # `vendor/PATCHES.md` in the hpsvm repository for the full rationale.
 [dependencies.agave-feature-set]
-version = "*"
+version = ">=4.5.0-alpha.2, <6.0.0"
 features = ["agave-unstable-api"]
 
 [dependencies.mollusk-svm-fuzz-fs]
@@ -37,7 +40,7 @@ features = ["derive"]
 version = "1.0.150"
 
 [dependencies.solana-account]
-version = "*"
+version = ">=4.3.0, <6.0.0"
 
 [dependencies.solana-keccak-hasher]
 version = "3.1.0"
@@ -47,7 +50,7 @@ features = ["sha3"]
 version = "4.1.0"
 
 [dependencies.solana-transaction-context]
-version = "*"
+version = ">=4.5.0-alpha.2, <6.0.0"
 features = ["agave-unstable-api"]
 
 [build-dependencies.prost-build]

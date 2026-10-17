@@ -108,7 +108,7 @@ mod tests {
     use solana_account::Account;
     use solana_keccak_hasher::Hash;
     use solana_pubkey::Pubkey;
-    use solana_transaction_context::InstructionAccount;
+    use solana_transaction_context::instruction_accounts::InstructionAccount;
 
     use super::{proto::InstrFixture, Fixture};
     use crate::{

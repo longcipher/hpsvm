@@ -16,11 +16,17 @@ Those two cannot coexist in one build. `4.3.0` is semver-compatible with
 keep two semver-compatible copies of the same crate. So the requirement fails to
 resolve outright rather than merely duplicating.
 
-**What was changed.** Only the three version requirements in `Cargo.toml`,
-widened from `4.3.0` to `*` (a range such as `>=4.3.0` still excludes the
-`4.5.0-alpha.x` pre-release, so `*` is the only requirement that resolves
-against the whole 4.x line). No source file was modified — every symbol the
-crate uses still exists upstream:
+**What was changed.** The three version requirements in `Cargo.toml`, plus one
+import path. `agave-feature-set` and `solana-transaction-context` are widened to
+`>=4.5.0-alpha.2, <6.0.0` — the floor must name the pre-release itself,
+because a plain range such as `>=4.3.0` excludes pre-releases, and crates.io
+rejects `*`. `solana-account` (a stable 5.x line in this workspace) is widened
+to `>=4.3.0, <6.0.0`. The single source change is the `InstructionAccount`
+import path in `src/context.rs`, `src/instr_account.rs`, and the test module of
+`src/lib.rs`: the type moved under `solana_transaction_context::
+instruction_accounts::` in `solana-transaction-context` 4.x (no logic change;
+the constructor, `index_in_transaction`, and `is_signer()` are unchanged).
+Every other symbol the crate uses still exists upstream on the 4.5 line:
 
 | Symbol | Present in |
 |---|---|
@@ -44,8 +50,9 @@ no `[patch.crates-io]` entry: patches are stripped when a crate is packaged, so
 a patched dependency cannot be published — that is exactly why the fork exists.
 
 **Refreshing the fork.** Copy `src/`, `proto/`, `build.rs`, and `LICENSE` from
-the new upstream release, re-apply the three requirement widenings, re-check the
-symbol table above, bump `version` to the upstream version, and publish:
+the new upstream release, re-apply the three requirement widenings and the
+`InstructionAccount` import-path change, re-check the symbol table above, bump
+`version` to the upstream version, and publish:
 
 ```sh
 cd vendor/hpsvm-fd-fixture

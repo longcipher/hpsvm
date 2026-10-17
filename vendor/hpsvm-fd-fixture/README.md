@@ -10,9 +10,12 @@ Fork of [`mollusk-svm-fuzz-fixture-firedancer`](https://crates.io/crates/mollusk
 keep two semver-compatible copies of the same crate. Every published upstream
 version (through 0.16.2) is affected.
 
-**What changed.** Only the three version requirements, widened from `4.3.0` to
-`*`. No source file was modified — the symbol table in `vendor/PATCHES.md`
-verifies every symbol the crate uses still exists on the 4.5 line.
+**What changed.** The three Solana runtime requirements (`agave-feature-set`,
+`solana-account`, `solana-transaction-context`), widened so the crate resolves
+against the agave `4.5.0-alpha` line, plus one import path (`InstructionAccount`
+moved under `instruction_accounts::` in `solana-transaction-context` 4.x). No
+logic was modified — the symbol table in `vendor/PATCHES.md` verifies every
+symbol the crate uses still exists on the 4.5 line.
 
 **Who consumes it.** `hpsvm-fixture`'s optional `fd-codec` feature (and
 `hpsvm-cli`'s `fd-compat` feature on top of it). Nothing in the default feature

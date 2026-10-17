@@ -1,7 +1,7 @@
 //! Instruction account.
 
 use solana_keccak_hasher::Hasher;
-use solana_transaction_context::InstructionAccount;
+use solana_transaction_context::instruction_accounts::InstructionAccount;
 
 use super::proto::InstrAcct as ProtoInstrAccount;
 

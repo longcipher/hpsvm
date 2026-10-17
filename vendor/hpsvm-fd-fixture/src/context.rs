@@ -2,7 +2,7 @@ use agave_feature_set::FeatureSet;
 use solana_account::Account;
 use solana_keccak_hasher::Hasher;
 use solana_pubkey::Pubkey;
-use solana_transaction_context::InstructionAccount;
+use solana_transaction_context::instruction_accounts::InstructionAccount;
 
 use super::proto::{
     EpochContext as ProtoEpochContext, InstrContext as ProtoContext,
