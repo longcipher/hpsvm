@@ -45,19 +45,17 @@ impl Fixture {
             FixtureInput::Instruction(instruction) => &instruction.programs,
         }
     }
-
-    /// The runtime configuration this fixture was recorded under.
-    ///
-    /// Applying it through [`configure_vm`](crate::configure_vm) reproduces
-    /// the conditions the baseline was captured in.
-    pub fn runtime(&self) -> &RuntimeFixtureConfig {
-        match &self.input {
-            FixtureInput::Transaction(transaction) => &transaction.runtime,
-            #[cfg(feature = "instruction-fixture")]
-            FixtureInput::Instruction(instruction) => &instruction.runtime,
-        }
-    }
 }
+
+/// The fixture format version this build writes.
+///
+/// Version 2 is the first version whose `ExecutionStatus::Failure` carries a
+/// structured `ExecutionFailure`; version 1 stored the failure as a rendered
+/// `kind`/`message` pair, which this build cannot read back.
+pub const CURRENT_SCHEMA_VERSION: u16 = 2;
+
+/// The fixture format versions this build can read.
+pub const SUPPORTED_SCHEMA_VERSIONS: &[u16] = &[CURRENT_SCHEMA_VERSION];
 
 /// A fixture's metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,7 +78,13 @@ pub struct FixtureHeader {
 impl FixtureHeader {
     /// Creates a header for a fixture of the given kind.
     pub fn new(name: impl Into<String>, kind: FixtureKind) -> Self {
-        Self { schema_version: 1, name: name.into(), kind, source: None, tags: Vec::new() }
+        Self {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            name: name.into(),
+            kind,
+            source: None,
+            tags: Vec::new(),
+        }
     }
 
     /// Records where the fixture came from.

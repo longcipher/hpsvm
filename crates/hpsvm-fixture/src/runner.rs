@@ -200,6 +200,12 @@ impl FixtureRunner {
         Ok(ExecutionSnapshot::from_outcome(&outcome))
     }
 
+    /// Binds the fixture's programs to their ELF images.
+    ///
+    /// The program ELFs come from the runner's own map, so a fixture that
+    /// names a program without an ELF fails instead of running against a
+    /// different program.
+    #[cfg(any(feature = "bin-codec", feature = "instruction-fixture"))]
     fn load_programs(
         &self,
         vm: &mut HPSVM,

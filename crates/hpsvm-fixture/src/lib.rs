@@ -28,8 +28,9 @@ pub use crate::{
     config::ResultConfig,
     error::FixtureError,
     model::{
-        Fixture, FixtureExpectations, FixtureFormat, FixtureHeader, FixtureInput, FixtureKind,
-        ProgramBinding, RuntimeFixtureConfig, TransactionFixture,
+        CURRENT_SCHEMA_VERSION, Fixture, FixtureExpectations, FixtureFormat, FixtureHeader,
+        FixtureInput, FixtureKind, ProgramBinding, RuntimeFixtureConfig, SUPPORTED_SCHEMA_VERSIONS,
+        TransactionFixture,
     },
     outcome::{Mismatch, MismatchKind},
     runner::{FixtureExecution, FixtureRunner, bind_programs, configure_vm},
@@ -47,10 +48,14 @@ impl Fixture {
     ///
     /// The format is chosen by the file extension: `.json` for the JSON form
     /// and `.bin` for the binary form.
+    ///
+    /// A fixture written in a format version this build cannot read is
+    /// rejected with [`FixtureError::UnsupportedSchemaVersion`] rather than a
+    /// codec error, so the message names the version.
     #[cfg(any(feature = "json-codec", feature = "bin-codec"))]
     pub fn load(path: impl AsRef<std::path::Path>) -> Result<Self, FixtureError> {
         let path = path.as_ref();
-        match fixture_format_for_path(path)? {
+        let fixture = match fixture_format_for_path(path)? {
             FixtureFormat::Json => {
                 #[cfg(feature = "json-codec")]
                 {
@@ -71,7 +76,26 @@ impl Fixture {
                     Err(FixtureError::UnsupportedFormat { path: path.display().to_string() })
                 }
             }
+        }?;
+        fixture.check_schema_version()?;
+        Ok(fixture)
+    }
+
+    /// Returns whether this fixture is written in a format version this build
+    /// can read.
+    pub fn has_supported_schema_version(&self) -> bool {
+        crate::model::SUPPORTED_SCHEMA_VERSIONS.contains(&self.header.schema_version)
+    }
+
+    /// Rejects a fixture written in a format version this build cannot read.
+    pub fn check_schema_version(&self) -> Result<(), FixtureError> {
+        if self.has_supported_schema_version() {
+            return Ok(());
         }
+        Err(FixtureError::UnsupportedSchemaVersion {
+            version: self.header.schema_version,
+            supported: crate::model::CURRENT_SCHEMA_VERSION,
+        })
     }
 
     /// Saves the fixture to a file in the given format.
@@ -353,9 +377,9 @@ mod tests {
     }
 
     #[test]
-    fn fixture_header_starts_at_schema_version_one_without_source_or_tags() {
+    fn fixture_header_starts_at_the_current_schema_version_without_source_or_tags() {
         let header = FixtureHeader::new("name", FixtureKind::Transaction);
-        assert_eq!(header.schema_version, 1);
+        assert_eq!(header.schema_version, crate::model::CURRENT_SCHEMA_VERSION);
         assert_eq!(header.name, "name");
         assert_eq!(header.source, None);
         assert!(header.tags.is_empty());

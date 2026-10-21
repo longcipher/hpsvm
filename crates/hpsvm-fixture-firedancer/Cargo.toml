@@ -11,20 +11,30 @@ default = ["fd-codec"]
 # The protobuf codec, backed by the `hpsvm-fd-fixture` fork: upstream
 # `mollusk-svm-fuzz-fixture-firedancer` pins agave 4.3, which cannot resolve
 # against this workspace's agave 4.5 line. See `vendor/PATCHES.md`.
-fd-codec = ["dep:prost", "dep:hpsvm-fd-fixture", "hpsvm-fixture/instruction-fixture"]
+fd-codec = [
+    "dep:prost",
+    "dep:hpsvm-fd-fixture",
+    "dep:solana-address",
+    "dep:thiserror",
+    "hpsvm-fixture/instruction-fixture",
+]
 # The JSON form of the FireDancer fixture.
-json-codec = ["fd-codec", "dep:serde_json", "hpsvm-fixture/json-codec"]
+json-codec = ["fd-codec", "dep:serde_json", "serde", "hpsvm-fixture/json-codec"]
 # The instruction-shaped fixture the FireDancer format models.
 instruction-fixture = ["hpsvm-fixture/instruction-fixture"]
+# Serde support for the adapter's own types.
+serde = ["dep:serde"]
 
 [dependencies]
 hpsvm-fd-fixture = { workspace = true, optional = true }
-hpsvm-fixture = { workspace = true, default-features = false }
+# The adapter converts between the FireDancer protobuf shape and the
+# `hpsvm` fixture model, so the model is only needed with the codec.
+hpsvm-fixture = { workspace = true, default-features = false, optional = true }
 prost = { workspace = true, optional = true }
 serde = { workspace = true, optional = true, features = ["derive"] }
 serde_json = { workspace = true, optional = true }
-solana-address.workspace = true
-thiserror.workspace = true
+solana-address = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest.workspace = true

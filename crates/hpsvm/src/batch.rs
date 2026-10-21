@@ -329,9 +329,6 @@ fn sanitize_transaction_for_batch<T: SvmTypesHost>(
 /// indexes across workers leaves most threads idle while the unluckiest chunk
 /// finishes. Work stealing keeps every worker busy until the stage drains.
 ///
-/// [`rayon::iter::ParallelIterator::map_init`] builds the per-worker [`Svm`]
-/// clone lazily, once per Rayon worker thread rather than once per transaction,
-/// which preserves the amortized setup cost of the previous chunked design.
 /// Whether a parallel stage would drop the installed inspector's hooks.
 ///
 /// The parallel workers run on inspector-less worker VMs, so an inspector
@@ -342,10 +339,21 @@ fn sanitize_transaction_for_batch<T: SvmTypesHost>(
 /// The check deliberately does **not** consult the inspector: the VM
 /// consults `accepts_origin` exactly once per execution, and an extra
 /// consultation would be observable to an origin-recording inspector.
-fn parallel_stage_drops_inspector<T: SvmTypesHost>(vm: &Svm<'_, T>, _stage_index: usize) -> bool {
+fn parallel_stage_drops_inspector<T: SvmTypesHost>(vm: &Svm<'_, T>) -> bool {
     vm.has_inspector()
 }
 
+/// Execute every transaction in a conflict-free stage in parallel.
+///
+/// Uses Rayon's work-stealing scheduler rather than a static chunk split.
+/// Compute-unit cost varies by orders of magnitude between transactions (a bare
+/// `SystemProgram::transfer` versus a deeply nested CPI), so an even split of
+/// indexes across workers leaves most threads idle while the unluckiest chunk
+/// finishes. Work stealing keeps every worker busy until the stage drains.
+///
+/// [`rayon::iter::ParallelIterator::map_init`] builds the per-worker [`Svm`]
+/// clone lazily, once per Rayon worker thread rather than once per transaction,
+/// which preserves the amortized setup cost of the previous chunked design.
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn execute_transaction_batch_stage<'a, T: SvmTypesHost>(
     vm: &Svm<'a, T>,
@@ -363,7 +371,7 @@ fn execute_transaction_batch_stage<'a, T: SvmTypesHost>(
     // Silently dropping hooks would make an installed inspector observe a
     // different number of transactions depending on how the scheduler
     // happened to split the batch, so the loss is reported explicitly.
-    if parallel_stage_drops_inspector(vm, stage_index) {
+    if parallel_stage_drops_inspector(vm) {
         tracing::warn!(
             stage_index,
             "an inspector is installed; parallel batch stages execute on worker VMs that carry no \
@@ -633,14 +641,14 @@ mod tests {
 
         // Without an inspector there is nothing to drop.
         assert!(
-            !parallel_stage_drops_inspector(&svm, 0),
+            !parallel_stage_drops_inspector(&svm),
             "a VM without an inspector has nothing to drop"
         );
 
         // With one, the parallel stage cannot carry it onto the workers.
         svm.set_inspector(AcceptAllInspector);
         assert!(
-            parallel_stage_drops_inspector(&svm, 0),
+            parallel_stage_drops_inspector(&svm),
             "an installed inspector must be reported as dropped"
         );
     }

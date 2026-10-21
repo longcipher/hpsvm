@@ -733,13 +733,18 @@ impl Accounts {
     }
 
     pub(crate) fn rebuild_sysvar_cache(&mut self) {
+        // The clock carries the slot the program cache is keyed by. When the
+        // clock is absent the current cache slot is kept, so a rebuild cannot
+        // make already-deployed programs invisible by resetting the slot to
+        // zero.
+        let fallback_slot = self.programs_cache.read().slot();
         self.sysvar_cache.reset();
         self.sysvar_cache.fill_missing_entries(|pubkey, set_sysvar| {
             if let Some(acc) = self.cache.inner.get(pubkey) {
                 set_sysvar(acc.data());
             }
         });
-        let slot = self.sysvar_cache.get_clock().unwrap_or_default().slot;
+        let slot = self.sysvar_cache.get_clock().map(|clock| clock.slot).unwrap_or(fallback_slot);
         self.programs_cache.write().set_slot_for_tests(slot);
     }
 

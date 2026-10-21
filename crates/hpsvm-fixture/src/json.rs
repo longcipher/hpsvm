@@ -6,6 +6,23 @@ pub(crate) fn load(path: &std::path::Path) -> Result<Fixture, FixtureError> {
     }
 
     let file = std::fs::read_to_string(path)?;
+    // The schema version is read before the fixture is decoded: a document
+    // written in an older format cannot be decoded at all, and the version
+    // is what names the reason.
+    let document: serde_json::Value = serde_json::from_str(&file)?;
+    if let Some(version) = document
+        .get("header")
+        .and_then(|header| header.get("schema_version"))
+        .and_then(serde_json::Value::as_u64)
+    {
+        let version = u16::try_from(version).unwrap_or(u16::MAX);
+        if !crate::model::SUPPORTED_SCHEMA_VERSIONS.contains(&version) {
+            return Err(FixtureError::UnsupportedSchemaVersion {
+                version,
+                supported: crate::model::CURRENT_SCHEMA_VERSION,
+            });
+        }
+    }
     Ok(serde_json::from_str(&file)?)
 }
 
@@ -175,6 +192,29 @@ mod tests {
         let path =
             std::env::temp_dir().join(format!("hpsvm-absent-{}.json", Address::new_unique()));
         assert!(matches!(load(&path).unwrap_err(), FixtureError::Io(_)));
+    }
+
+    /// A fixture written in an older format version is rejected with the
+    /// version, not with a codec error: the version is what names the
+    /// reason.
+    #[test]
+    fn json_load_rejects_an_unsupported_schema_version() {
+        let path =
+            std::env::temp_dir().join(format!("hpsvm-old-version-{}.json", Address::new_unique()));
+        let mut document =
+            serde_json::to_value(generated_fixture(String::from("old"), 1, Vec::new())).unwrap();
+        document["header"]["schema_version"] = serde_json::json!(1);
+        std::fs::write(&path, document.to_string()).unwrap();
+
+        match load(&path).expect_err("an old schema version must be refused") {
+            FixtureError::UnsupportedSchemaVersion { version, supported } => {
+                assert_eq!(version, 1);
+                assert_eq!(supported, crate::model::CURRENT_SCHEMA_VERSION);
+            }
+            other => panic!("expected FixtureError::UnsupportedSchemaVersion, got {other:?}"),
+        }
+
+        std::fs::remove_file(path).ok();
     }
 
     #[test]

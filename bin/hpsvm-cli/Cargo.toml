@@ -26,7 +26,6 @@ hpsvm-fixture = { workspace = true, default-features = false, features = [
     "bin-codec",
     "instruction-fixture",
     "json-codec",
-    "markdown",
 ] }
 hpsvm-fixture-bench = { workspace = true, default-features = false, features = ["markdown"] }
 hpsvm-fixture-firedancer = { workspace = true, default-features = false, optional = true }

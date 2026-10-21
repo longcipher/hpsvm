@@ -29,7 +29,7 @@ impl CaptureBuilder {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             header: Some(FixtureHeader {
-                schema_version: 1,
+                schema_version: crate::model::CURRENT_SCHEMA_VERSION,
                 name: name.into(),
                 kind: FixtureKind::Transaction,
                 source: None,
@@ -162,7 +162,7 @@ mod tests {
     fn new_defaults_the_kind_to_transaction() {
         let fixture = complete_builder().capture_transaction(&transaction()).unwrap();
         assert_eq!(fixture.header.kind, FixtureKind::Transaction);
-        assert_eq!(fixture.header.schema_version, 1);
+        assert_eq!(fixture.header.schema_version, crate::model::CURRENT_SCHEMA_VERSION);
     }
 
     #[test]

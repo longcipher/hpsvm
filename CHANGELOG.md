@@ -29,6 +29,8 @@
 - **Breaking:** `Inspector::cpi_start` and `Inspector::cpi_end` are gone: the execution pipeline has no firing site for them, so they were a public promise the VM could not keep. The CPI depth remains observable through `ExecutionTrace`.
 - **Breaking:** the fixture crates are split. `hpsvm-fixture` keeps the fixture model, its codecs and the runner; the compute-unit benchmarking moved to `hpsvm-fixture-bench` and the FireDancer protobuf codec to `hpsvm-fixture-firedancer`. The `fd-codec` and `fd-json` features moved to `hpsvm-fixture-firedancer`, and the `report-io` and `markdown` features moved to `hpsvm-fixture-bench`. A consumer that only records and replays fixtures no longer compiles the protobuf dependency or the vendored FireDancer fork.
 - **Breaking:** `ExecutionStatus::Failure` carries a structured `ExecutionFailure` instead of a `kind`/`message` pair of strings, and `ExecutionSnapshotFields` is gone: `ExecutionSnapshot` is now constructible directly.
+- **Breaking:** the fixture format version moved to 2. A fixture recorded by an earlier release does not load: its `ExecutionStatus::Failure` held a rendered `kind`/`message` pair, which this build cannot read back. The loader now reports the version (`FixtureError::UnsupportedSchemaVersion`) instead of a codec error, and `hpsvm_fixture::CURRENT_SCHEMA_VERSION` / `SUPPORTED_SCHEMA_VERSIONS` are public.
+- **Breaking:** `#[svm_instruction]` now requires the handler's context type to be spelled `SvmInstructionCtx` or `hpsvm::SvmInstructionCtx`. A path that names a re-export of the type (`my_crate::SvmInstructionCtx`) is rejected, even though it names the same type.
 - The VM's state is grouped into cohesive sub-structs: the mutable state, the pluggable facilities, and the record of which runtime components are materialized. The change is internal; the public surface is unchanged.
 - `hpsvm-cli` decodes base64 and hex transaction encodings with the `base64` and `hex` crates instead of hand-written codecs.
 
@@ -49,6 +51,7 @@
 - Rebuild the sysvar cache when a managed sysvar account is removed: the cache is derived from the overlay, so a removed sysvar must leave it.
 - Remove the dead rent check: it compared an account's state before the transaction with the state it had *before* the transaction, so it could never fail. The one transition that matters — the fee payer's own — is still checked. The divergence from agave (a transfer may create an account below the rent-exempt minimum) is now documented.
 - Make the default-VM memoization test deterministic: it raced the publication of the shared default runtime environment, so the two VMs could end up under equivalent but distinct environments.
+- Keep the program cache's slot when the sysvar cache is rebuilt without a clock: the rebuild used to fall back to slot zero, which would have made already-deployed programs invisible.
 
 ## [0.11.0] - 2026-03-30
 

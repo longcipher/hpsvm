@@ -7,7 +7,10 @@ edition.workspace = true
 repository.workspace = true
 
 [features]
-default = ["markdown"]
+# `bin-codec` is on by default so the crate's own unit tests — the matrix and
+# single-fixture benchers — run with a plain `cargo test -p
+# hpsvm-fixture-bench`.
+default = ["bin-codec", "markdown"]
 serde = ["dep:serde", "hpsvm-fixture/serde"]
 bin-codec = ["hpsvm-fixture/bin-codec"]
 instruction-fixture = ["hpsvm-fixture/instruction-fixture"]

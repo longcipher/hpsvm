@@ -7,14 +7,11 @@ edition.workspace = true
 repository.workspace = true
 
 [features]
-default = ["bin-codec", "json-codec", "markdown"]
+default = ["bin-codec", "json-codec"]
 serde = ["dep:serde"]
 bin-codec = ["dep:wincode", "serde"]
 json-codec = ["dep:serde_json", "serde"]
 instruction-fixture = []
-# Human-readable Markdown rendering of a compute-unit report. Write-only:
-# baselines always round-trip through the `report-io` JSON sidecar.
-markdown = ["dep:serde_json", "serde"]
 
 [dependencies]
 hpsvm.workspace = true

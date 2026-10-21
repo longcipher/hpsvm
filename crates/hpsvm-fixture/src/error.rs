@@ -59,6 +59,14 @@ pub enum FixtureError {
         /// The program that has no ELF.
         program_id: Address,
     },
+    /// The fixture was written in a format version this build cannot read.
+    #[error("unsupported fixture schema version {version}; this build reads version {supported}")]
+    UnsupportedSchemaVersion {
+        /// The version the fixture declares.
+        version: u16,
+        /// The version this build reads.
+        supported: u16,
+    },
     /// The VM reported a failure.
     #[error(transparent)]
     Hpsvm(#[from] HPSVMError),

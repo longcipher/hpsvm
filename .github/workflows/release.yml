@@ -145,6 +145,7 @@ jobs:
 
           # Dependency order (dev-dependencies included):
           #   hpsvm-macros               no local deps
+          #   hpsvm-test-support         no local deps
           #   hpsvm                      dev-deps on the two above
           #   hpsvm-fixture              deps: hpsvm
           #   hpsvm-fixture-bench        deps: hpsvm, hpsvm-fixture
@@ -153,6 +154,7 @@ jobs:
           #   hpsvm-cli                  deps: hpsvm, hpsvm-fixture, and the two above
           crates=(
             hpsvm-macros
+            hpsvm-test-support
             hpsvm
             hpsvm-fixture
             hpsvm-fixture-bench

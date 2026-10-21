@@ -5,11 +5,13 @@ license.workspace = true
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
-# The default search root is a workspace-relative path that only exists
-# inside this repository, so publishing the crate would ship a lookup that
-# can never find anything. Consumers point `HPSVM_TEST_PROGRAMS_DIR` at
-# their own build output instead.
-publish = false
+# The crate stays published: it is a dev-dependency of the published `hpsvm`
+# and `hpsvm-fixture-bench` crates, so unpublishing it would leave their
+# published manifests pointing at a version that never exists. The search
+# root is configurable through `HPSVM_TEST_PROGRAMS_DIR`, so a consumer
+# that vendors the programs elsewhere can point the lookup at its own
+# build output.
+publish = true
 
 [lints]
 workspace = true

@@ -18,6 +18,8 @@
 
 #![deny(rustdoc::broken_intra_doc_links)]
 
+#[cfg(feature = "fd-codec")]
 mod fd;
 
+#[cfg(feature = "fd-codec")]
 pub use crate::fd::{AdapterError, FiredancerFixture};
