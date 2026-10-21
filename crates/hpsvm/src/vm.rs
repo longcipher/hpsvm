@@ -301,8 +301,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
     /// one consultation per execution, and no hook dispatcher consults again.
     #[inline]
     pub(crate) fn inspector_live(&self) -> bool {
-        let origin = self.inspection_origin;
-        self.inspector.lock().as_ref().is_some_and(|inspector| inspector.accepts_origin(origin))
+        self.inspector_accepts_origin(self.inspection_origin)
     }
 
     /// Runs `op` against the installed inspector, if any.
@@ -1613,6 +1612,15 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
     /// in the same conflict-free stage are executed against cloned snapshots in
     /// parallel, then their disjoint account deltas are merged back into this VM
     /// before the next stage begins.
+    ///
+    /// # Inspector semantics
+    ///
+    /// A stage with a single transaction runs on this VM and therefore reaches
+    /// the installed inspector. A stage with several transactions runs on
+    /// parallel worker VMs, which cannot carry the boxed inspector, so those
+    /// transactions are **not** observed by it. Install the inspector only for
+    /// the traffic you want to observe, or submit the transactions one at a
+    /// time when every transaction must be observed.
     pub fn send_transaction_batch<V>(
         &mut self,
         txs: impl IntoIterator<Item = V>,
@@ -2013,7 +2021,7 @@ mod tests {
         svm.register_tx_handler(TxTag::Legacy, PanickingHandler);
 
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            svm.process_instruction_chain([Instruction {
+            let _ = svm.process_instruction_chain([Instruction {
                 program_id: system_program::id(),
                 accounts: vec![],
                 data: vec![],
@@ -2021,10 +2029,7 @@ mod tests {
         }));
 
         assert!(outcome.is_err(), "the handler panic must propagate to the caller");
-        assert!(
-            svm.get_sigverify(),
-            "signature verification must be restored after a panic"
-        );
+        assert!(svm.get_sigverify(), "signature verification must be restored after a panic");
     }
 
     /// A VM built without sysvars cannot load a program, because the program

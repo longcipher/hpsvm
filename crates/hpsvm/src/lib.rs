@@ -534,36 +534,70 @@ impl<T: SvmTypesHost> std::fmt::Debug for Svm<'_, T> {
     }
 }
 
-impl<T: SvmTypesHost> Clone for Svm<'_, T> {
-    fn clone(&self) -> Self {
+impl<T: SvmTypesHost> Svm<'_, T> {
+    /// Builds a copy of this VM that owns its state privately.
+    ///
+    /// This is the **single place the VM's field list is written down**.
+    /// [`Clone`] delegates here, and the parallel batch workers use it to
+    /// swap in their own account overlay, transaction history and execution
+    /// origin. Keeping one field list means a new field cannot be silently
+    /// dropped by a second, hand-maintained copy of the struct.
+    ///
+    /// The inspector is never inherited: a copy is a scratch VM (a
+    /// simulation, a batch worker) and inspector state belongs to the VM it
+    /// was installed on.
+    pub(crate) fn clone_with_state(
+        &self,
+        accounts: Accounts,
+        history: TransactionHistory,
+        origin: TransactionOrigin,
+    ) -> Self {
         Self {
-            accounts: self.accounts.clone(),
+            accounts,
             airdrop_kp: self.airdrop_kp,
             builtins_loaded: self.builtins_loaded,
             default_programs_loaded: self.default_programs_loaded,
             spl_programs_loaded: self.spl_programs_loaded,
             version: self.version.clone(),
             feature_accounts_loaded: self.feature_accounts_loaded,
-            // Clones never inherit the inspector: a clone is a scratch VM
-            // (simulations, batch workers), and inspector state belongs to
-            // the VM it was installed on. Install it on the clone explicitly
-            // when observation is wanted.
             inspector: Mutex::new(None),
-            inspection_origin: self.inspection_origin,
+            inspection_origin: origin,
             reserved_account_keys: self.reserved_account_keys.clone(),
             runtime_registry: self.runtime_registry.clone(),
             registry: self.registry.clone(),
             block_env: self.block_env,
-            history: self.history.clone(),
+            history,
+            sysvars_loaded: self.sysvars_loaded,
             precompiles: Arc::clone(&self.precompiles),
             tier_promoter: Arc::clone(&self.tier_promoter),
-            sysvars_loaded: self.sysvars_loaded,
             _type_family: PhantomData,
             #[cfg(feature = "invocation-inspect-callback")]
             invocation_inspect_callback: self.invocation_inspect_callback.clone(),
             #[cfg(feature = "invocation-inspect-callback")]
             enable_register_tracing: self.enable_register_tracing,
         }
+    }
+
+    /// Returns whether the installed inspector would fire its hooks for an
+    /// execution with `origin`.
+    pub(crate) fn inspector_accepts_origin(&self, origin: TransactionOrigin) -> bool {
+        self.inspector.lock().as_ref().is_some_and(|inspector| inspector.accepts_origin(origin))
+    }
+
+    /// Returns whether an inspector is installed, *without consulting it*.
+    ///
+    /// The VM consults an inspector's `accepts_origin` exactly once per
+    /// execution, so a check that needs to know "is there an inspector at
+    /// all" must not call it: an extra consultation is observable to an
+    /// origin-recording inspector.
+    pub(crate) fn has_inspector(&self) -> bool {
+        self.inspector.lock().is_some()
+    }
+}
+
+impl<T: SvmTypesHost> Clone for Svm<'_, T> {
+    fn clone(&self) -> Self {
+        self.clone_with_state(self.accounts.clone(), self.history.clone(), self.inspection_origin)
     }
 }
 

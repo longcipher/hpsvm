@@ -2114,7 +2114,9 @@ dependencies = [
 name = "hpsvm-cli"
 version = "0.2.1"
 dependencies = [
+ "base64 0.23.1",
  "clap",
+ "hex",
  "hotpath",
  "hpsvm",
  "hpsvm-fd-fixture",

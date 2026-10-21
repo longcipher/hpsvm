@@ -79,68 +79,27 @@ impl TransactionEncodingArg {
     }
 }
 
+/// Decodes standard base64 with padding.
+///
+/// Whitespace is tolerated, because a base64 blob is routinely wrapped when
+/// it travels through a config file or a terminal.
 fn decode_base64(encoded: &[u8]) -> Result<Vec<u8>, String> {
-    const INVALID: &str = "invalid base64 input";
+    use base64::Engine;
 
-    // Tolerate the newlines and spaces that appear once base64 is wrapped in
-    // config files or copied through a terminal.
     let text: String = encoded
         .iter()
         .map(|byte| char::from(*byte))
         .filter(|character| !character.is_ascii_whitespace())
         .collect();
 
-    if !text.len().is_multiple_of(4) {
-        return Err(format!("{INVALID}: length {} is not a multiple of 4", text.len()));
-    }
-
-    fn sextet(value: char) -> Option<u8> {
-        match value {
-            'A'..='Z' => Some(value as u8 - b'A'),
-            'a'..='z' => Some(value as u8 - b'a' + 26),
-            '0'..='9' => Some(value as u8 - b'0' + 52),
-            '+' => Some(62),
-            '/' => Some(63),
-            _ => None,
-        }
-    }
-
-    let symbols: Vec<char> = text.chars().collect();
-    let mut decoded = Vec::with_capacity(symbols.len() / 4 * 3);
-    for (index, group) in symbols.chunks(4).enumerate() {
-        let padding = group.iter().filter(|value| **value == '=').count();
-        if padding > 2 || (padding > 0 && index + 1 != symbols.len() / 4) {
-            return Err(format!("{INVALID}: misplaced padding"));
-        }
-
-        // Padding must form a suffix of the final group; a `=` followed by a
-        // data symbol is malformed, so reject it explicitly.
-        if group.contains(&'=') {
-            let first_padding =
-                group.iter().position(|value| *value == '=').expect("padding was just found");
-            if group[first_padding..].iter().any(|value| *value != '=') {
-                return Err(format!("{INVALID}: data character after padding"));
-            }
-        }
-
-        let mut accumulator = 0u32;
-        for (offset, value) in group.iter().enumerate() {
-            let bits = if *value == '=' { 0 } else { u32::from(sextet(*value).ok_or(INVALID)?) };
-            accumulator |= bits << (18 - 6 * offset);
-        }
-
-        decoded.push((accumulator >> 16) as u8);
-        if padding < 2 {
-            decoded.push((accumulator >> 8) as u8);
-        }
-        if padding < 1 {
-            decoded.push(accumulator as u8);
-        }
-    }
-
-    Ok(decoded)
+    base64::engine::general_purpose::STANDARD
+        .decode(text.as_bytes())
+        .map_err(|error| format!("invalid base64 input: {error}"))
 }
 
+/// Decodes a hexadecimal byte string.
+///
+/// Whitespace is tolerated for the same reason as in [`decode_base64`].
 fn decode_hex(encoded: &[u8]) -> Result<Vec<u8>, String> {
     if !encoded.is_ascii() {
         return Err("invalid hex input: non-ascii byte".to_owned());
@@ -152,32 +111,7 @@ fn decode_hex(encoded: &[u8]) -> Result<Vec<u8>, String> {
         .filter(|character| !character.is_ascii_whitespace())
         .collect();
 
-    if !text.len().is_multiple_of(2) {
-        return Err(format!("invalid hex input: length {} is odd", text.len()));
-    }
-
-    text.as_bytes()
-        .chunks(2)
-        .map(|pair| {
-            // `to_digit` accepts non-ASCII digit forms, so match an explicit
-            // ascii hex alphabet instead.
-            let digit = |byte: u8| match byte {
-                b'0'..=b'9' => Some(u32::from(byte - b'0')),
-                b'a'..=b'f' => Some(u32::from(byte - b'a') + 10),
-                b'A'..=b'F' => Some(u32::from(byte - b'A') + 10),
-                _ => None,
-            };
-            let high = digit(pair[0]);
-            let low = digit(pair[1]);
-            match (high, low) {
-                (Some(high), Some(low)) => Ok((high * 16 + low) as u8),
-                _ => Err(format!(
-                    "invalid hex input: {:?} is not a hex byte pair",
-                    std::str::from_utf8(pair).unwrap_or("<non-utf8>")
-                )),
-            }
-        })
-        .collect()
+    hex::decode(&text).map_err(|error| format!("invalid hex input: {error}"))
 }
 
 #[derive(Debug, Subcommand)]

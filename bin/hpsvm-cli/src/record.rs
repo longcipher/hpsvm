@@ -115,16 +115,10 @@ pub(crate) fn record_fixture(request: &RecordRequest) -> Result<(), CliError> {
         runtime = runtime.with_compute_unit_limit(compute_unit_limit);
     }
 
-    // Mirror `FixtureRunner` exactly: configure, bind programs, seed accounts,
-    // then execute. Any divergence here would record a baseline that a later
-    // replay cannot reproduce.
-    vm.set_sigverify(runtime.sigverify);
-    vm.set_blockhash_check(runtime.blockhash_check);
-    vm.set_log_bytes_limit(runtime.log_bytes_limit);
-    if let Some(compute_unit_limit) = runtime.compute_unit_limit {
-        vm.set_compute_unit_limit(compute_unit_limit);
-    }
-    vm.warp_to_slot(runtime.slot);
+    // Configure, bind programs, seed accounts, then execute — through the
+    // same helpers the replay path uses, so a recorded baseline can always
+    // be reproduced by a later replay.
+    hpsvm_fixture::configure_vm(&mut vm, &runtime);
 
     let loader_id = request.loader.unwrap_or_else(bpf_loader_upgradeable::id);
     let mut bindings = Vec::with_capacity(programs.len());

@@ -1,9 +1,10 @@
-use std::io::Write;
-
 use solana_address::Address;
 use solana_rent::Rent;
 
-use crate::{AccountSnapshot, ExecutionSnapshot, ExecutionStatus, ResultConfig};
+use crate::{
+    AccountSnapshot, ExecutionSnapshot, ExecutionStatus, ResultConfig,
+    outcome::{Mismatch, MismatchKind, report_mismatch},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -100,7 +101,21 @@ impl AccountExpectationBuilder {
 }
 
 impl ExecutionSnapshot {
+    /// Evaluates the given checks against this snapshot.
+    ///
+    /// Returns `true` when every check holds. A failure is reported through
+    /// [`ResultConfig`]; it never aborts the process unless the `panic` flag
+    /// is explicitly enabled.
     pub fn run_checks(&self, checks: &[Check], config: &ResultConfig) -> bool {
+        self.try_run_checks(checks, config).is_ok()
+    }
+
+    /// Evaluates the given checks against this snapshot and reports the first
+    /// failure as data.
+    ///
+    /// The `Result` form of [`run_checks`](Self::run_checks): the caller
+    /// receives the failing check instead of a bare `false`.
+    pub fn try_run_checks(&self, checks: &[Check], config: &ResultConfig) -> Result<(), Mismatch> {
         for check in checks {
             let pass = match check {
                 Check::Success => matches!(self.status, ExecutionStatus::Success),
@@ -130,11 +145,11 @@ impl ExecutionSnapshot {
             };
 
             if !pass {
-                return fail(config, format!("check failed: {check:?}"));
+                return Err(report_mismatch(config, MismatchKind::Check, format!("{check:?}")));
             }
         }
 
-        true
+        Ok(())
     }
 }
 
@@ -170,14 +185,6 @@ fn account_matches(account: &AccountSnapshot, expected: &AccountExpectation) -> 
 
 fn is_rent_exempt(account: &AccountSnapshot) -> bool {
     Rent::default().is_exempt(account.lamports, account.data.len())
-}
-
-fn fail(config: &ResultConfig, message: String) -> bool {
-    assert!(!config.panic, "{message}");
-    if config.verbose {
-        let _ = writeln!(std::io::stderr(), "{message}");
-    }
-    false
 }
 
 #[cfg(test)]

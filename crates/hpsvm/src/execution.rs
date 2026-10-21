@@ -880,9 +880,6 @@ mod tests {
             Ok(_) => panic!("an unreachable account source must not stage successfully"),
             Err(error) => error,
         };
-        assert!(
-            matches!(error, HPSVMError::AccountSource { .. }),
-            "unexpected error: {error:?}"
-        );
+        assert!(matches!(error, HPSVMError::AccountSource { .. }), "unexpected error: {error:?}");
     }
 }

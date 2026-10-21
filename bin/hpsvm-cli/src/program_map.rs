@@ -1,6 +1,6 @@
 use std::{collections::HashMap, fs};
 
-use hpsvm_fixture::{Fixture, FixtureInput, FixtureRunner};
+use hpsvm_fixture::{Fixture, FixtureRunner};
 use solana_address::Address;
 
 use crate::error::CliError;
@@ -22,26 +22,23 @@ pub(crate) fn parse_program_map(values: &[String]) -> Result<HashMap<Address, Ve
     Ok(parsed)
 }
 
+/// Binds the fixture's programs to the ELFs the caller supplied.
+///
+/// The bindings come from the fixture itself ([`Fixture::programs`]), so the
+/// CLI and the library always resolve the same list. A binding without a
+/// matching ELF is reported by the runner, which owns the error type.
 pub(crate) fn preload_runner(
     mut runner: FixtureRunner,
     fixture: &Fixture,
     programs: &HashMap<Address, Vec<u8>>,
 ) -> FixtureRunner {
-    for binding in fixture_programs(fixture) {
+    for binding in fixture.programs() {
         if let Some(bytes) = programs.get(&binding.program_id) {
             runner = runner.with_program_elf(binding.program_id, bytes.clone());
         }
     }
 
     runner
-}
-
-pub(crate) fn fixture_programs(fixture: &Fixture) -> &[hpsvm_fixture::ProgramBinding] {
-    match &fixture.input {
-        FixtureInput::Transaction(transaction) => &transaction.programs,
-        FixtureInput::Instruction(instruction) => &instruction.programs,
-        _ => &[],
-    }
 }
 
 #[cfg(test)]
@@ -244,7 +241,7 @@ mod tests {
     fn fixture_programs_returns_the_transaction_bindings() {
         let program_id = Address::new_unique();
         let fixture = fixture_binding(program_id);
-        let bindings = fixture_programs(&fixture);
+        let bindings = fixture.programs();
 
         assert_eq!(bindings.len(), 1);
         assert_eq!(bindings[0].program_id, program_id);
@@ -252,7 +249,7 @@ mod tests {
 
     #[test]
     fn fixture_programs_is_empty_when_nothing_is_bound() {
-        assert!(fixture_programs(&minimal_fixture()).is_empty());
+        assert!(minimal_fixture().programs().is_empty());
     }
 
     /// A bound program id present in the map is preloaded, so the runner gets

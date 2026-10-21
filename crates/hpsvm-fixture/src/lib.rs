@@ -20,6 +20,7 @@ mod fd;
 mod json;
 mod matrix;
 mod model;
+mod outcome;
 mod report;
 mod runner;
 mod single;
@@ -41,8 +42,9 @@ pub use crate::{
         Fixture, FixtureExpectations, FixtureFormat, FixtureHeader, FixtureInput, FixtureKind,
         ProgramBinding, RuntimeFixtureConfig, TransactionFixture,
     },
+    outcome::{Mismatch, MismatchKind},
     report::{CuDelta, CuReport, CuReportRow},
-    runner::{FixtureExecution, FixtureRunner},
+    runner::{FixtureExecution, FixtureRunner, bind_programs, configure_vm},
     single::ComputeUnitBencher,
     snapshot::{
         AccountSnapshot, ExecutionSnapshot, ExecutionSnapshotFields, ExecutionStatus,

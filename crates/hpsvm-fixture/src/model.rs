@@ -26,6 +26,31 @@ impl Fixture {
     ) -> Self {
         Self { header, input, expectations }
     }
+
+    /// The program bindings this fixture declares.
+    ///
+    /// The single place the bindings of a fixture are read from: a
+    /// recording, a replay and a benchmark all resolve the same list, so
+    /// they cannot disagree about which programs a fixture needs.
+    pub fn programs(&self) -> &[ProgramBinding] {
+        match &self.input {
+            FixtureInput::Transaction(transaction) => &transaction.programs,
+            #[cfg(feature = "instruction-fixture")]
+            FixtureInput::Instruction(instruction) => &instruction.programs,
+        }
+    }
+
+    /// The runtime configuration this fixture was recorded under.
+    ///
+    /// Applying it through [`configure_vm`](crate::configure_vm) reproduces
+    /// the conditions the baseline was captured in.
+    pub fn runtime(&self) -> &RuntimeFixtureConfig {
+        match &self.input {
+            FixtureInput::Transaction(transaction) => &transaction.runtime,
+            #[cfg(feature = "instruction-fixture")]
+            FixtureInput::Instruction(instruction) => &instruction.runtime,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

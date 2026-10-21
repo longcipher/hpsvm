@@ -10,8 +10,44 @@ use solana_transaction::versioned::VersionedTransaction;
 #[cfg(feature = "instruction-fixture")]
 use crate::InstructionFixture;
 use crate::{
-    ExecutionSnapshot, Fixture, FixtureError, FixtureInput, ResultConfig, TransactionFixture,
+    ExecutionSnapshot, Fixture, FixtureError, FixtureInput, ProgramBinding, ResultConfig,
+    RuntimeFixtureConfig, TransactionFixture,
 };
+
+/// Applies a fixture's runtime configuration to a VM.
+///
+/// The single place the fixture runtime configuration is applied. A
+/// recording and a replay both go through it, so a recorded baseline can
+/// always be reproduced by a later replay.
+pub fn configure_vm(vm: &mut HPSVM, runtime: &RuntimeFixtureConfig) {
+    vm.set_sigverify(runtime.sigverify);
+    vm.set_blockhash_check(runtime.blockhash_check);
+    vm.set_log_bytes_limit(runtime.log_bytes_limit);
+    if let Some(compute_unit_limit) = runtime.compute_unit_limit {
+        vm.set_compute_unit_limit(compute_unit_limit);
+    }
+    vm.warp_to_slot(runtime.slot);
+}
+
+/// Binds a fixture's programs to their ELF images on `vm`.
+///
+/// A binding without a matching ELF is an error rather than a skip: silently
+/// skipping it would run (or record) a baseline against a different program
+/// than the one the fixture names.
+pub fn bind_programs<S: std::hash::BuildHasher>(
+    vm: &mut HPSVM,
+    bindings: &[ProgramBinding],
+    elfs: &HashMap<Address, Vec<u8>, S>,
+) -> Result<(), FixtureError> {
+    for binding in bindings {
+        let Some(elf) = elfs.get(&binding.program_id) else {
+            return Err(FixtureError::MissingProgramElf { program_id: binding.program_id });
+        };
+        vm.add_program_with_loader(binding.program_id, elf, binding.loader_id)?;
+    }
+
+    Ok(())
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FixtureExecution {
@@ -50,6 +86,24 @@ impl FixtureRunner {
     /// counterpart for `&mut` use).
     pub fn set_jit_policy(&mut self, policy: hpsvm::JitPolicy) {
         self.jit_policy = Some(policy);
+    }
+
+    /// Binds every program the fixture declares to the ELF in `elfs`.
+    ///
+    /// A binding without a matching ELF is an error: the runner must not
+    /// execute a fixture against a different program than the one it names.
+    pub fn with_fixture_programs<S: std::hash::BuildHasher>(
+        mut self,
+        fixture: &Fixture,
+        elfs: &HashMap<Address, Vec<u8>, S>,
+    ) -> Result<Self, FixtureError> {
+        for binding in fixture.programs() {
+            let elf = elfs
+                .get(&binding.program_id)
+                .ok_or(FixtureError::MissingProgramElf { program_id: binding.program_id })?;
+            self.program_elfs.insert(binding.program_id, elf.clone());
+        }
+        Ok(self)
     }
 
     pub fn run(&mut self, fixture: &Fixture) -> Result<FixtureExecution, FixtureError> {
@@ -95,7 +149,7 @@ impl FixtureRunner {
             if let Some(policy) = self.jit_policy {
                 vm.set_jit_policy(policy);
             }
-            Self::configure_vm(&mut vm, fixture.runtime);
+            configure_vm(&mut vm, &fixture.runtime);
             self.load_programs(&mut vm, &fixture.programs)?;
 
             for account in &fixture.pre_accounts {
@@ -126,36 +180,18 @@ impl FixtureRunner {
         if let Some(policy) = self.jit_policy {
             vm.set_jit_policy(policy);
         }
-        Self::configure_vm(&mut vm, fixture.runtime);
+        configure_vm(&mut vm, &fixture.runtime);
         self.load_programs(&mut vm, &fixture.programs)?;
 
         let outcome = vm.process_instruction_case(&fixture.instruction_case())?;
         Ok(ExecutionSnapshot::from_outcome(&outcome))
     }
 
-    fn configure_vm(vm: &mut HPSVM, runtime: crate::RuntimeFixtureConfig) {
-        vm.set_sigverify(runtime.sigverify);
-        vm.set_blockhash_check(runtime.blockhash_check);
-        vm.set_log_bytes_limit(runtime.log_bytes_limit);
-        if let Some(compute_unit_limit) = runtime.compute_unit_limit {
-            vm.set_compute_unit_limit(compute_unit_limit);
-        }
-        vm.warp_to_slot(runtime.slot);
-    }
-
     fn load_programs(
         &self,
         vm: &mut HPSVM,
-        programs: &[crate::ProgramBinding],
+        programs: &[ProgramBinding],
     ) -> Result<(), FixtureError> {
-        for program in programs {
-            let elf = self
-                .program_elfs
-                .get(&program.program_id)
-                .ok_or(FixtureError::MissingProgramElf { program_id: program.program_id })?;
-            vm.add_program_with_loader(program.program_id, elf.as_slice(), program.loader_id)?;
-        }
-
-        Ok(())
+        bind_programs(vm, programs, &self.program_elfs)
     }
 }

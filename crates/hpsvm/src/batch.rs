@@ -1,4 +1,4 @@
-use std::{collections::HashSet, marker::PhantomData, sync::Arc};
+use std::{collections::HashSet, sync::Arc};
 
 use rayon::prelude::*;
 use solana_address::Address;
@@ -294,14 +294,45 @@ fn sanitize_transaction_for_batch<T: SvmTypesHost>(
 /// [`rayon::iter::ParallelIterator::map_init`] builds the per-worker [`Svm`]
 /// clone lazily, once per Rayon worker thread rather than once per transaction,
 /// which preserves the amortized setup cost of the previous chunked design.
+/// Whether a parallel stage would drop the installed inspector's hooks.
+///
+/// The parallel workers run on inspector-less worker VMs, so an inspector
+/// never observes the transactions of a parallel stage. The condition is a
+/// pure function of the VM's inspector so it can be asserted directly
+/// instead of only being reported through a log line.
+///
+/// The check deliberately does **not** consult the inspector: the VM
+/// consults `accepts_origin` exactly once per execution, and an extra
+/// consultation would be observable to an origin-recording inspector.
+fn parallel_stage_drops_inspector<T: SvmTypesHost>(vm: &Svm<'_, T>, _stage_index: usize) -> bool {
+    vm.has_inspector()
+}
+
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
-fn execute_transaction_batch_stage<T: SvmTypesHost>(
-    vm: &Svm<'_, T>,
+fn execute_transaction_batch_stage<'a, T: SvmTypesHost>(
+    vm: &Svm<'a, T>,
     stage_index: usize,
     stage: &TransactionBatchStage,
     transactions: &[VersionedTransaction],
 ) -> Vec<BatchStageResult> {
     let snapshot = BatchExecutionSnapshot::from_vm(vm);
+
+    // Parallel workers run with no inspector: the boxed inspector cannot be
+    // cloned, and sharing one box across Rayon threads would serialize
+    // execution on its lock. Only the serial single-transaction stage path
+    // (which runs on the live VM) fires hooks.
+    //
+    // Silently dropping hooks would make an installed inspector observe a
+    // different number of transactions depending on how the scheduler
+    // happened to split the batch, so the loss is reported explicitly.
+    if parallel_stage_drops_inspector(vm, stage_index) {
+        tracing::warn!(
+            stage_index,
+            "an inspector is installed; parallel batch stages execute on worker VMs that carry no \
+             inspector, so those transactions are not observed by it — use single-transaction \
+             stages to observe every transaction"
+        );
+    }
 
     stage
         .transaction_indexes
@@ -339,24 +370,23 @@ fn execute_transaction_batch_stage<T: SvmTypesHost>(
 /// sets the overlay clone can dominate batch setup time. A future
 /// optimization would introduce COW (copy-on-write) semantics so that
 /// read-only workers share backing storage and only fork on mutation.
-#[inline]
-fn worker_vm<T: SvmTypesHost>(
-    vm: &Svm<'_, T>,
+///
+/// The worker is built through [`Svm::clone_with_state`], the single place
+/// the VM's field list is written down, so the worker can never drift from
+/// the VM it is derived from.
+fn worker_vm<'a, T: SvmTypesHost>(
+    vm: &Svm<'a, T>,
     runtime: HpsvmRuntimeState,
     origin: TransactionOrigin,
-) -> Svm<'static, T> {
+) -> Svm<'a, T> {
     // Share the committed, immutable program cache across workers: each worker
     // still gets its own overlay (cloned above), but the committed cache is
     // shared via the handle, so a batch does not deep-clone the map on every
     // worker thread — only per-worker mutation would require a copy, and the
     // transaction execution below never commits back into the committed handle
-    // (its scratch is drained before this function returns? your note).
-    // Capture the committed (shared) cache handle before cloning the overlay
-    // so we can re-wrap a *deep* per-worker copy of it for execution-time
-    // mutation, without borrowing `worker_accounts` across the deep clone.
-    let shared_cache = runtime.accounts.programs_cache.clone();
-    let committed_cache_snapshot = shared_cache.read().clone();
-    let mut worker_accounts = (*runtime.accounts).clone();
+    // (its scratch is drained before `execute_transaction_batch_stage`
+    // returns).
+    //
     // Parallel workers must be able to mutate the program cache *during*
     // execution (agave's `process_message` requires `&mut` and replenishes
     // scratch entries), but those mutations must NOT be shared between
@@ -365,39 +395,11 @@ fn worker_vm<T: SvmTypesHost>(
     // cache is still shared across VM clones via the handle everywhere else,
     // so this deep clone happens on the worker-setup path (amortised per
     // Rayon worker thread, not per transaction), preserving `#[inline]`-level
-    // sharing on the single-transaction hot path. Revert this to `Arc::clone`
-    // and the parallel-stage test regresses to a single thread.
-    worker_accounts.programs_cache =
-        std::sync::Arc::new(parking_lot::RwLock::new(committed_cache_snapshot));
-    Svm {
-        accounts: worker_accounts,
-        airdrop_kp: vm.airdrop_kp,
-        builtins_loaded: vm.builtins_loaded,
-        default_programs_loaded: vm.default_programs_loaded,
-        spl_programs_loaded: vm.spl_programs_loaded,
-        version: vm.version.clone(),
-        feature_accounts_loaded: vm.feature_accounts_loaded,
-        // Parallel workers run with no inspector: the boxed inspector
-        // cannot be cloned, and sharing one box across rayon threads would
-        // serialize execution on its lock. Only the serial single-transaction
-        // stage path (which runs on the live VM) fires hooks; parallel-stage
-        // transactions never reach them.
-        inspector: parking_lot::Mutex::new(None),
-        inspection_origin: origin,
-        reserved_account_keys: vm.reserved_account_keys.clone(),
-        runtime_registry: vm.runtime_registry.clone(),
-        registry: vm.registry.clone(),
-        block_env: vm.block_env,
-        history: (*runtime.history).clone(),
-        precompiles: Arc::clone(&vm.precompiles),
-        tier_promoter: Arc::clone(&vm.tier_promoter),
-        sysvars_loaded: vm.sysvars_loaded,
-        _type_family: PhantomData,
-        #[cfg(feature = "invocation-inspect-callback")]
-        invocation_inspect_callback: vm.invocation_inspect_callback.clone(),
-        #[cfg(feature = "invocation-inspect-callback")]
-        enable_register_tracing: vm.enable_register_tracing,
-    }
+    // sharing on the single-transaction hot path. Reverting this to
+    // `Arc::clone` makes the parallel-stage test regress to a single thread.
+    let accounts = runtime.accounts.clone_for_worker();
+    let history = (*runtime.history).clone();
+    vm.clone_with_state(accounts, history, origin)
 }
 
 #[derive(Default)]
@@ -474,6 +476,8 @@ impl TransactionLockSet {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use solana_account::{Account, AccountSharedData, WritableAccount};
     use solana_address::Address;
     use solana_address_lookup_table_interface::instruction::{
@@ -491,8 +495,107 @@ mod tests {
 
     use super::*;
     use crate::{
-        BaseSvmTypes, StateChangeSet, Svm, apply_commit_delta, types::TransactionMetadata,
+        BaseSvmTypes, DetachedTx, Inspector, StateChangeSet, Svm, TransactionOrigin, TxHandler,
+        TxTag, apply_commit_delta, types::TransactionMetadata,
     };
+
+    /// A handler that counts the transactions it executes and then runs the
+    /// default execution path.
+    struct CountingHandler {
+        counter: Arc<AtomicUsize>,
+    }
+
+    impl<T: SvmTypesHost> TxHandler<T, VersionedTransaction, DetachedTx> for CountingHandler {
+        fn validate(
+            &self,
+            _tx: &VersionedTransaction,
+            _host: &Svm<'_, T>,
+        ) -> Result<(), crate::error::HPSVMError> {
+            Ok(())
+        }
+
+        fn execute(
+            &self,
+            tx: VersionedTransaction,
+            host: &Svm<'_, T>,
+        ) -> Result<DetachedTx, crate::error::HPSVMError> {
+            self.counter.fetch_add(1, Ordering::SeqCst);
+            Ok(host.default_execute_detached(tx))
+        }
+    }
+
+    /// An inspector that observes every origin.
+    struct AcceptAllInspector;
+
+    impl Inspector<BaseSvmTypes> for AcceptAllInspector {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+
+        fn accepts_origin(&self, _origin: TransactionOrigin) -> bool {
+            true
+        }
+    }
+
+    /// The batch workers are built from the live VM, so a handler registered
+    /// on the VM is the one that runs inside the batch.
+    #[test]
+    fn batch_workers_inherit_the_live_vms_transaction_registry() {
+        let mut svm = Svm::<BaseSvmTypes>::new();
+        let blockhash = svm.latest_blockhash();
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&counter);
+        svm.register_tx_handler(TxTag::Legacy, CountingHandler { counter: observed });
+
+        let senders: Vec<Keypair> = (0..4).map(|_| Keypair::new()).collect();
+        for sender in &senders {
+            svm.airdrop(&sender.pubkey(), 1_000_000_000).unwrap();
+        }
+        let transactions: Vec<VersionedTransaction> = senders
+            .iter()
+            .map(|sender| {
+                let ix = transfer(&sender.pubkey(), &Address::new_unique(), 1);
+                let msg = Message::new_with_blockhash(&[ix], Some(&sender.pubkey()), &blockhash);
+                VersionedTransaction::try_new(VersionedMessage::Legacy(msg), &[sender]).unwrap()
+            })
+            .collect();
+
+        // The airdrops above already went through the handler; only the batch
+        // transactions are counted from here on.
+        let before = counter.load(Ordering::SeqCst);
+        svm.send_transaction_batch(transactions).unwrap();
+
+        assert_eq!(
+            counter.load(Ordering::SeqCst) - before,
+            4,
+            "every batch transaction must run through the VM's registered handler"
+        );
+    }
+
+    /// A parallel stage drops the installed inspector's hooks, and the
+    /// condition is reported instead of being silently swallowed.
+    #[test]
+    fn a_parallel_stage_reports_that_it_drops_the_inspector() {
+        let mut svm = Svm::<BaseSvmTypes>::new();
+
+        // Without an inspector there is nothing to drop.
+        assert!(
+            !parallel_stage_drops_inspector(&svm, 0),
+            "a VM without an inspector has nothing to drop"
+        );
+
+        // With one, the parallel stage cannot carry it onto the workers.
+        svm.set_inspector(AcceptAllInspector);
+        assert!(
+            parallel_stage_drops_inspector(&svm, 0),
+            "an installed inspector must be reported as dropped"
+        );
+    }
 
     #[test]
     fn commit_delta_merges_runtime_updates() {

@@ -1,14 +1,11 @@
 use std::{collections::HashMap, path::Path};
 
 use hpsvm::HPSVM;
-use hpsvm_fixture::{ComputeUnitBencher, Fixture, FixtureError};
+use hpsvm_fixture::{ComputeUnitBencher, Fixture};
 use solana_address::Address;
 
 use crate::{
-    FixtureFormatArg,
-    error::CliError,
-    fixture::load_fixture,
-    program_map::{fixture_programs, parse_program_map},
+    FixtureFormatArg, error::CliError, fixture::load_fixture, program_map::parse_program_map,
 };
 
 pub(crate) fn report_compute_units(
@@ -49,12 +46,9 @@ fn preload_vm(
     fixture: &Fixture,
     programs: &HashMap<Address, Vec<u8>>,
 ) -> Result<HPSVM, CliError> {
-    for binding in fixture_programs(fixture) {
-        let Some(bytes) = programs.get(&binding.program_id) else {
-            return Err(FixtureError::MissingProgramElf { program_id: binding.program_id }.into());
-        };
-        vm.add_program_with_loader(binding.program_id, bytes, binding.loader_id)?;
-    }
-
+    // The library owns the binding: a binding without a matching ELF is an
+    // error there too, so the CLI and the runner cannot disagree about which
+    // programs a fixture needs.
+    hpsvm_fixture::bind_programs(&mut vm, fixture.programs(), programs)?;
     Ok(vm)
 }

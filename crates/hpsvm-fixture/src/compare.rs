@@ -1,11 +1,11 @@
-use std::{
-    collections::{HashMap, HashSet},
-    io::Write,
-};
+use std::collections::{HashMap, HashSet};
 
 use solana_address::Address;
 
-use crate::{AccountSnapshot, ExecutionSnapshot, ResultConfig};
+use crate::{
+    AccountSnapshot, ExecutionSnapshot, ResultConfig,
+    outcome::{Mismatch, MismatchKind, report_mismatch},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -60,7 +60,26 @@ impl Compare {
 }
 
 impl ExecutionSnapshot {
+    /// Compares this snapshot with `other` under the given predicates.
+    ///
+    /// Returns `true` when every predicate holds. A failure is reported
+    /// through [`ResultConfig`]; it never aborts the process unless the
+    /// `panic` flag is explicitly enabled.
     pub fn compare_with(&self, other: &Self, compares: &[Compare], config: &ResultConfig) -> bool {
+        self.try_compare_with(other, compares, config).is_ok()
+    }
+
+    /// Compares this snapshot with `other` under the given predicates and
+    /// reports the first failure as data.
+    ///
+    /// The `Result` form of [`compare_with`](Self::compare_with): the caller
+    /// receives the failing predicate instead of a bare `false`.
+    pub fn try_compare_with(
+        &self,
+        other: &Self,
+        compares: &[Compare],
+        config: &ResultConfig,
+    ) -> Result<(), Mismatch> {
         for compare in compares {
             let pass = match compare {
                 Compare::Status => self.status == other.status,
@@ -78,11 +97,15 @@ impl ExecutionSnapshot {
             };
 
             if !pass {
-                return fail(config, format!("comparison failed: {compare:?}"));
+                return Err(report_mismatch(
+                    config,
+                    MismatchKind::Comparison,
+                    format!("{compare:?}"),
+                ));
             }
         }
 
-        true
+        Ok(())
     }
 }
 
@@ -135,14 +158,6 @@ fn compare_accounts(
     !right.post_accounts.iter().any(|account| {
         should_compare(&account.address) && !left_addresses.contains(&account.address)
     })
-}
-
-fn fail(config: &ResultConfig, message: String) -> bool {
-    assert!(!config.panic, "{message}");
-    if config.verbose {
-        let _ = writeln!(std::io::stderr(), "{message}");
-    }
-    false
 }
 
 #[cfg(test)]

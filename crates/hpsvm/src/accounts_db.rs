@@ -284,6 +284,26 @@ impl Clone for Accounts {
     }
 }
 
+impl Accounts {
+    /// Clones this database for a parallel batch worker.
+    ///
+    /// The overlay is deep-copied because the worker mutates it. The
+    /// committed program cache is deep-copied too: agave's `process_message`
+    /// needs `&mut` access to it and replenishes transaction-scratch
+    /// entries, and those mutations must not be shared between workers or
+    /// with the live VM.
+    ///
+    /// The deep copy happens on the worker-setup path (amortised per Rayon
+    /// worker thread, not per transaction), so the single-transaction hot
+    /// path keeps sharing the committed cache through its `Arc` handle.
+    pub(crate) fn clone_for_worker(&self) -> Self {
+        let committed_cache_snapshot = self.programs_cache.read().clone();
+        let mut worker = self.clone();
+        worker.programs_cache = Arc::new(RwLock::new(committed_cache_snapshot));
+        worker
+    }
+}
+
 impl Default for Accounts {
     fn default() -> Self {
         use solana_program_runtime::solana_sbpf::program::BuiltinProgram;
