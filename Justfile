@@ -11,22 +11,23 @@ format:
 # Auto-fix linting issues
 fix:
   rumdl check --fix .
-  cargo +nightly clippy --fix --all --allow-dirty
+  RUSTC_WRAPPER= cargo +nightly clippy --fix --all --allow-dirty
+  cargo workspace-inheritance-check --fix
 
 # Run all lints
 lint:
-	rumdl check .
-	cargo sort -w -g -c
-	cargo workspace-inheritance-check
-	cargo +nightly fmt --all -- --check
-	cargo +nightly clippy --all -- -D warnings -A deprecated -A clippy::missing_const_for_fn -A clippy::unwrap_used -A clippy::or_fun_call -A unused-mut -A clippy::result_large_err
-	cargo shear
+  rumdl check .
+  cargo sort -w -g -c
+  cargo workspace-inheritance-check
+  cargo +nightly fmt --all -- --check
+  RUSTC_WRAPPER= cargo +nightly clippy --all -- -D warnings -A deprecated -A clippy::missing_const_for_fn -A clippy::unwrap_used -A clippy::or_fun_call -A unused-mut -A clippy::result_large_err
+  cargo shear
 
 # Run tests
 test:
   cargo test --all-features
 
-# Build the SBF test programs that the integration tests and benches load
+# Verify the SBF test programs the integration tests and benches load
 sbf-test-programs:
   @if ! ./scripts/check-sbf-test-programs.sh; then \
     echo "warning: SBF test programs are missing. On macOS this is expected due to a known"; \
@@ -34,9 +35,10 @@ sbf-test-programs:
     echo "         will skip. Build on Linux and copy target/deploy/ to fix."; \
   fi
 
+# The `--all-targets` pass compiles benches but skips doctests, so the doc
+# examples in `lib.rs` and the README are verified by a separate pass below.
+
 # Run the full test suite across the workspace
-# `--all-targets` compiles benches but skips doctests, so the doc examples in
-# `lib.rs` and the README are verified by a separate pass below.
 test-all: sbf-test-programs
   cargo test --workspace --all-features --all-targets
   cargo test --workspace --all-features --doc
@@ -49,8 +51,6 @@ test-coverage:
 mutants:
   cargo mutants --workspace
 
-# Run mutation testing on everything not yet merged into master (fast feedback)
-#
 # The diff must be produced with `--no-ext-diff --no-textconv`: a global
 # `diff.external` (difftastic, delta, ...) makes `git diff` emit its own tool
 # output instead of a patch, and cargo-mutants then reads an empty diff, mutates
@@ -58,6 +58,8 @@ mutants:
 #
 # Three-dot covers committed work on the branch; the appended `git diff HEAD`
 # covers uncommitted work, so the gate is still useful before a commit.
+
+# Run mutation testing on everything not yet merged into master (fast feedback)
 mutants-quick:
   mkdir -p target/mutants
   git diff --no-ext-diff --no-textconv origin/master...HEAD > target/mutants/branch.diff
@@ -72,6 +74,9 @@ mutants-quick:
 # List the mutants that would be generated without running them
 mutants-list:
   cargo mutants --workspace --list
+
+# Run mutation testing across the workspace (canonical alias of `mutants`)
+mutation: mutants
 
 # Build entire workspace
 build:
@@ -125,11 +130,12 @@ check:
 publish-check:
   cargo package --workspace --allow-dirty
 
-# Publish all crates to crates.io, in dependency order (dev-deps included).
 # Mirrors the `Publish to crates.io` step in .github/workflows/release.yml:
 # every workspace member declared in `[workspace.dependencies]` is published,
 # preceded by the `hpsvm-fd-fixture` fork (source in vendor/), and the
 # cargo-metadata guard there fails the release if the member list rots.
+
+# Publish all crates to crates.io, in dependency order (dev-deps included)
 publish:
   (cd vendor/hpsvm-fd-fixture && cargo publish --registry crates-io --allow-dirty --no-verify)
   sleep 20
@@ -145,9 +151,14 @@ publish:
   sleep 20
   cargo publish -p hpsvm-cli --registry crates-io --allow-dirty --no-verify
 
-# Check for Chinese characters
+# Check for Chinese characters in English-only sources and docs
 check-cn:
-  rg --line-number --column "\p{Han}"
+  #!/usr/bin/env bash
+  set -euo pipefail
+  if rg --line-number --column "\p{Han}" --glob '*.md' --glob '*.toml' --glob '!target/**' --glob '!specs/**'; then
+    echo "error: Chinese characters found in English-only files" >&2
+    exit 1
+  fi
 
 # Full CI check
 ci: lint test-all build
@@ -169,7 +180,41 @@ setup:
   cargo install rumdl
   cargo install cargo-tarpaulin
   cargo install cargo-mutants
+  cargo install cargo-nextest
+  cargo install cargo-audit
+  cargo install cargo-outdated
 
 # Generate documentation for the workspace
 docs:
   cargo doc --no-deps --open
+
+# Run security audit
+audit:
+  cargo audit
+
+# Check for outdated dependencies
+outdated:
+  cargo outdated
+
+# Run clippy with all lints
+clippy-all:
+  RUSTC_WRAPPER= cargo +nightly clippy --all --all-targets --all-features -- -W clippy::pedantic -W clippy::nursery -W clippy::cargo
+
+# Run tests with nextest
+test-nextest:
+  cargo nextest run --workspace --all-features
+
+# Run miri on unsafe code
+miri:
+  cargo +nightly miri test --all-features
+
+# Check for unused dependencies
+unused-deps:
+  cargo shear
+
+# Update all dependencies
+update-deps:
+  cargo update
+
+# Full check (lint + test + build + audit)
+full-check: lint test build audit

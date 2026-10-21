@@ -1,188 +1,32 @@
-# Rust Workspace Agent Instructions
+# hpsvm Agent Instructions
+
+## Non-negotiables
+
+- Surgical edits only: every changed line must trace to the request. No drive-by refactors, no reformatting untouched code, no deleting pre-existing dead code (mention it instead).
+- Fix root causes. Never silence a warning, weaken a check, or patch a symptom to make a gate pass.
+- Never report completion while any `just` gate below fails. Report the failure verbatim and stop.
+- Stop and ask when a request is ambiguous, conflicts with existing conventions, or requires credentials, publishing, or destructive operations.
+- When a correction reveals a missing rule, add one specific rule here ("always X for Y", never "be careful with Y"); delete rules that never catch real errors.
 
 ## Scope
 
-- This template targets Rust workspaces only.
-- `bin/` contains CLI binary crates.
-- `crates/` contains reusable library crates.
-- No frontend/web-framework-specific assumptions.
+- `crates/hpsvm` is the in-process Solana VM simulator; `crates/hpsvm-fixture` captures and replays transaction fixtures; `crates/hpsvm-inspectors` exposes reusable execution observers; `crates/hpsvm-macros` holds the proc macros; `crates/hpsvm-test-support` resolves the SBF test-program binaries.
+- `bin/hpsvm-cli` produces the `hpsvm` binary for fixture authoring and inspection.
+- `crates/hpsvm/test_programs/` holds the SBF test programs built with the Solana CLI; `crates/hpsvm/elf/` holds the vendored program binaries that ship inside the published `hpsvm` crate.
+- `vendor/hpsvm-fd-fixture` is a byte-identical third-party fork with three widened version requirements (see `vendor/PATCHES.md`). It is excluded from the workspace: never reformat it, never lint it, never "fix" it in place.
+- `crates/hpsvm-fixture/fuzz/` is its own cargo-fuzz workspace root.
+- English only in code, comments, docs, and commit messages.
 
-## Tool Usage & Commands
+## Execution
 
-- **NEVER execute `cargo` commands in parallel.** Rust's cargo uses strict file locks on the `target/` directory.
-- ALWAYS run `cargo check`, `cargo build`, or `cargo test` sequentially. Wait for one to finish before starting the next.
-- When fixing errors, execute the file `Write`/`Edit` tool FIRST, wait for it to succeed, and only THEN run `cargo` commands to verify. Do not parallelize file edits with cargo builds.
+- Parallelize aggressively: dispatch subagents for independent research, exploration, and implementation.
+- NEVER run two `cargo` commands concurrently, and never overlap file edits with a running `cargo` command (`target/` file lock): finish edits, wait, then run.
+- NEVER use `git worktree`. Edit the current branch in place.
+- TDD for behavior changes: failing test first, smallest change to pass, then run `just mutants-quick` and fix surviving mutants.
 
-## Cargo Workspace Rules (Critical)
+## Verification loop
 
-1. Never manually type dependency versions in `Cargo.toml`; use `cargo add`.
-2. Add workspace-level dependencies with:
-
-   ```bash
-   cargo add <crate> --workspace
-   ```
-
-3. Add sub-crate dependencies with:
-
-   ```bash
-   cargo add <crate> -p <crate-name> --workspace
-   ```
-
-4. Root `[workspace.dependencies]` must use numeric versions only.
-5. Root `[workspace.dependencies]` must not carry features by default.
-6. Sub-crates must use `workspace = true` for `version`, `edition`, and shared dependencies.
-
-## Preferred Dependencies and Versions
-
-When introducing new dependencies, prefer these versions unless compatibility requires an upgrade:
-
-```toml
-# rust
-clap = "4.6.1"
-config = "0.15.22"
-eyre = "0.6.12"
-serde = "1.0.228"
-thiserror = "2.0.18"
-tokio = "1.52.1"
-tracing = "0.1.44"
-tracing-subscriber = "0.3.23"
-tracing-opentelemetry = "0.32.1"
-opentelemetry = "0.31.0"
-opentelemetry-otlp = "0.31.1"
-sqlx = "=0.9.0-alpha.1"
-utoipa = "5.4.0"
-utoipa-swagger-ui = "9.0.2"
-arc-swap = "1.9.1"
-hpx = "2.4.10"
-scc = "3.7.0"
-winnow = "1.0.2"
-shadow-rs = "2.0.0"
-ecdysis = "1.1.1"
-```
-
-## Dependency Priority and Forbidden Choices
-
-- HTTP client preference: `hpx` (with `rustls`) over `reqwest`.
-- Concurrent map/set preference: `scc` over `dashmap` and `RwLock<HashMap<...>>`.
-- Parsing preference: `winnow` or `pest` over ad-hoc manual parsing.
-- Read-heavy shared state: `arc-swap` over `RwLock`.
-- Forbidden by default: `anyhow`, `log`, `reqwest`, `dashmap`.
-
-## Engineering Principles
-
-### Rust Implementation Guidelines
-
-1. Error handling:
-   - Application layer: `eyre`.
-   - Library layer: `thiserror`.
-2. Database (`sqlx`):
-   - Prefer runtime queries (`sqlx::query_as`).
-   - DB structs should derive `sqlx::FromRow`.
-   - Avoid compile-time `sqlx::query!` macros by default.
-3. Concurrency:
-   - Prefer lock-free/container-first approaches (`scc`, `ArcSwap`).
-   - Avoid `Arc<Mutex<T>>` when better alternatives are available.
-4. Observability:
-   - Logging: `tracing` only.
-   - Metrics/traces: OpenTelemetry OTLP gRPC.
-   - Prometheus should not be the default instrumentation path.
-5. API docs:
-   - Generate OpenAPI with `utoipa` when exposing HTTP APIs.
-6. Configuration:
-   - Use the `config` crate and external configuration files (prefer TOML).
-7. Binaries:
-   - Use `ecdysis` for graceful restart/reload flows in daemon/server binaries.
-8. Safety:
-   - Use `unsafe` only when strictly necessary and document the safety invariants.
-
-### Key Design Principles
-
-- Modularity: Design each crate so it can be used as a standalone library with clear boundaries and minimal hidden coupling.
-- Performance: Prefer architectures that support parallelism, memory-mapped I/O for large read-heavy workloads, optimized data structures, and lock-free data types.
-- Extensibility: Use traits and generic types to support multiple implementations without invasive refactors.
-- Type Safety: Maintain strong static typing across interfaces and internals, with minimal use of dynamic dispatch.
-
-### Performance Considerations
-
-- Avoid allocations in hot paths; prefer references and borrowing to reduce allocation and copy overhead.
-- Use `rayon` for CPU-bound parallel processing.
-- Use `tokio` async/await for I/O-bound concurrency.
-
-### Concurrency and Async Execution
-
-- Prefer atomic types (`AtomicUsize`, `AtomicBool`, etc.) with explicit `Ordering` for simple shared state.
-- Use `scc` for highly concurrent maps/sets; avoid `Arc<RwLock<HashMap<...>>>` and `Arc<Mutex<HashMap<...>>>` on hot paths.
-- Use an existing cache crate instead of a custom LRU implementation. Prefer `lru`
-  (optionally behind `parking_lot::Mutex`) for bounded caches; reach for `moka` only
-  when its concurrent eviction, refresh-ahead, or weigher features are actually needed.
-- Prefer `parking_lot::{Mutex, RwLock}` over `std::sync` locks for synchronous locking.
-- Release `std::sync::Mutex` and `parking_lot::Mutex` guards before hitting any `.await` point.
-- Use `tokio::sync::Mutex` for locks that span across `.await` points.
-- Use `tokio::task::spawn_blocking` for CPU-bound work and blocking I/O.
-- Batch work or use bounded worker patterns instead of spawning massive volumes of tiny Tokio tasks.
-- Channel selection:
-  - Async-to-Async: `tokio::sync::mpsc` / `tokio::sync::broadcast`
-  - Sync/MPMC: `crossbeam-channel` or `flume`
-  - Avoid `std::sync::mpsc`
-
-### Memory and Allocation
-
-- For binary server applications, configure `tikv-jemallocator` or `mimalloc`.
-- For trusted internal hash keys, prefer `ahash` or `rustc-hash` over default SipHash-based maps.
-- Use `compact_str` or `smol_str` for small-string-heavy paths.
-- Prefer `beef::Cow` over `std::borrow::Cow` when minimizing footprint.
-- Use `bytes::Bytes` / `bytes::BytesMut` for network buffers; pass `Bytes` instead of cloning `Vec<u8>`.
-- For critical serialization hot paths, prefer `rkyv` or `zerocopy`; reserve `serde_json` for config and non-critical APIs.
-
-### Type and Layout
-
-- Order struct fields from largest to smallest unless stronger semantic grouping is required.
-- Use `#[repr(C)]` / `#[repr(packed)]` only for FFI or fixed protocol layout requirements.
-- Keep error types compact on hot paths; box large error payloads when needed to reduce `Result<T, E>` size.
-- Prefer typestate-style APIs for compile-time state transitions instead of runtime state checks.
-
-### Tooling and Hot Paths
-
-- Keep code clean under `clippy::pedantic`, `clippy::nursery`, and `clippy::cargo` (allow `missing_errors_doc` for non-public APIs when needed).
-- Use `#[inline]` for tiny methods called in hot loops or on every request, especially across crate boundaries.
-- Mark cold error paths with `#[cold]` and `#[inline(never)]` when it improves hot-path instruction locality.
-
-### Common Pitfalls
-
-- Keep async tasks non-blocking; offload CPU-bound work to `spawn_blocking` or `rayon`.
-- Handle errors explicitly and consistently with the `?` operator and concrete error types.
-
-### What to Avoid
-
-- Incomplete implementations: finish features before submitting.
-- Large, sweeping changes: keep changes focused and reviewable.
-- Mixing unrelated changes: keep one logical change per commit.
-
-## Foundry Rules (If Solidity Exists)
-
-- Use `soldeer` for dependencies; do not use git submodules.
-- Required commands:
-  - `forge soldeer install`
-  - `forge soldeer update`
-  - `forge build`
-  - `forge test`
-
-## Development Workflow
-
-When fixing failures, identify root cause first, then apply idiomatic fixes instead of suppressing warnings or patching symptoms.
-
-Use test-driven development for behavior changes:
-
-- **Git Restrictions:** NEVER use `git worktree`. All code modifications MUST be made directly on the current branch in the existing working directory.
-- start with a failing crate-local unit or integration test that names the expected behavior,
-- drive implementation with failing crate-local unit tests and `proptest` properties in the affected crate,
-- keep `proptest` in the normal `cargo test` loop instead of creating a separate property-test command,
-- use `cargo mutants` to verify the new tests actually kill mutants in the changed code,
-- treat `cargo-fuzz` as conditional planning work rather than baseline template setup.
-
-**BDD is not used in this project.** Do not add Gherkin `.feature` files, `cucumber-rs`, step definitions, or BDD runners.
-
-After each feature or bug fix, run:
+After each feature or bug fix, in order; any failure means the task is not done:
 
 ```bash
 just format
@@ -191,23 +35,35 @@ just test-all
 just mutants-quick
 ```
 
-If any command fails, report the failure and do not claim completion.
+`just test-all` runs `just sbf-test-programs` first, because integration tests, benches, and the `lib.rs` doctests silently skip when the SBF programs are missing.
 
-## Testing Requirements
+## Workspace rules
 
-- Unit tests: colocate with implementation (`#[cfg(test)]`).
-- Prefer example-based unit tests for named business cases and edge cases, and reserve `proptest` for invariants that should hold across many generated inputs.
-- Property tests: colocate `proptest` coverage with the crate logic it exercises so it runs through the ordinary `cargo test` path.
-- Benchmarks: only plan or add Criterion when the scope includes an explicit latency SLA, throughput target, or known hot path in a specific crate.
-- Benchmark workflow: when benchmarking is justified, add Criterion only in the affected crate instead of pre-seeding benchmark scaffolding across the workspace.
-- Fuzz tests: only plan or add `cargo-fuzz` when a crate parses hostile input, implements protocols, decodes binary formats, or contains meaningful `unsafe` code.
-- Fuzz workflow: when fuzzing is justified, generate the standard layout in the affected crate with `cargo fuzz init`, then run targets with `cargo fuzz run <target>` instead of pre-seeding a `fuzz/` directory in every starter.
-- For `/pb-plan` work, mark benchmarking as `conditional` or `N/A` unless the scope explicitly includes a performance requirement or hot path, and mark fuzzing as `conditional` or `N/A` unless the scope explicitly includes parser-like, protocol, binary-decoding, or `unsafe`-heavy code.
-- Integration tests: place in crate-level `tests/`.
-- Add tests for behavioral changes and public API changes.
-- Mutation testing: configured via `.cargo/mutants.toml` and run with `just mutants` (full) or `just mutants-quick` (changed code only). A surviving mutant means an assertion is missing or too weak — tighten the test rather than excluding the mutant.
-- Assertions must be specific: compare against exact expected values and error variants instead of asserting only `is_err()` or matching on stringified errors.
+- Never hand-type dependency versions. Add per-crate deps with `cargo add <crate> -p <crate>`. Shared deps go into root `[workspace.dependencies]` — numeric versions only, no features — and are referenced with `dep = { workspace = true }`.
+- Sub-crates inherit `version`/`edition`/`license`/`repository` via `workspace = true`. Inheritance failures are fixed by `just fix` (cargo-workspace-inheritance-check).
+- The toolchain is pinned to nightly in `rust-toolchain.toml`. Use `cargo +nightly fmt` / `cargo +nightly clippy` as the Justfile does.
+- `.cargo/config.toml` enables `-Zpolonius=next` for every crate. Unset the compiler wrapper when invoking clippy manually (`RUSTC_WRAPPER=`), exactly as the Justfile does.
+- The agave and solana version lines are load-bearing. `crates/hpsvm` depends on the older `-agave` copies of `solana-message`, `solana-transaction`, and `solana-svm-transaction`; `crates/hpsvm/src/agave_compat.rs` bridges them to the newer workspace pins. Do not collapse the two families into one version, and move `solana-svm-transaction` and agave together.
+- The Solana CLI release used to build the test programs must track the agave dependency line. Bumping either one alone breaks the link step.
+- SBF test programs are built with `cargo build-sbf` inside `crates/hpsvm/test_programs`; the four required binaries are `counter.so`, `failure.so`, `hpsvm_clock_example.so`, and `test_program_custom_syscall.so`. On macOS the platform-tools rustc can emit proc-macro dylibs that dyld rejects with an "misaligned LINKEDIT string pool" error; build on Linux and copy `target/deploy/` back.
+- Mutation testing is configured in `.cargo/mutants.toml`: `just mutants` runs the whole workspace, `just mutants-quick` mutates only the branch diff. A surviving mutant means a missing assertion, not a reason to exclude the code.
+- **BDD is not used in this project.** Do not add Gherkin `.feature` files, `cucumber-rs`, step definitions, or BDD runners.
+- Workspace lints deny `unwrap_used`, `allow_attributes`, `todo`, `unimplemented`, `dbg_macro`, `print_stdout`, and `print_stderr`. The only escape hatch is `#[expect(lint, reason = "...")]`.
 
-## Language Requirement
+## Dependency choices
 
-- Documentation, comments, and commit messages must be English only.
+- Caches: `lru` behind a `parking_lot::Mutex` for bounded caches; never a hand-rolled LRU.
+- Locks: `parking_lot` for sync locking; release guards before any `.await`-free hot path boundary.
+- CPU-bound work: `rayon`; the VM is single-instance and in-process, so never emulate Sealevel-style concurrent scheduling.
+- Logging: `tracing` only. Program `log()` calls are forwarded to `tracing::info!`.
+- Errors: `thiserror` in the crates. There is no HTTP client and no database in this workspace.
+- Forbidden by default: `anyhow`, `log`, `reqwest`, `dashmap`.
+
+## Code conventions
+
+- Feature flags on `crates/hpsvm` are the public surface: `precompiles`, `register-tracing`, `hotpath`, `hotpath-alloc`, `fork`, `loader`, `token`, `token-2022`, `serde`, `hashbrown`, `internal-test`, `invocation-inspect-callback`. Add a new capability as a feature, not as an always-on dependency.
+- `HPSVM` stays the stable facade. New capability goes into the sharper seams: `transact`/`commit`/`discard`, `transact_detached`, `with_account_source`, `block_env`, `with_inspector`.
+- Assertions must be specific: compare exact expected values and error variants, never only `is_err()` or a stringified error.
+- Benchmarks live in `crates/hpsvm/benches` and are compared against the committed baselines in `docs/benchmarks/baselines/` and `docs/benchmarks/runtime-baselines/`. Refresh a baseline only on the machine that owns it, via `just bench-baseline-refresh` or `just bench-runtime-baseline-refresh`.
+- Hotpath runs are driven by the `HPSVM_HOTPATH=1` and `HPSVM_TRACE_METRICS=1` environment variables; the Justfile recipes already set them.
+- Publishing order is dependency order, dev-dependencies included: `hpsvm-macros`, `hpsvm-test-support`, `hpsvm`, `hpsvm-fixture`, `hpsvm-inspectors`, `hpsvm-cli`, with `hpsvm-fd-fixture` published first from `vendor/`. Use `just publish`; it mirrors the release workflow and waits for index propagation.
