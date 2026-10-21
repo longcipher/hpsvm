@@ -1881,21 +1881,21 @@ mod tests {
         let mut svm = task42_vm_with_builtin();
         let program_id = task42_deployed_program_id();
         assert!(
-            svm.accounts.has_program_cache_entry(&program_id),
+            svm.state.accounts.has_program_cache_entry(&program_id),
             "deployed builtin must resolve from the cache before any transaction"
         );
-        let before = svm.accounts.shared_programs_cache();
+        let before = svm.state.accounts.shared_programs_cache();
 
         let payer = task42_funded_payer(&mut svm);
         svm.send_transaction(task42_transfer_tx(&svm, &payer, 64)).unwrap();
 
-        let after = svm.accounts.shared_programs_cache();
+        let after = svm.state.accounts.shared_programs_cache();
         assert!(
             Arc::ptr_eq(&before, &after),
             "program cache handle must be shared (Arc::clone), not deep-cloned, across a transaction"
         );
         assert!(
-            svm.accounts.has_program_cache_entry(&program_id),
+            svm.state.accounts.has_program_cache_entry(&program_id),
             "deployed builtin must still resolve from the shared cache after a transaction"
         );
     }
@@ -1906,7 +1906,7 @@ mod tests {
         let program_id = task42_deployed_program_id();
         let payer_a = task42_funded_payer(&mut svm);
         let payer_b = task42_funded_payer(&mut svm);
-        let before = svm.accounts.shared_programs_cache();
+        let before = svm.state.accounts.shared_programs_cache();
 
         // Distinct payers/recipients are conflict-free, so both land in one
         // stage executed on rayon worker VMs cloned from this VM's state.
@@ -1918,13 +1918,13 @@ mod tests {
 
         assert_eq!(result.results.len(), 2);
         assert!(result.results.iter().all(|r| r.is_ok()));
-        let after = svm.accounts.shared_programs_cache();
+        let after = svm.state.accounts.shared_programs_cache();
         assert!(
             Arc::ptr_eq(&before, &after),
             "program cache handle must stay shared across a batch stage"
         );
         assert!(
-            svm.accounts.has_program_cache_entry(&program_id),
+            svm.state.accounts.has_program_cache_entry(&program_id),
             "deployed builtin must still resolve from the shared cache after a batch"
         );
     }
@@ -1935,8 +1935,8 @@ mod tests {
         let worker = svm.clone();
         assert!(
             Arc::ptr_eq(
-                &svm.accounts.shared_programs_cache(),
-                &worker.accounts.shared_programs_cache()
+                &svm.state.accounts.shared_programs_cache(),
+                &worker.state.accounts.shared_programs_cache()
             ),
             "VM clones (batch workers, simulates) must share the program cache instead of deep-cloning it"
         );
@@ -1946,7 +1946,7 @@ mod tests {
     fn task42_program_still_resolves_after_failed_and_discarded_transactions() {
         let mut svm = task42_vm_with_builtin();
         let program_id = task42_deployed_program_id();
-        let before = svm.accounts.shared_programs_cache();
+        let before = svm.state.accounts.shared_programs_cache();
         let payer = task42_funded_payer(&mut svm);
 
         // Discard a staged success: the overlay rolls back, the cache must be
@@ -1954,15 +1954,15 @@ mod tests {
         let staged =
             svm.transact(task42_transfer_tx(&svm, &payer, 32)).expect("transact must stage");
         assert!(staged.discard().is_ok());
-        assert!(Arc::ptr_eq(&before, &svm.accounts.shared_programs_cache()));
-        assert!(svm.accounts.has_program_cache_entry(&program_id));
+        assert!(Arc::ptr_eq(&before, &svm.state.accounts.shared_programs_cache()));
+        assert!(svm.state.accounts.has_program_cache_entry(&program_id));
 
         // Fail at runtime (insufficient funds): the cache must be intact.
         let failing = task42_transfer_tx(&svm, &payer, u64::MAX);
         assert!(svm.send_transaction(failing).is_err());
-        assert!(Arc::ptr_eq(&before, &svm.accounts.shared_programs_cache()));
+        assert!(Arc::ptr_eq(&before, &svm.state.accounts.shared_programs_cache()));
         assert!(
-            svm.accounts.has_program_cache_entry(&program_id),
+            svm.state.accounts.has_program_cache_entry(&program_id),
             "deployed builtin must still resolve after failed/discarded transactions"
         );
     }
@@ -1974,12 +1974,13 @@ mod tests {
         let mut svm = Hpsvm::builder().with_sysvars().build().expect("minimal VM should build");
         let program_id = Address::new_unique();
         // Bypass loading so the bogus bytes reach `prewarm_programs`.
-        svm.accounts.add_account_no_checks(
+        svm.state.accounts.add_account_no_checks(
             program_id,
             journal_test_account(1, b"definitely not an elf", &bpf_loader::id(), true, 0),
         );
 
-        let error = svm.accounts.prewarm_programs(&[program_id]).expect_err("bogus ELF must fail");
+        let error =
+            svm.state.accounts.prewarm_programs(&[program_id]).expect_err("bogus ELF must fail");
         assert!(
             !error.is_fatal(),
             "unverifiable program bytes are deterministic for this input, not infrastructure failure"

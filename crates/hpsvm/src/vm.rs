@@ -170,7 +170,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
     }
 
     pub(crate) fn sync_block_env_slot(&mut self) {
-        self.block_env.slot = self.accounts.current_slot();
+        self.block_env.slot = self.state.accounts.current_slot();
     }
 
     pub(crate) fn new_inner(_enable_register_tracing: bool) -> Self {
@@ -178,14 +178,14 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
         let latest_blockhash = create_blockhash(b"genesis");
 
         Self {
-            accounts: Default::default(),
+            state: crate::SvmState {
+                accounts: Default::default(),
+                history: TransactionHistory::new(),
+            },
             airdrop_kp: Keypair::new().to_bytes(),
-            builtins_loaded: false,
-            default_programs_loaded: false,
-            spl_programs_loaded: false,
-            reserved_account_keys: Self::reserved_account_keys_for_feature_set(&feature_set),
+            materialized: crate::MaterializedState::default(),
             version: Version {
-                feature_set: Arc::new(feature_set),
+                feature_set: Arc::new(feature_set.clone()),
                 sigverify: false,
                 blockhash_check: false,
                 fee_structure: FeeStructure::default(),
@@ -199,11 +199,37 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
                 },
                 jit_policy: JitPolicy::DEFAULT,
             },
-            feature_accounts_loaded: false,
-            inspector: Mutex::new(None),
-            inspection_origin: TransactionOrigin::User,
-            runtime_registry: RuntimeExtensionRegistry::default(),
-            registry: crate::tx_registry::TxRegistry::with_defaults(),
+            extensions: crate::SvmExtensions {
+                inspector: Mutex::new(None),
+                inspection_origin: TransactionOrigin::User,
+                runtime_registry: RuntimeExtensionRegistry::default(),
+                registry: crate::tx_registry::TxRegistry::with_defaults(),
+                precompiles: {
+                    #[cfg(feature = "precompiles")]
+                    {
+                        Arc::new(NativePrecompiles::new())
+                    }
+                    #[cfg(not(feature = "precompiles"))]
+                    {
+                        Arc::new(NoPrecompiles)
+                    }
+                },
+                tier_promoter: Arc::new(crate::programs::TierPromoter::new(JitPolicy::DEFAULT)),
+                reserved_account_keys: Self::reserved_account_keys_for_feature_set(&feature_set),
+                #[cfg(feature = "invocation-inspect-callback")]
+                enable_register_tracing: _enable_register_tracing,
+                #[cfg(feature = "invocation-inspect-callback")]
+                invocation_inspect_callback: {
+                    #[cfg(feature = "register-tracing")]
+                    if _enable_register_tracing {
+                        Arc::new(DefaultRegisterTracingCallback::default())
+                    } else {
+                        Arc::new(EmptyInvocationInspectCallback {})
+                    }
+                    #[cfg(not(feature = "register-tracing"))]
+                    Arc::new(EmptyInvocationInspectCallback {})
+                },
+            },
             block_env: BlockEnv {
                 latest_blockhash,
                 slot: 0,
@@ -211,27 +237,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
                 // base path keeps constructing exactly the old value.
                 ext: T::BlockEnvExt::default(),
             },
-            history: TransactionHistory::new(),
-            sysvars_loaded: false,
-            #[cfg(feature = "precompiles")]
-            precompiles: Arc::new(NativePrecompiles::new()),
-            #[cfg(not(feature = "precompiles"))]
-            precompiles: Arc::new(NoPrecompiles),
-            tier_promoter: Arc::new(crate::programs::TierPromoter::new(JitPolicy::DEFAULT)),
             _type_family: PhantomData,
-            #[cfg(feature = "invocation-inspect-callback")]
-            enable_register_tracing: _enable_register_tracing,
-            #[cfg(feature = "invocation-inspect-callback")]
-            invocation_inspect_callback: {
-                #[cfg(feature = "register-tracing")]
-                if _enable_register_tracing {
-                    Arc::new(DefaultRegisterTracingCallback::default())
-                } else {
-                    Arc::new(EmptyInvocationInspectCallback {})
-                }
-                #[cfg(not(feature = "register-tracing"))]
-                Arc::new(EmptyInvocationInspectCallback {})
-            },
         }
     }
 
@@ -281,7 +287,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
     /// first. Used by the builder, which holds the plan-time inspector boxed.
     pub(crate) fn set_boxed_inspector(&mut self, mut inspector: Box<dyn Inspector<T> + 'a>) {
         inspector.initialize(self);
-        *self.inspector.lock() = Some(inspector);
+        *self.extensions.inspector.lock() = Some(inspector);
     }
 
     /// Removes the installed inspector and returns it, if any.
@@ -289,7 +295,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
     /// State the inspector accumulated stays observable through the returned
     /// box; downcast it back with `downcast_ref` to read the concrete type.
     pub fn clear_inspector(&mut self) -> Option<Box<dyn Inspector<T> + 'a>> {
-        self.inspector.lock().take()
+        self.extensions.inspector.lock().take()
     }
 
     /// Returns whether the installed inspector accepts the current
@@ -301,7 +307,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
     /// one consultation per execution, and no hook dispatcher consults again.
     #[inline]
     pub(crate) fn inspector_live(&self) -> bool {
-        self.inspector_accepts_origin(self.inspection_origin)
+        self.inspector_accepts_origin(self.extensions.inspection_origin)
     }
 
     /// Runs `op` against the installed inspector, if any.
@@ -311,10 +317,10 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
     /// re-enters execution therefore observes no inspector rather than
     /// deadlocking on the lock.
     fn fire_inspector(&self, op: impl FnOnce(&mut (dyn Inspector<T> + '_), &Self)) {
-        let Some(mut inspector) = self.inspector.lock().take() else { return };
+        let Some(mut inspector) = self.extensions.inspector.lock().take() else { return };
         let outcome =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| op(&mut *inspector, self)));
-        *self.inspector.lock() = Some(inspector);
+        *self.extensions.inspector.lock() = Some(inspector);
         if let Err(payload) = outcome {
             std::panic::resume_unwind(payload);
         }
@@ -393,10 +399,10 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
         origin: TransactionOrigin,
         op: impl FnOnce(&mut Self) -> O,
     ) -> O {
-        let previous_origin = self.inspection_origin;
-        self.inspection_origin = origin;
+        let previous_origin = self.extensions.inspection_origin;
+        self.extensions.inspection_origin = origin;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| op(self)));
-        self.inspection_origin = previous_origin;
+        self.extensions.inspection_origin = previous_origin;
         match result {
             Ok(result) => result,
             Err(payload) => std::panic::resume_unwind(payload),
@@ -408,9 +414,9 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
         source: Arc<dyn AccountSource>,
         op: impl FnOnce(&mut Self) -> O,
     ) -> O {
-        let previous_source = self.accounts.replace_account_source(source);
+        let previous_source = self.state.accounts.replace_account_source(source);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| op(self)));
-        self.accounts.set_account_source(previous_source);
+        self.state.accounts.set_account_source(previous_source);
         match result {
             Ok(result) => result,
             Err(payload) => std::panic::resume_unwind(payload),
@@ -419,46 +425,48 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
 
     pub(crate) fn clear_feature_accounts(&mut self, previous_feature_set: &FeatureSet) {
         previous_feature_set.active().iter().for_each(|(feature_id, _)| {
-            self.accounts.remove_account(feature_id);
+            self.state.accounts.remove_account(feature_id);
         });
     }
 
     pub(crate) fn clear_builtin_accounts(&mut self) {
         for builtin in BUILTINS {
-            self.accounts.remove_account(&builtin.program_id);
+            self.state.accounts.remove_account(&builtin.program_id);
         }
     }
 
     pub(crate) fn clear_default_programs(&mut self) {
         for program_id in &DEFAULT_PROGRAM_IDS {
             if self
+                .state
                 .accounts
                 .get_account_ref(program_id)
                 .is_some_and(|account| account.owner() == &bpf_loader_upgradeable::id())
             {
-                self.accounts.remove_account(&get_program_data_address(program_id));
+                self.state.accounts.remove_account(&get_program_data_address(program_id));
             }
-            self.accounts.remove_account(program_id);
+            self.state.accounts.remove_account(program_id);
         }
     }
 
     pub(crate) fn clear_spl_programs(&mut self) {
         for program_id in &SPL_PROGRAM_IDS {
             if self
+                .state
                 .accounts
                 .get_account_ref(program_id)
                 .is_some_and(|account| account.owner() == &bpf_loader_upgradeable::id())
             {
-                self.accounts.remove_account(&get_program_data_address(program_id));
+                self.state.accounts.remove_account(&get_program_data_address(program_id));
             }
-            self.accounts.remove_account(program_id);
+            self.state.accounts.remove_account(program_id);
         }
     }
 
     #[cfg(feature = "precompiles")]
     pub(crate) fn clear_precompile_accounts(&mut self) {
-        for program_id in self.precompiles.program_ids() {
-            self.accounts.remove_account(&program_id);
+        for program_id in self.extensions.precompiles.program_ids() {
+            self.state.accounts.remove_account(&program_id);
         }
     }
 
@@ -466,42 +474,42 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
         &mut self,
         previous_feature_set: &FeatureSet,
     ) -> Result<(), HPSVMError> {
-        if self.feature_accounts_loaded {
+        if self.materialized.feature_accounts {
             self.clear_feature_accounts(previous_feature_set);
             self.materialize_feature_accounts();
         }
 
-        if self.default_programs_loaded {
+        if self.materialized.default_programs {
             self.clear_default_programs();
         }
 
-        if self.spl_programs_loaded {
+        if self.materialized.spl_programs {
             self.clear_spl_programs();
         }
 
-        if self.builtins_loaded {
+        if self.materialized.builtins {
             self.clear_builtin_accounts();
             self.load_builtins();
-        } else if !self.runtime_registry.custom_syscalls().is_empty() {
+        } else if !self.extensions.runtime_registry.custom_syscalls().is_empty() {
             self.refresh_runtime_environments();
         }
 
         #[cfg(feature = "precompiles")]
-        if self.runtime_registry.loads_standard_precompiles() {
+        if self.extensions.runtime_registry.loads_standard_precompiles() {
             self.clear_precompile_accounts();
             self.load_precompiles();
         }
 
-        if self.default_programs_loaded {
+        if self.materialized.default_programs {
             self.load_default_programs();
         }
 
-        if self.spl_programs_loaded {
+        if self.materialized.spl_programs {
             self.load_spl_programs();
         }
 
         self.sync_jit_policy();
-        self.accounts.rebuild_program_cache().map_err(HPSVMError::from)
+        self.state.accounts.rebuild_program_cache().map_err(HPSVMError::from)
     }
 
     /// **Advanced reconfiguration.** Replaces the runtime compute budget.
@@ -552,8 +560,8 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
     /// on x86_64 (diagnostics / equivalence gate).
     pub fn set_jit_policy(&mut self, policy: JitPolicy) {
         self.version.jit_policy = policy;
-        self.accounts.sync_jit_policy(policy);
-        self.tier_promoter = Arc::new(crate::programs::TierPromoter::new(policy));
+        self.state.accounts.sync_jit_policy(policy);
+        self.extensions.tier_promoter = Arc::new(crate::programs::TierPromoter::new(policy));
     }
 
     /// Builder-style policy override, mirroring `with_feature`.
@@ -570,9 +578,9 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
     /// Covers direct `version.jit_policy` assignment bypassing the setter.
     pub(crate) fn sync_jit_policy(&mut self) {
         let policy = self.version.jit_policy;
-        if self.accounts.jit_policy() != policy {
-            self.accounts.sync_jit_policy(policy);
-            self.tier_promoter = Arc::new(crate::programs::TierPromoter::new(policy));
+        if self.state.accounts.jit_policy() != policy {
+            self.state.accounts.sync_jit_policy(policy);
+            self.extensions.tier_promoter = Arc::new(crate::programs::TierPromoter::new(policy));
         }
     }
 
@@ -583,10 +591,10 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
     /// transaction path beyond the short cache-read for the sweep.
     #[must_use]
     pub fn program_tier_stats(&self) -> ProgramTierStats {
-        let promotion = self.tier_promoter.stats_handle();
+        let promotion = self.extensions.tier_promoter.stats_handle();
         ProgramTierStats::collect(
             self.version.jit_policy,
-            &self.accounts,
+            &self.state.accounts,
             crate::programs::program_entry_store().len(),
             &promotion,
         )
@@ -597,7 +605,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
     /// Called after each execution; O(entries) atomic reads, off the agave
     /// path. No-op unless the effective policy is `Lazy` on x86_64.
     pub(crate) fn observe_tier(&self) {
-        self.tier_promoter.observe(&self.accounts);
+        self.extensions.tier_promoter.observe(&self.state.accounts);
     }
 
     /// Resolves (and, under `Lazy`, promotes) a program set before execution.
@@ -609,13 +617,13 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
     /// fatal classification preserved.
     pub fn prewarm_programs(&mut self, program_ids: &[Address]) -> Result<(), HPSVMError> {
         self.sync_jit_policy();
-        self.accounts.prewarm_programs(program_ids).map_err(HPSVMError::from)?;
+        self.state.accounts.prewarm_programs(program_ids).map_err(HPSVMError::from)?;
         if self.version.jit_policy.is_lazy() {
             // Snapshot under the read lock, then promote lock-free: holding
             // the cache guard across a synchronous `jit_compile` would block
             // every cache writer for the duration of the compile.
             let entries: Vec<_> = {
-                let cache = self.accounts.shared_programs_cache();
+                let cache = self.state.accounts.shared_programs_cache();
                 let guard = cache.read();
                 program_ids
                     .iter()
@@ -628,9 +636,9 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
                 // synchronously so the next transaction observes compiled
                 // code. Otherwise enqueue to the background pool.
                 if self.version.jit_policy.hot_threshold() == Some(0) {
-                    self.tier_promoter.promote_blocking(entry);
+                    self.extensions.tier_promoter.promote_blocking(entry);
                 } else {
-                    self.tier_promoter.promote(entry);
+                    self.extensions.tier_promoter.promote(entry);
                 }
             }
         }
@@ -638,7 +646,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
     }
 
     pub(crate) fn set_sysvars(&mut self) {
-        self.sysvars_loaded = true;
+        self.materialized.sysvars = true;
         self.set_sysvar_internal(&Clock::default());
         self.set_sysvar_internal(&EpochRewards::default());
         self.set_sysvar_internal(&EpochSchedule::default());
@@ -672,7 +680,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
             self.set_sysvar_internal(&rent_account);
         }
         self.set_sysvar_internal(&SlotHashes::new(&[SlotHash::new(
-            self.accounts.current_slot(),
+            self.state.accounts.current_slot(),
             latest_blockhash,
         )]));
         self.set_sysvar_internal(&SlotHistory::default());
@@ -685,7 +693,8 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
                 &solana_sdk_ids::sysvar::id(),
             )
             .expect("StakeHistory account creation");
-            self.accounts
+            self.state
+                .accounts
                 .add_account(StakeHistory::id(), account)
                 .expect("add StakeHistory account");
         }
@@ -695,22 +704,22 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
     /// materialized feature-dependent state.
     pub fn set_feature_set(&mut self, feature_set: FeatureSet) -> Result<(), HPSVMError> {
         let previous_feature_set = Arc::clone(&self.version.feature_set);
-        let previous_accounts = self.accounts.clone();
-        let previous_reserved_account_keys = self.reserved_account_keys.clone();
+        let previous_accounts = self.state.accounts.clone();
+        let previous_reserved_account_keys = self.extensions.reserved_account_keys.clone();
 
         self.version.feature_set = Arc::new(feature_set);
-        self.reserved_account_keys =
+        self.extensions.reserved_account_keys =
             Self::reserved_account_keys_for_feature_set(&self.version.feature_set);
         if let Err(error) = self.reconfigure_materialized_feature_state(&previous_feature_set) {
             self.version.feature_set = previous_feature_set;
-            self.reserved_account_keys = previous_reserved_account_keys;
-            self.accounts = previous_accounts;
+            self.extensions.reserved_account_keys = previous_reserved_account_keys;
+            self.state.accounts = previous_accounts;
             // The program cache is shared through an `Arc`, so the failed
             // reconfigure may have mutated it through the backup's handle.
             // The cache is derived from the overlay, so rebuild it from the
             // restored accounts to recover the pre-call contents.
             self.sync_jit_policy();
-            if let Err(rebuild_error) = self.accounts.rebuild_program_cache() {
+            if let Err(rebuild_error) = self.state.accounts.rebuild_program_cache() {
                 tracing::error!(
                     ?rebuild_error,
                     "failed to restore program cache after set_feature_set rollback"
@@ -723,12 +732,12 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
     }
 
     pub(crate) fn materialize_feature_accounts(&mut self) {
-        self.feature_accounts_loaded = true;
+        self.materialized.feature_accounts = true;
         for (feature_id, activation_slot) in self.version.feature_set.active() {
             let feature_account = Feature { activated_at: Some(*activation_slot) };
             let lamports = self.minimum_balance_for_rent_exemption(Feature::size_of());
             let account = feature_gate::create_account(&feature_account, lamports);
-            self.accounts.add_account_no_checks(*feature_id, account);
+            self.state.accounts.add_account_no_checks(*feature_id, account);
         }
     }
 
@@ -745,7 +754,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
     }
 
     pub(crate) fn load_builtins(&mut self) {
-        self.builtins_loaded = true;
+        self.materialized.builtins = true;
         self.refresh_runtime_environments();
         for builtint in BUILTINS {
             // Dynamic id: each builtin carries its own `enable_feature_id`,
@@ -753,9 +762,10 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
             // Setup-time only, so the direct query stays.
             if builtint.enable_feature_id.is_none_or(|x| self.version.feature_set.is_active(&x)) {
                 let loaded_program = ProgramCacheEntry::new_builtin(builtint.register_fn);
-                self.accounts
+                self.state
+                    .accounts
                     .replenish_program_cache(builtint.program_id, Arc::new(loaded_program));
-                self.accounts.add_builtin_account(
+                self.state.accounts.add_builtin_account(
                     builtint.program_id,
                     crate::utils::create_loadable_account_for_test(builtint.name),
                 );
@@ -768,7 +778,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
     }
 
     pub fn set_lamports(&mut self, lamports: u64) {
-        self.accounts.add_account_no_checks(
+        self.state.accounts.add_account_no_checks(
             Keypair::try_from(self.airdrop_kp.as_slice())
                 .expect("airdrop keypair should be valid")
                 .pubkey(),
@@ -777,12 +787,12 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
     }
 
     pub(crate) fn load_default_programs(&mut self) {
-        self.default_programs_loaded = true;
+        self.materialized.default_programs = true;
         load_default_programs(self);
     }
 
     pub(crate) fn load_spl_programs(&mut self) {
-        self.spl_programs_loaded = true;
+        self.materialized.spl_programs = true;
         load_spl_programs(self);
     }
 
@@ -797,12 +807,12 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
     /// **Advanced reconfiguration.** Changes the transaction history capacity. Set this to 0 to
     /// disable history and allow duplicate transactions.
     pub fn set_transaction_history(&mut self, capacity: usize) {
-        self.history.set_capacity(capacity);
+        self.state.history.set_capacity(capacity);
     }
 
     /// **Advanced reconfiguration.** Installs a read-through account source for future lookups.
     pub fn set_account_source(&mut self, source: impl AccountSource + 'static) {
-        self.accounts.set_account_source(Arc::new(source));
+        self.state.accounts.set_account_source(Arc::new(source));
     }
 
     /// **Advanced reconfiguration.** Adjusts the log truncation limit for future execution.
@@ -817,7 +827,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
 
     #[cfg(feature = "precompiles")]
     pub(crate) fn set_precompiles(&mut self) {
-        self.runtime_registry.enable_standard_precompiles();
+        self.extensions.runtime_registry.enable_standard_precompiles();
         self.load_precompiles();
     }
 
@@ -831,25 +841,25 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
     /// With the feature off the swap is inert: nothing dispatches as a
     /// precompile either way, exactly as before.
     pub fn set_precompile_provider(&mut self, provider: Arc<dyn PrecompileProvider<T>>) {
-        self.precompiles = provider;
+        self.extensions.precompiles = provider;
         #[cfg(feature = "precompiles")]
         self.load_precompiles();
     }
 
     /// Returns the active precompile provider.
     pub fn precompile_provider(&self) -> Arc<dyn PrecompileProvider<T>> {
-        Arc::clone(&self.precompiles)
+        Arc::clone(&self.extensions.precompiles)
     }
 
     /// Returns minimum balance required to make an account with specified data length rent exempt.
     pub fn minimum_balance_for_rent_exemption(&self, data_len: usize) -> u64 {
-        self.accounts.minimum_balance_for_rent_exemption(data_len)
+        self.state.accounts.minimum_balance_for_rent_exemption(data_len)
     }
 
     /// Returns all information associated with the account of the provided pubkey.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn get_account(&self, address: &Address) -> Option<Account> {
-        self.accounts.get_account(address).map(Into::into)
+        self.state.accounts.get_account(address).map(Into::into)
     }
 
     /// Returns account data while preserving failures from a configured external source.
@@ -857,7 +867,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
         &self,
         address: &Address,
     ) -> Result<Option<Account>, AccountSourceError> {
-        self.accounts.try_get_account(address).map(|account| account.map(Into::into))
+        self.state.accounts.try_get_account(address).map(|account| account.map(Into::into))
     }
 
     /// **⚠️ ADVANCED USE ONLY ⚠️**
@@ -873,7 +883,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn set_account(&mut self, address: Address, data: Account) -> Result<(), HPSVMError> {
         self.sync_jit_policy();
-        self.accounts.add_account(address, data.into())?;
+        self.state.accounts.add_account(address, data.into())?;
         self.sync_block_env_slot();
         Ok(())
     }
@@ -897,12 +907,12 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
     /// // ... inspect internal state if needed
     /// ```
     pub const fn accounts(&self) -> AccountsView<'_> {
-        AccountsView::new(&self.accounts)
+        AccountsView::new(&self.state.accounts)
     }
 
     /// Gets the balance of the provided account pubkey.
     pub fn get_balance(&self, address: &Address) -> Option<u64> {
-        self.accounts.get_account(address).map(|account| account.lamports())
+        self.state.accounts.get_account(address).map(|account| account.lamports())
     }
 
     /// Gets the latest blockhash.
@@ -969,7 +979,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
             sysvar: std::any::type_name::<S>(),
             reason: error.to_string(),
         })?;
-        self.accounts.add_account(S::id(), account)
+        self.state.accounts.add_account(S::id(), account)
     }
 
     pub(crate) fn set_sysvar_internal<S>(&mut self, sysvar: &S)
@@ -994,6 +1004,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
         S: Sysvar + SysvarId + DeserializeOwned,
     {
         let account = self
+            .state
             .accounts
             .get_account_ref(&S::id())
             .ok_or(HPSVMError::MissingRuntimeComponent { component: "sysvars" })?;
@@ -1005,7 +1016,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
     }
 
     pub(crate) fn require_sysvars_loaded(&self) -> Result<(), HPSVMError> {
-        if self.sysvars_loaded {
+        if self.materialized.sysvars {
             Ok(())
         } else {
             Err(HPSVMError::MissingRuntimeComponent { component: "sysvars" })
@@ -1014,7 +1025,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
 
     /// Gets a transaction from the transaction history.
     pub fn get_transaction(&self, signature: &Signature) -> Option<&TransactionResult> {
-        self.history.get_transaction(signature)
+        self.state.history.get_transaction(signature)
     }
 
     /// Returns the pubkey of the internal airdrop account.
@@ -1061,11 +1072,11 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
     pub fn add_builtin(&mut self, program_id: Address, entrypoint: BuiltinFunctionRegisterer) {
         let builtin = ProgramCacheEntry::new_builtin(entrypoint);
 
-        self.accounts.replenish_program_cache(program_id, Arc::new(builtin));
+        self.state.accounts.replenish_program_cache(program_id, Arc::new(builtin));
 
         let mut account = AccountSharedData::new(1, 1, &native_loader::id());
         account.set_executable(true);
-        self.accounts.add_account_no_checks(program_id, account);
+        self.state.accounts.add_account_no_checks(program_id, account);
     }
 
     /// Adds an SBF program to the test environment from the file specified.
@@ -1089,7 +1100,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
     ) -> Result<(), HPSVMError> {
         self.sync_jit_policy();
         let program_id = program_id.into();
-        let current_slot = self.accounts.current_slot();
+        let current_slot = self.state.accounts.current_slot();
 
         if bpf_loader_upgradeable::check_id(loader_id) {
             let (programdata_address, _bump) =
@@ -1118,8 +1129,8 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
                 .set_state(&UpgradeableLoaderState::Program { programdata_address })
                 .expect("UpgradeableLoaderState::Program serialization should never fail");
 
-            self.accounts.add_account_no_checks(programdata_address, programdata_account);
-            self.accounts.add_account_no_checks(program_id, program_account);
+            self.state.accounts.add_account_no_checks(programdata_address, programdata_account);
+            self.state.accounts.add_account_no_checks(program_id, program_account);
         } else if bpf_loader::check_id(loader_id) || bpf_loader_deprecated::check_id(loader_id) {
             let program_len = program_bytes.len();
             let lamports = self.minimum_balance_for_rent_exemption(program_len);
@@ -1127,7 +1138,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
             account.set_executable(true);
             account.set_data_from_slice(program_bytes);
 
-            self.accounts.add_account_no_checks(program_id, account);
+            self.state.accounts.add_account_no_checks(program_id, account);
         } else {
             return Err(HPSVMError::InvalidLoader { program_id, loader_id: *loader_id });
         };
@@ -1135,11 +1146,11 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
         // Resolve (and optionally memoize) the verified executable. Passing the
         // environment by reference avoids the per-load `ProgramRuntimeEnvironment`
         // clone the previous implementation performed.
-        let env = self.accounts.runtime_environments().get_env_for_execution();
+        let env = self.state.accounts.runtime_environments().get_env_for_execution();
         let loaded_program_arc =
             self.resolve_program_entry::<CACHED>(loader_id, env, current_slot, program_bytes)?;
 
-        self.accounts.replenish_program_cache(program_id, loaded_program_arc);
+        self.state.accounts.replenish_program_cache(program_id, loaded_program_arc);
 
         Ok(())
     }
@@ -1444,7 +1455,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
         tag: TxTag,
         handle: impl TxHandler<T, VersionedTransaction, DetachedTx> + 'static,
     ) {
-        self.registry.register(tag, handle);
+        self.extensions.registry.register(tag, handle);
     }
 
     /// Routes one envelope through the handler registry without staging.
@@ -1457,7 +1468,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
         tx: VersionedTransaction,
     ) -> Result<DetachedTx, TxError> {
         let tag = tag_of(&tx);
-        self.registry.dispatch(tag, tx, self)
+        self.extensions.registry.dispatch(tag, tx, self)
     }
 
     /// Runs the current readonly execution path and converts it to the owned
@@ -1505,10 +1516,10 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
             return Err(StagedFailure::new(HPSVMError::from(error), result));
         }
 
-        let checkpoint = svm.accounts.checkpoint();
+        let checkpoint = svm.state.accounts.checkpoint();
         let inspector_live = detached.inspector_live;
-        let cache_dirty = staging_touches_caches(&detached.post_accounts, &svm.accounts);
-        let history_enabled = svm.history.is_enabled();
+        let cache_dirty = staging_touches_caches(&detached.post_accounts, &svm.state.accounts);
+        let history_enabled = svm.state.history.is_enabled();
         let (result, delta) = crate::hotpath_block!(
             "hpsvm::commit::detached_into_result_and_delta",
             detached_into_result_and_delta(detached, history_enabled)
@@ -1522,7 +1533,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
             .iter()
             .map(|(address, after)| crate::state_change_sink::AccountChangeRecord {
                 address: *address,
-                before: svm.accounts.get_account(address),
+                before: svm.state.accounts.get_account(address),
                 // A zero-lamport post-state is removed from the overlay by
                 // `add_account`, so report it as "removed" (None) to match the
                 // committed after-state rather than the intermediate zero entry.
@@ -1531,12 +1542,12 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
             .collect();
         if let Err(error) = crate::hotpath_block!(
             "hpsvm::commit::sync_staged_accounts",
-            svm.accounts.sync_accounts(post_accounts)
+            svm.state.accounts.sync_accounts(post_accounts)
         ) {
             // Practically unreachable: execution-produced accounts always pass
             // sync validation. Roll back rather than commit partial state.
             // (The legacy path panicked here via `expect`.)
-            svm.accounts.rollback(checkpoint);
+            svm.state.accounts.rollback(checkpoint);
             return Err(StagedFailure::new(error, result));
         }
         Ok(ExecutedTx::new(
@@ -1725,7 +1736,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
         // without re-implementing it (see `agave_compat`).
         let agave_message = AgaveMessage::new(message);
         AgaveSVMMessage::get_durable_nonce(&agave_message)
-            .and_then(|nonce_address| self.accounts.get_account(nonce_address))
+            .and_then(|nonce_address| self.state.accounts.get_account(nonce_address))
             .and_then(|nonce_account| {
                 verify_nonce_account(&nonce_account, message.recent_blockhash())
             })
@@ -1749,7 +1760,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
         &mut self,
         callback: C,
     ) {
-        self.invocation_inspect_callback = Arc::new(callback);
+        self.extensions.invocation_inspect_callback = Arc::new(callback);
     }
 
     /// **Advanced reconfiguration.** Registers a custom syscall in both program runtime
@@ -1766,14 +1777,14 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
         name: &str,
         syscall: BuiltinFunctionRegisterer,
     ) -> Result<(), HPSVMError> {
-        self.runtime_registry.register_custom_syscall(CustomSyscallRegistration {
+        self.extensions.runtime_registry.register_custom_syscall(CustomSyscallRegistration {
             name: name.to_owned(),
             function: syscall,
         });
 
         self.try_refresh_runtime_environments()?;
         self.sync_jit_policy();
-        self.accounts.rebuild_program_cache().map_err(HPSVMError::from)?;
+        self.state.accounts.rebuild_program_cache().map_err(HPSVMError::from)?;
 
         Ok(())
     }
@@ -1873,7 +1884,7 @@ fn execution_diagnostics<T: SvmTypesHost>(
     let mut pre_accounts = Vec::with_capacity(post_accounts.len());
 
     for (address, post) in post_accounts {
-        let pre = vm.accounts.get_account(address).unwrap_or_default();
+        let pre = vm.state.accounts.get_account(address).unwrap_or_default();
         pre_balances.push(pre.lamports());
         post_balances.push(post.lamports());
         if accounts_differ(&pre, post) {
@@ -1892,10 +1903,10 @@ fn execution_diagnostics<T: SvmTypesHost>(
         account_diffs,
         account_source_failures,
         pre_token_balances: hotpath_block!("hpsvm::diagnostics::pre_token_balances", {
-            token_balances(&pre_accounts, &vm.accounts)
+            token_balances(&pre_accounts, &vm.state.accounts)
         }),
         post_token_balances: hotpath_block!("hpsvm::diagnostics::post_token_balances", {
-            token_balances(post_accounts, &vm.accounts)
+            token_balances(post_accounts, &vm.state.accounts)
         }),
         execution_trace,
     }
@@ -1950,7 +1961,7 @@ mod tests {
         }));
 
         assert!(result.is_err());
-        assert_eq!(svm.inspection_origin, TransactionOrigin::User);
+        assert_eq!(svm.extensions.inspection_origin, TransactionOrigin::User);
     }
 
     #[test]
@@ -1959,14 +1970,14 @@ mod tests {
         let payer = Keypair::new();
         let recipient = Address::new_unique();
         let original_feature_set = Arc::clone(&svm.version.feature_set);
-        let original_reserved_account_keys = svm.reserved_account_keys.clone();
+        let original_reserved_account_keys = svm.extensions.reserved_account_keys.clone();
 
         svm.airdrop(&payer.pubkey(), 10_000).unwrap();
 
         let poisoned_program = Address::new_unique();
         let mut invalid_program = AccountSharedData::new(1, 0, &system_program::id());
         invalid_program.set_executable(true);
-        svm.accounts.add_account_no_checks(poisoned_program, invalid_program);
+        svm.state.accounts.add_account_no_checks(poisoned_program, invalid_program);
 
         let err = svm
             .set_feature_set(FeatureSet::all_enabled())
@@ -1974,7 +1985,10 @@ mod tests {
 
         assert!(matches!(err, HPSVMError::Instruction(InstructionError::IncorrectProgramId)));
         assert_eq!(svm.version.feature_set, original_feature_set);
-        assert_eq!(svm.reserved_account_keys.active, original_reserved_account_keys.active);
+        assert_eq!(
+            svm.extensions.reserved_account_keys.active,
+            original_reserved_account_keys.active
+        );
 
         // The staged execution API borrows the VM, so the transact necessarily
         // happens after the failed reconfiguration rolled accounts back.
@@ -2112,13 +2126,19 @@ mod jit_parity_tests {
         let b = Hpsvm::new();
         let memo_id = solana_address::address!("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
         let a_entry = a
+            .state
             .accounts
             .shared_programs_cache()
             .read()
             .find(&memo_id)
             .expect("default VM loads memo");
-        let b_entry =
-            b.accounts.shared_programs_cache().read().find(&memo_id).expect("second VM loads memo");
+        let b_entry = b
+            .state
+            .accounts
+            .shared_programs_cache()
+            .read()
+            .find(&memo_id)
+            .expect("second VM loads memo");
         assert!(Arc::ptr_eq(&a_entry, &b_entry), "default VMs must share the memoized executable");
     }
 
@@ -2209,6 +2229,7 @@ mod jit_parity_tests {
             .expect("add should succeed");
         // Off must have produced an interpreter-first entry.
         let entry = svm
+            .state
             .accounts
             .shared_programs_cache()
             .read()
@@ -2234,12 +2255,14 @@ mod jit_parity_tests {
         let id_a2 = Address::new_unique();
         svm.add_program_with_loader(id_a1, elf_a, solana_sdk_ids::bpf_loader::id())
             .expect("add a1");
-        let entry_a1 = svm.accounts.shared_programs_cache().read().find(&id_a1).expect("a1 entry");
+        let entry_a1 =
+            svm.state.accounts.shared_programs_cache().read().find(&id_a1).expect("a1 entry");
         // Same bytes under the same env re-link the same Arc (different
         // program id, same content key since the key omits the address).
         svm.add_program_with_loader(id_a2, elf_a, solana_sdk_ids::bpf_loader::id())
             .expect("add a2 same bytes");
-        let entry_a2 = svm.accounts.shared_programs_cache().read().find(&id_a2).expect("a2 entry");
+        let entry_a2 =
+            svm.state.accounts.shared_programs_cache().read().find(&id_a2).expect("a2 entry");
         assert!(
             Arc::ptr_eq(&entry_a1, &entry_a2),
             "identical bytes under one env must share the resident entry"
@@ -2249,7 +2272,8 @@ mod jit_parity_tests {
         let id_b = Address::new_unique();
         svm.add_program_with_loader(id_b, elf_b, solana_sdk_ids::bpf_loader_deprecated::id())
             .expect("add b");
-        let entry_b = svm.accounts.shared_programs_cache().read().find(&id_b).expect("b entry");
+        let entry_b =
+            svm.state.accounts.shared_programs_cache().read().find(&id_b).expect("b entry");
         assert!(!Arc::ptr_eq(&entry_a1, &entry_b), "different bytes must miss");
 
         // Same bytes under a different env miss.
@@ -2258,8 +2282,13 @@ mod jit_parity_tests {
         other
             .add_program_with_loader(id_other, elf_a, solana_sdk_ids::bpf_loader::id())
             .expect("add other env");
-        let entry_other =
-            other.accounts.shared_programs_cache().read().find(&id_other).expect("other entry");
+        let entry_other = other
+            .state
+            .accounts
+            .shared_programs_cache()
+            .read()
+            .find(&id_other)
+            .expect("other entry");
         assert!(
             !Arc::ptr_eq(&entry_a1, &entry_other),
             "entries must not cross environment identities"
@@ -2277,8 +2306,10 @@ mod jit_parity_tests {
         let loader = solana_sdk_ids::bpf_loader::id();
         svm.add_program_with_loader(id_a, elf_a, loader).expect("add a");
         svm.add_program_with_loader(id_b, elf_a, loader).expect("add b same bytes");
-        let before_a = svm.accounts.shared_programs_cache().read().find(&id_a).expect("a before");
-        let before_b = svm.accounts.shared_programs_cache().read().find(&id_b).expect("b before");
+        let before_a =
+            svm.state.accounts.shared_programs_cache().read().find(&id_a).expect("a before");
+        let before_b =
+            svm.state.accounts.shared_programs_cache().read().find(&id_b).expect("b before");
         assert!(Arc::ptr_eq(&before_a, &before_b));
 
         // Upgrade `id_b` to different bytes via direct account surgery, then
@@ -2292,14 +2323,16 @@ mod jit_parity_tests {
             let mut upgraded = AccountSharedData::new(lamports, elf_b.len(), &loader);
             upgraded.set_executable(true);
             upgraded.set_data_from_slice(elf_b);
-            svm.accounts.add_account_no_checks(id_b, upgraded);
+            svm.state.accounts.add_account_no_checks(id_b, upgraded);
             // `add_account_no_checks` bypasses program loading; rebuild below
             // is what reloads (mirrors the discard path).
         }
         svm.sync_jit_policy();
-        svm.accounts.rebuild_program_cache().expect("rebuild should succeed");
-        let after_a = svm.accounts.shared_programs_cache().read().find(&id_a).expect("a after");
-        let after_b = svm.accounts.shared_programs_cache().read().find(&id_b).expect("b after");
+        svm.state.accounts.rebuild_program_cache().expect("rebuild should succeed");
+        let after_a =
+            svm.state.accounts.shared_programs_cache().read().find(&id_a).expect("a after");
+        let after_b =
+            svm.state.accounts.shared_programs_cache().read().find(&id_b).expect("b after");
         assert!(
             Arc::ptr_eq(&before_a, &after_a),
             "unchanged program must re-link the resident entry"
@@ -2322,7 +2355,8 @@ mod jit_parity_tests {
         svm.add_program_with_loader(program_id, memo_elf_v3(), solana_sdk_ids::bpf_loader::id())
             .expect("add");
         // Lazy-0 loads uncompiled.
-        let before = svm.accounts.shared_programs_cache().read().find(&program_id).expect("entry");
+        let before =
+            svm.state.accounts.shared_programs_cache().read().find(&program_id).expect("entry");
         assert!(!crate::programs::has_compiled_program(&before));
         let payer = Keypair::new();
         svm.airdrop(&payer.pubkey(), 10_000_000).unwrap();
@@ -2330,8 +2364,13 @@ mod jit_parity_tests {
         let result = svm.send_transaction(tx);
         assert!(result.is_ok(), "{result:?}");
         // Post-transaction sweep promotes synchronously under threshold 0.
-        let after =
-            svm.accounts.shared_programs_cache().read().find(&program_id).expect("entry after");
+        let after = svm
+            .state
+            .accounts
+            .shared_programs_cache()
+            .read()
+            .find(&program_id)
+            .expect("entry after");
         assert!(
             crate::programs::has_compiled_program(&after),
             "threshold-0 must promote after first use"
@@ -2354,13 +2393,14 @@ mod jit_parity_tests {
         let program_id = Address::new_unique();
         svm.add_program_with_loader(program_id, memo_elf_v3(), solana_sdk_ids::bpf_loader::id())
             .expect("add");
-        svm.tier_promoter.set_inject_failure(true);
+        svm.extensions.tier_promoter.set_inject_failure(true);
         let payer = Keypair::new();
         svm.airdrop(&payer.pubkey(), 10_000_000).unwrap();
         let tx = memo_transaction(&svm, &payer, program_id);
         let result = svm.send_transaction(tx);
         assert!(result.is_ok(), "promotion failure must not fail the transaction: {result:?}");
-        let entry = svm.accounts.shared_programs_cache().read().find(&program_id).expect("entry");
+        let entry =
+            svm.state.accounts.shared_programs_cache().read().find(&program_id).expect("entry");
         assert!(
             !crate::programs::has_compiled_program(&entry),
             "failed promotion must leave the entry interpreted"
@@ -2387,7 +2427,8 @@ mod jit_parity_tests {
             let tx = memo_transaction(&off, &payer, id_o);
             let result = off.send_transaction(tx);
             assert!(result.is_ok());
-            let entry = off.accounts.shared_programs_cache().read().find(&id_o).expect("off entry");
+            let entry =
+                off.state.accounts.shared_programs_cache().read().find(&id_o).expect("off entry");
             assert!(!crate::programs::has_compiled_program(&entry));
         }
         assert_eq!(eager.program_tier_stats().promotions_attempted, 0);
@@ -2408,10 +2449,12 @@ mod jit_parity_tests {
         let program_id = Address::new_unique();
         svm.add_program_with_loader(program_id, memo_elf_v3(), solana_sdk_ids::bpf_loader::id())
             .expect("add");
-        let before = svm.accounts.shared_programs_cache().read().find(&program_id).expect("entry");
+        let before =
+            svm.state.accounts.shared_programs_cache().read().find(&program_id).expect("entry");
         assert!(!crate::programs::has_compiled_program(&before));
         svm.prewarm_programs(&[program_id]).expect("prewarm should succeed");
         let after = svm
+            .state
             .accounts
             .shared_programs_cache()
             .read()
@@ -2501,7 +2544,7 @@ mod jit_threshold_boundary_tests {
         // still be interpreted (no async job to poll for).
         std::thread::sleep(Duration::from_millis(50));
         let after_first =
-            svm.accounts.shared_programs_cache().read().find(&program_id).expect("entry");
+            svm.state.accounts.shared_programs_cache().read().find(&program_id).expect("entry");
         assert!(
             !crate::programs::has_compiled_program(&after_first),
             "below threshold must stay interpreted"
@@ -2514,7 +2557,7 @@ mod jit_threshold_boundary_tests {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             let entry =
-                svm.accounts.shared_programs_cache().read().find(&program_id).expect("entry");
+                svm.state.accounts.shared_programs_cache().read().find(&program_id).expect("entry");
             if crate::programs::has_compiled_program(&entry) {
                 break;
             }

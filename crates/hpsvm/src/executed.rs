@@ -175,7 +175,7 @@ impl<'svm, 'a, T: SvmTypesHost> ExecutedTx<'svm, 'a, T> {
             }
         }
         if let Some((signature, entry)) = history_entry {
-            svm.history.add_new_transaction(signature, entry);
+            svm.state.history.add_new_transaction(signature, entry);
         }
         result
     }
@@ -199,11 +199,11 @@ impl<'svm, 'a, T: SvmTypesHost> ExecutedTx<'svm, 'a, T> {
                 after: record.after.as_ref(),
             };
             if let Err(error) = sink.on_account_change(change) {
-                svm.accounts.rollback(checkpoint);
+                svm.state.accounts.rollback(checkpoint);
                 if cache_dirty {
-                    svm.accounts.rebuild_sysvar_cache();
+                    svm.state.accounts.rebuild_sysvar_cache();
                     svm.sync_jit_policy();
-                    svm.accounts.rebuild_program_cache().expect(
+                    svm.state.accounts.rebuild_program_cache().expect(
                         "rollback restores previously valid state, so the cache rebuild cannot fail",
                     );
                 }
@@ -220,7 +220,7 @@ impl<'svm, 'a, T: SvmTypesHost> ExecutedTx<'svm, 'a, T> {
             }
         }
         if let Some((signature, entry)) = history_entry {
-            svm.history.add_new_transaction(signature, entry);
+            svm.state.history.add_new_transaction(signature, entry);
         }
         let _ = checkpoint;
         Ok(result)
@@ -234,11 +234,11 @@ impl<'svm, 'a, T: SvmTypesHost> ExecutedTx<'svm, 'a, T> {
     /// journaled, so they are rebuilt here when (and only when) the staged
     /// accounts could have touched them.
     pub fn discard(self) -> TransactionResult {
-        self.svm.accounts.rollback(self.checkpoint);
+        self.svm.state.accounts.rollback(self.checkpoint);
         if self.cache_dirty {
-            self.svm.accounts.rebuild_sysvar_cache();
+            self.svm.state.accounts.rebuild_sysvar_cache();
             self.svm.sync_jit_policy();
-            self.svm.accounts.rebuild_program_cache().expect(
+            self.svm.state.accounts.rebuild_program_cache().expect(
                 "rollback restores previously valid state, so the cache rebuild cannot fail",
             );
         }
@@ -314,22 +314,22 @@ mod tests {
     #[test]
     fn commit_keeps_the_journal_entries_that_stage_the_post_state() {
         let (mut svm, _, _, tx, signature) = transfer_fixture();
-        let before = svm.accounts.journal_len();
+        let before = svm.state.accounts.journal_len();
 
         let result = svm.transact(tx).expect("transact should stage").commit();
 
         assert!(result.is_ok());
         // Staging wrote through the journaled overlay: the entries are
         // retained (commit keeps staged state, it does not re-apply a copy).
-        assert!(svm.accounts.journal_len() > before);
-        assert!(svm.history.check_transaction(&signature));
+        assert!(svm.state.accounts.journal_len() > before);
+        assert!(svm.state.history.check_transaction(&signature));
     }
 
     #[test]
     fn discard_truncates_the_journal_back_to_the_checkpoint() {
         let (mut svm, payer, recipient, tx, signature) = transfer_fixture();
         let payer_address = payer.pubkey();
-        let before = svm.accounts.journal_len();
+        let before = svm.state.accounts.journal_len();
         let payer_before = svm.get_account(&payer_address).unwrap();
 
         let result = svm.transact(tx).expect("transact should stage").discard();
@@ -337,8 +337,8 @@ mod tests {
         assert!(result.is_ok());
         // Rollback pops exactly the staged entries: no full account clone was
         // retained anywhere, the journal itself is the undo log.
-        assert_eq!(svm.accounts.journal_len(), before);
-        assert!(!svm.history.check_transaction(&signature));
+        assert_eq!(svm.state.accounts.journal_len(), before);
+        assert!(!svm.state.history.check_transaction(&signature));
         // Byte-identical restore of every touched account.
         assert_eq!(svm.get_account(&payer_address).unwrap(), payer_before);
         assert_eq!(svm.get_balance(&recipient), None);
@@ -357,12 +357,12 @@ mod tests {
         // Unsigned garbage signatures: disable sigverify so execution reaches
         // the failing instruction instead of rejecting the signatures.
         svm.set_sigverify(false);
-        let before = svm.accounts.journal_len();
+        let before = svm.state.accounts.journal_len();
 
         let err = svm.transact(failing).expect("a failing execution must still stage").discard();
 
         let err = err.expect_err("discard must surface the execution failure");
-        assert_eq!(svm.accounts.journal_len(), before);
+        assert_eq!(svm.state.accounts.journal_len(), before);
         assert_eq!(svm.get_account(&payer_address).unwrap(), payer_before);
         assert_eq!(svm.get_balance(&recipient), None);
         assert!(svm.get_transaction(&err.meta.signature).is_none());

@@ -16,8 +16,9 @@ pub(crate) fn load_precompiles<T: SvmTypesHost>(svm: &mut Svm<'_, T>) {
     // enumerated into the fixed `TxFeatureFlags` set. Load-time only, so the
     // direct query stays.
     let feature_set = Arc::clone(&svm.version.feature_set);
-    for program_id in svm.precompiles.program_ids() {
+    for program_id in svm.extensions.precompiles.program_ids() {
         let enabled = svm
+            .extensions
             .precompiles
             .get(&program_id)
             .is_some_and(|precompile| precompile.is_enabled(&feature_set));

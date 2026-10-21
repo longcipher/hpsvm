@@ -14,7 +14,8 @@ impl<T: SvmTypesHost> InvokeContextCallback for Svm<'_, T> {
         // once per top-level instruction and cannot be hoisted into the fixed
         // `TxFeatureFlags` set. The feature gate is enforced at lookup,
         // exactly like agave's `get_precompile` feature check.
-        self.precompiles
+        self.extensions
+            .precompiles
             .get(program_id)
             .is_some_and(|precompile| precompile.is_enabled(&self.version.feature_set))
     }
@@ -27,7 +28,7 @@ impl<T: SvmTypesHost> InvokeContextCallback for Svm<'_, T> {
     ) -> Result<(), solana_precompile_error::PrecompileError> {
         // Same dynamic-id reasoning as `is_precompile`. The `&FeatureSet`
         // passed to `verify` is an agave API requirement and cannot change.
-        match self.precompiles.get(program_id) {
+        match self.extensions.precompiles.get(program_id) {
             Some(precompile) if precompile.is_enabled(&self.version.feature_set) => {
                 precompile.verify(data, &instruction_data_slices, &self.version.feature_set)
             }

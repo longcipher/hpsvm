@@ -56,7 +56,7 @@ pub(crate) fn shared_default_env_ptr(envs: &Arc<ProgramRuntimeEnvironments>) -> 
 impl<T: SvmTypesHost> Svm<'_, T> {
     pub(crate) fn try_refresh_runtime_environments(&mut self) -> Result<(), HPSVMError> {
         #[cfg(feature = "register-tracing")]
-        let enable_register_tracing = self.enable_register_tracing;
+        let enable_register_tracing = self.extensions.enable_register_tracing;
         #[cfg(not(feature = "register-tracing"))]
         let enable_register_tracing = false;
 
@@ -68,13 +68,13 @@ impl<T: SvmTypesHost> Svm<'_, T> {
         // `resolve_program_entry`).
         let is_default_config = !enable_register_tracing &&
             self.version.compute_budget.is_none() &&
-            self.runtime_registry.custom_syscalls().is_empty() &&
+            self.extensions.runtime_registry.custom_syscalls().is_empty() &&
             self.version.feature_set.as_ref() == &FeatureSet::all_enabled();
 
         if is_default_config {
             let shared = DEFAULT_RUNTIME_ENV.get();
             if let Some(env) = shared {
-                self.accounts.set_runtime_environments_arc(Arc::clone(env));
+                self.state.accounts.set_runtime_environments_arc(Arc::clone(env));
                 return Ok(());
             }
         }
@@ -97,7 +97,7 @@ impl<T: SvmTypesHost> Svm<'_, T> {
         })?;
 
         let mut current_runtime = program_runtime;
-        for syscall in self.runtime_registry.custom_syscalls() {
+        for syscall in self.extensions.runtime_registry.custom_syscalls() {
             // ponytail: BuiltinProgram is not Clone, reconstruct like mollusk does
             let config = current_runtime.get_config().clone();
             let mut loader: BuiltinProgram<InvokeContext<'static, 'static>> =
@@ -130,7 +130,7 @@ impl<T: SvmTypesHost> Svm<'_, T> {
             // builder may have raced; either arc is equivalent, so ignore.
             let _ = DEFAULT_RUNTIME_ENV.set(Arc::clone(&env));
         }
-        self.accounts.set_runtime_environments_arc(env);
+        self.state.accounts.set_runtime_environments_arc(env);
 
         Ok(())
     }
@@ -166,7 +166,7 @@ impl<T: SvmTypesHost> Svm<'_, T> {
             programs::{content_key, default_program_cache, program_entry_store},
         };
 
-        let envs_arc = self.accounts.runtime_environments_arc();
+        let envs_arc = self.state.accounts.runtime_environments_arc();
         let env_ptr = Arc::as_ptr(envs_arc) as usize;
 
         // Fast path: stable slice identity for default statics.

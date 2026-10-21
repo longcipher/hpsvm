@@ -181,13 +181,13 @@ impl<T: SvmTypesHost> Svm<'_, T> {
         &self,
         tx: VersionedTransaction,
     ) -> Result<SanitizedTransaction, ExecutionResult> {
-        let loader = AccountSourceTrackingAddressLoader::new(&self.accounts);
+        let loader = AccountSourceTrackingAddressLoader::new(&self.state.accounts);
         SanitizedTransaction::try_create(
             tx,
             MessageHash::Compute,
             Some(false),
             &loader,
-            &self.reserved_account_keys.active,
+            &self.extensions.reserved_account_keys.active,
         )
         .map_err(|err| sanitize_error_into_execution_result(&loader, err))
     }
@@ -250,7 +250,7 @@ impl<T: SvmTypesHost> Svm<'_, T> {
             })
         });
         let rent = hotpath_block!("hpsvm::process_transaction::load_rent", {
-            self.accounts.sysvar_cache().get_rent()
+            self.state.accounts.sysvar_cache().get_rent()
         });
         // The rent sysvar is materialized by `set_sysvars` and guarded by
         // `require_sysvars_loaded` on the way in, but the account can still be
@@ -278,7 +278,7 @@ impl<T: SvmTypesHost> Svm<'_, T> {
         // before the guard drops so only committed entries persist.
         let shared_program_cache = hotpath_block!(
             "hpsvm::process_transaction::shared_program_cache",
-            self.accounts.shared_programs_cache()
+            self.state.accounts.shared_programs_cache()
         );
         let mut program_cache_guard = shared_program_cache.write();
         let mut accumulated_consume_units = 0;
@@ -318,7 +318,7 @@ impl<T: SvmTypesHost> Svm<'_, T> {
                     // source second, so the fast path gained nothing over
                     // the general one — it only cost an extra program-cache
                     // lookup and a panic site.
-                    let mut account = match self.accounts.try_get_account(key) {
+                    let mut account = match self.state.accounts.try_get_account(key) {
                         Ok(Some(account)) => account,
                         Ok(None) => {
                             let mut default_account = AccountSharedData::default();
@@ -424,8 +424,8 @@ impl<T: SvmTypesHost> Svm<'_, T> {
                         false,
                         self,
                         &svm_feature_set,
-                        self.accounts.runtime_environments(),
-                        self.accounts.sysvar_cache(),
+                        self.state.accounts.runtime_environments(),
+                        self.state.accounts.sysvar_cache(),
                     ),
                     Some(log_collector),
                     compute_budget.to_budget(),
@@ -434,7 +434,7 @@ impl<T: SvmTypesHost> Svm<'_, T> {
             });
 
         #[cfg(feature = "invocation-inspect-callback")]
-        self.invocation_inspect_callback.before_invocation(
+        self.extensions.invocation_inspect_callback.before_invocation(
             self,
             tx,
             &program_indices,
@@ -468,10 +468,10 @@ impl<T: SvmTypesHost> Svm<'_, T> {
         self.on_transaction_end::<MODE>(&tx_result);
 
         #[cfg(feature = "invocation-inspect-callback")]
-        self.invocation_inspect_callback.after_invocation(
+        self.extensions.invocation_inspect_callback.after_invocation(
             self,
             &invoke_context,
-            self.enable_register_tracing,
+            self.extensions.enable_register_tracing,
         );
 
         // Discard transaction-scratch cache state: entries deployed or
@@ -546,7 +546,7 @@ impl<T: SvmTypesHost> Svm<'_, T> {
             // and be executable. It is validated here but intentionally NOT
             // added to the transaction context: agave requires the context
             // account set to match the message account keys exactly.
-            let owner_account = match self.accounts.try_get_account(owner_id) {
+            let owner_account = match self.state.accounts.try_get_account(owner_id) {
                 Ok(Some(account)) => account,
                 Ok(None) => {
                     return Err(ExecutionResult {
@@ -618,7 +618,7 @@ impl<T: SvmTypesHost> Svm<'_, T> {
 
                 let post_rent_state =
                     get_account_rent_state(rent, account.lamports(), account.data().len());
-                let pre_rent_state = match self.accounts.try_get_account(pubkey) {
+                let pre_rent_state = match self.state.accounts.try_get_account(pubkey) {
                     Ok(Some(acc)) => get_account_rent_state(rent, acc.lamports(), acc.data().len()),
                     Ok(None) => crate::utils::rent::RentState::Uninitialized,
                     Err(error) => {
@@ -737,7 +737,8 @@ impl<T: SvmTypesHost> Svm<'_, T> {
         &self,
         sanitized_tx: &SanitizedTransaction,
     ) -> Result<(), ExecutionResult> {
-        if self.version.sigverify && self.history.check_transaction(sanitized_tx.signature()) {
+        if self.version.sigverify && self.state.history.check_transaction(sanitized_tx.signature())
+        {
             return Err(ExecutionResult {
                 tx_result: Err(TransactionError::AlreadyProcessed),
                 ..Default::default()

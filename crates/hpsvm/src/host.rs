@@ -88,7 +88,7 @@ impl<T: SvmTypesHost> Host<T> for Svm<'_, T> {
     }
 
     fn has_program(&self, program_id: &Address) -> bool {
-        self.accounts.has_program_cache_entry(program_id)
+        self.state.accounts.has_program_cache_entry(program_id)
     }
 
     fn log(&mut self, message: &str) {

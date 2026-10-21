@@ -99,7 +99,10 @@ impl Default for HpsvmRuntimeState {
 
 impl HpsvmRuntimeState {
     fn from_vm<T: SvmTypesHost>(vm: &Svm<'_, T>) -> Self {
-        Self { accounts: Arc::new(vm.accounts.clone()), history: Arc::new(vm.history.clone()) }
+        Self {
+            accounts: Arc::new(vm.state.accounts.clone()),
+            history: Arc::new(vm.state.history.clone()),
+        }
     }
 }
 
@@ -206,7 +209,7 @@ pub(crate) fn send_transaction_batch<T: SvmTypesHost>(
         // stages skip this: they run serially on the live overlay, which is
         // warm by construction.
         let read_set = stage_read_set(stage, &transactions);
-        if let Err(db_error) = vm.accounts.prewarm(&read_set) {
+        if let Err(db_error) = vm.state.accounts.prewarm(&read_set) {
             // `prewarm` only fails on the batched source load, which implies a
             // non-empty missing set and hence a non-empty read set. A batched
             // load cannot name the failing key, so attribute the error to the
@@ -255,7 +258,7 @@ pub(crate) fn send_transaction_batch<T: SvmTypesHost>(
         stage_results.sort_by_key(|result| result.index);
 
         for stage_result in stage_results {
-            apply_commit_delta(&mut vm.accounts, &mut vm.history, stage_result.delta)
+            apply_commit_delta(&mut vm.state.accounts, &mut vm.state.history, stage_result.delta)
                 .expect("batch stage merge should only apply valid account states");
             results[stage_result.index] = Some(stage_result.result);
         }
@@ -383,11 +386,11 @@ fn execute_transaction_batch_stage<'a, T: SvmTypesHost>(
                 )
             },
             |local, &index| {
-                local.inspection_origin =
+                local.extensions.inspection_origin =
                     TransactionOrigin::Batch { stage_index, transaction_index: index };
                 let (result, delta) = crate::commit::detached_into_result_and_state_change_set(
                     local.transact_detached(transactions[index].clone()),
-                    local.history.is_enabled(),
+                    local.state.history.is_enabled(),
                 );
                 BatchStageResult { index, result, delta }
             },
@@ -432,9 +435,11 @@ fn worker_vm<'a, T: SvmTypesHost>(
     // Rayon worker thread, not per transaction), preserving `#[inline]`-level
     // sharing on the single-transaction hot path. Reverting this to
     // `Arc::clone` makes the parallel-stage test regress to a single thread.
-    let accounts = runtime.accounts.clone_for_worker();
-    let history = (*runtime.history).clone();
-    vm.clone_with_state(accounts, history, origin)
+    let state = crate::SvmState {
+        accounts: runtime.accounts.clone_for_worker(),
+        history: (*runtime.history).clone(),
+    };
+    vm.clone_with_state(state, origin)
 }
 
 #[derive(Default)]
@@ -465,7 +470,7 @@ impl BatchStageResult {
         );
         let (result, delta) = crate::commit::detached_into_result_and_state_change_set(
             local.transact_detached(tx),
-            local.history.is_enabled(),
+            local.state.history.is_enabled(),
         );
 
         Self { index, result, delta }

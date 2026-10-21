@@ -58,6 +58,14 @@
 //! family implements [`SvmTypesHost`] (plus [`SvmTypes`] for the defaulted
 //! slots) and runs anywhere the base family does.
 //!
+//! The VM's own state is grouped the same way: [`Svm`] holds its mutable
+//! state (the account overlay and the transaction history), its protocol
+//! configuration ([`Version`]), its block environment, the facilities a fork
+//! can replace (the inspector, the transaction registry, the precompile set,
+//! the compiled-tier promoter, the runtime-environment registrations and the
+//! reserved account keys) and the record of which runtime components are
+//! materialized.
+//!
 //! ## Execution protocol
 //!
 //! [`Version`] is the execution-shaping protocol configuration: feature set,
@@ -436,13 +444,68 @@ pub(crate) use crate::commit::apply_commit_delta;
 /// `Svm<'static, BaseSvmTypes>`. It exists so the existing public-behaviour
 /// surface keeps compiling unchanged while call sites migrate.
 pub struct Svm<'a, T: SvmTypesHost> {
-    accounts: Accounts,
-    airdrop_kp: [u8; 64],
-    builtins_loaded: bool,
-    default_programs_loaded: bool,
-    spl_programs_loaded: bool,
+    /// The VM's mutable state.
+    state: SvmState,
+    /// The execution-shaping protocol configuration.
     version: Version,
-    feature_accounts_loaded: bool,
+    /// The current block environment.
+    block_env: BlockEnv<T::BlockEnvExt>,
+    /// The facilities a fork can replace.
+    extensions: SvmExtensions<'a, T>,
+    /// Which runtime components are materialized.
+    materialized: MaterializedState,
+    /// The keypair the internal airdrop transfer is funded from.
+    airdrop_kp: [u8; 64],
+    /// Binds the host lifetime and the type family to the value without letting
+    /// either affect the VM's auto traits.
+    ///
+    /// A `fn() -> &'a T` pointer is `Send + Sync` whatever `T` is, so the VM's
+    /// existing `Send + Sync` behaviour does not depend on the auto traits of
+    /// the family it is instantiated with. Storing `T` or `&'a T` directly
+    /// would make the VM `Send`/`Sync` exactly when the family is, which would
+    /// silently change what a `Svm<'_, T>` can do inside a `rayon` batch stage.
+    /// It is covariant in both parameters, which keeps the compatibility alias
+    /// below interchangeable with the generic host.
+    _type_family: PhantomData<fn() -> &'a T>,
+}
+
+/// The VM's mutable state: the account overlay and the transaction history.
+///
+/// The two belong together: the history records what the overlay committed,
+/// and both are rolled back by a staged transaction's `discard`.
+struct SvmState {
+    /// The account overlay and the caches derived from it.
+    accounts: Accounts,
+    /// The bounded transaction history.
+    history: TransactionHistory,
+}
+
+/// Which runtime components are materialized into the VM.
+///
+/// The components are materialized once and then reused, so the VM tracks
+/// them explicitly: a feature-set reconfiguration has to know what to tear
+/// down and rebuild.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct MaterializedState {
+    /// The built-in programs are loaded.
+    builtins: bool,
+    /// The default programs are loaded.
+    default_programs: bool,
+    /// The SPL programs are loaded.
+    spl_programs: bool,
+    /// The feature-gate accounts are materialized.
+    feature_accounts: bool,
+    /// The sysvars are materialized.
+    sysvars: bool,
+}
+
+/// The facilities a fork can replace.
+///
+/// Grouping them names the type family's extension points in one place: the
+/// inspector, the transaction registry, the precompile set, the compiled-tier
+/// promoter, the runtime-environment registrations and the reserved account
+/// keys.
+struct SvmExtensions<'a, T: SvmTypesHost> {
     /// The installed inspector, if any.
     ///
     /// Stored behind a lock as `Option<Box<..>>` (not `Arc`) so hooks can
@@ -450,9 +513,8 @@ pub struct Svm<'a, T: SvmTypesHost> {
     /// with the lock released, and puts it back. A hook that re-enters
     /// execution therefore observes no inspector instead of deadlocking.
     inspector: Mutex<Option<Box<dyn Inspector<T> + 'a>>>,
+    /// The origin the inspector is consulted with.
     inspection_origin: TransactionOrigin,
-    reserved_account_keys: ReservedAccountKeys,
-    runtime_registry: RuntimeExtensionRegistry,
     /// Tag-to-handler map consulted by every transaction entry point.
     ///
     /// Starts from [`TxRegistry::with_defaults`](crate::TxRegistry::with_defaults),
@@ -460,9 +522,6 @@ pub struct Svm<'a, T: SvmTypesHost> {
     /// existed. [`register_tx_handler`](Svm::register_tx_handler) replaces the
     /// entry for a tag, which is how tests and forks intercept execution.
     registry: TxRegistry<T, DetachedTx>,
-    block_env: BlockEnv<T::BlockEnvExt>,
-    history: TransactionHistory,
-    sysvars_loaded: bool,
     /// Per-instance precompile dispatch: which program ids run as precompiles
     /// and what runs for each of them.
     ///
@@ -478,17 +537,10 @@ pub struct Svm<'a, T: SvmTypesHost> {
     /// the same promotion counters. Rebuilt whenever the JIT policy changes;
     /// disabled (no pool) unless the effective policy is `Lazy` on x86_64.
     tier_promoter: Arc<crate::programs::TierPromoter>,
-    /// Binds the host lifetime and the type family to the value without letting
-    /// either affect the VM's auto traits.
-    ///
-    /// A `fn() -> &'a T` pointer is `Send + Sync` whatever `T` is, so the VM's
-    /// existing `Send + Sync` behaviour does not depend on the auto traits of
-    /// the family it is instantiated with. Storing `T` or `&'a T` directly
-    /// would make the VM `Send`/`Sync` exactly when the family is, which would
-    /// silently change what a `Svm<'_, T>` can do inside a `rayon` batch stage.
-    /// It is covariant in both parameters, which keeps the compatibility alias
-    /// below interchangeable with the generic host.
-    _type_family: PhantomData<fn() -> &'a T>,
+    /// The custom syscall and standard-precompile registrations.
+    runtime_registry: RuntimeExtensionRegistry,
+    /// The account keys the active feature set reserves.
+    reserved_account_keys: ReservedAccountKeys,
     /// The callback which can be used to inspect invoke_context
     /// and extract low-level information such as bpf traces, transaction
     /// context, detailed timings, etc.
@@ -519,20 +571,20 @@ impl<T: SvmTypesHost> std::fmt::Debug for Svm<'_, T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut debug = f.debug_struct("Svm");
         debug
-            .field("accounts", &self.accounts)
-            .field("builtins_loaded", &self.builtins_loaded)
-            .field("default_programs_loaded", &self.default_programs_loaded)
-            .field("spl_programs_loaded", &self.spl_programs_loaded)
+            .field("accounts", &self.state.accounts)
+            .field("builtins_loaded", &self.materialized.builtins)
+            .field("default_programs_loaded", &self.materialized.default_programs)
+            .field("spl_programs_loaded", &self.materialized.spl_programs)
             .field("version", &self.version)
-            .field("feature_accounts_loaded", &self.feature_accounts_loaded)
-            .field("inspection_origin", &self.inspection_origin)
-            .field("runtime_registry", &self.runtime_registry)
-            .field("registry", &self.registry)
+            .field("feature_accounts_loaded", &self.materialized.feature_accounts)
+            .field("inspection_origin", &self.extensions.inspection_origin)
+            .field("runtime_registry", &self.extensions.runtime_registry)
+            .field("registry", &self.extensions.registry)
             .field("block_env", &self.block_env)
-            .field("precompile_ids", &self.precompiles.program_ids())
-            .field("sysvars_loaded", &self.sysvars_loaded);
+            .field("precompile_ids", &self.extensions.precompiles.program_ids())
+            .field("sysvars_loaded", &self.materialized.sysvars);
         #[cfg(feature = "invocation-inspect-callback")]
-        debug.field("enable_register_tracing", &self.enable_register_tracing);
+        debug.field("enable_register_tracing", &self.extensions.enable_register_tracing);
         debug.finish_non_exhaustive()
     }
 }
@@ -549,42 +601,38 @@ impl<T: SvmTypesHost> Svm<'_, T> {
     /// The inspector is never inherited: a copy is a scratch VM (a
     /// simulation, a batch worker) and inspector state belongs to the VM it
     /// was installed on.
-    pub(crate) fn clone_with_state(
-        &self,
-        accounts: Accounts,
-        history: TransactionHistory,
-        origin: TransactionOrigin,
-    ) -> Self {
+    pub(crate) fn clone_with_state(&self, state: SvmState, origin: TransactionOrigin) -> Self {
         Self {
-            accounts,
+            state,
             airdrop_kp: self.airdrop_kp,
-            builtins_loaded: self.builtins_loaded,
-            default_programs_loaded: self.default_programs_loaded,
-            spl_programs_loaded: self.spl_programs_loaded,
+            materialized: self.materialized,
             version: self.version.clone(),
-            feature_accounts_loaded: self.feature_accounts_loaded,
-            inspector: Mutex::new(None),
-            inspection_origin: origin,
-            reserved_account_keys: self.reserved_account_keys.clone(),
-            runtime_registry: self.runtime_registry.clone(),
-            registry: self.registry.clone(),
+            extensions: SvmExtensions {
+                inspector: Mutex::new(None),
+                inspection_origin: origin,
+                reserved_account_keys: self.extensions.reserved_account_keys.clone(),
+                runtime_registry: self.extensions.runtime_registry.clone(),
+                registry: self.extensions.registry.clone(),
+                precompiles: Arc::clone(&self.extensions.precompiles),
+                tier_promoter: Arc::clone(&self.extensions.tier_promoter),
+                #[cfg(feature = "invocation-inspect-callback")]
+                invocation_inspect_callback: self.extensions.invocation_inspect_callback.clone(),
+                #[cfg(feature = "invocation-inspect-callback")]
+                enable_register_tracing: self.extensions.enable_register_tracing,
+            },
             block_env: self.block_env,
-            history,
-            sysvars_loaded: self.sysvars_loaded,
-            precompiles: Arc::clone(&self.precompiles),
-            tier_promoter: Arc::clone(&self.tier_promoter),
             _type_family: PhantomData,
-            #[cfg(feature = "invocation-inspect-callback")]
-            invocation_inspect_callback: self.invocation_inspect_callback.clone(),
-            #[cfg(feature = "invocation-inspect-callback")]
-            enable_register_tracing: self.enable_register_tracing,
         }
     }
 
     /// Returns whether the installed inspector would fire its hooks for an
     /// execution with `origin`.
     pub(crate) fn inspector_accepts_origin(&self, origin: TransactionOrigin) -> bool {
-        self.inspector.lock().as_ref().is_some_and(|inspector| inspector.accepts_origin(origin))
+        self.extensions
+            .inspector
+            .lock()
+            .as_ref()
+            .is_some_and(|inspector| inspector.accepts_origin(origin))
     }
 
     /// Returns whether an inspector is installed, *without consulting it*.
@@ -594,13 +642,16 @@ impl<T: SvmTypesHost> Svm<'_, T> {
     /// all" must not call it: an extra consultation is observable to an
     /// origin-recording inspector.
     pub(crate) fn has_inspector(&self) -> bool {
-        self.inspector.lock().is_some()
+        self.extensions.inspector.lock().is_some()
     }
 }
 
 impl<T: SvmTypesHost> Clone for Svm<'_, T> {
     fn clone(&self) -> Self {
-        self.clone_with_state(self.accounts.clone(), self.history.clone(), self.inspection_origin)
+        self.clone_with_state(
+            SvmState { accounts: self.state.accounts.clone(), history: self.state.history.clone() },
+            self.extensions.inspection_origin,
+        )
     }
 }
 

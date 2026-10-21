@@ -410,7 +410,7 @@ impl<State: FeatureConfigState> HpsvmBuilder<State> {
             svm.set_transaction_history(transaction_history);
         }
         if let Some(account_source) = account_source {
-            svm.accounts.set_account_source(account_source);
+            svm.state.accounts.set_account_source(account_source);
         }
         if let LogBytesLimitPlan::Explicit(limit) = log_bytes_limit {
             svm.set_log_bytes_limit(limit);
@@ -418,12 +418,12 @@ impl<State: FeatureConfigState> HpsvmBuilder<State> {
 
         let needs_early_runtime_refresh = !custom_syscalls.is_empty() && !include_builtins;
         for registration in custom_syscalls {
-            svm.runtime_registry.register_custom_syscall(registration);
+            svm.extensions.runtime_registry.register_custom_syscall(registration);
         }
         if needs_early_runtime_refresh {
             svm.try_refresh_runtime_environments()?;
             svm.sync_jit_policy();
-            svm.accounts.rebuild_program_cache().map_err(HPSVMError::from)?;
+            svm.state.accounts.rebuild_program_cache().map_err(HPSVMError::from)?;
         }
 
         if include_builtins {

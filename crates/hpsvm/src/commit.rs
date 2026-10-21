@@ -306,7 +306,7 @@ mod tests {
             vec![(address, AccountSharedData::new(123, 0, &solana_sdk_ids::system_program::id()))],
             None,
         );
-        apply_commit_delta(&mut svm.accounts, &mut svm.history, delta).unwrap();
+        apply_commit_delta(&mut svm.state.accounts, &mut svm.state.history, delta).unwrap();
 
         assert_eq!(svm.get_balance(&address), Some(123));
     }
@@ -320,17 +320,21 @@ mod tests {
             Vec::new(),
             Some((signature, TransactionResult::Ok(TransactionMetadata::default()))),
         );
-        apply_commit_delta(&mut svm.accounts, &mut svm.history, delta).unwrap();
+        apply_commit_delta(&mut svm.state.accounts, &mut svm.state.history, delta).unwrap();
 
-        assert!(svm.history.check_transaction(&signature));
-        assert!(svm.history.get_transaction(&signature).is_some());
+        assert!(svm.state.history.check_transaction(&signature));
+        assert!(svm.state.history.get_transaction(&signature).is_some());
     }
 
     #[test]
     fn applying_an_empty_delta_is_a_no_op() {
         let mut svm = Hpsvm::new();
-        apply_commit_delta(&mut svm.accounts, &mut svm.history, CommitDelta::new(Vec::new(), None))
-            .unwrap();
+        apply_commit_delta(
+            &mut svm.state.accounts,
+            &mut svm.state.history,
+            CommitDelta::new(Vec::new(), None),
+        )
+        .unwrap();
     }
 
     /// A disabled history must silently drop the entry rather than storing it.
@@ -344,10 +348,10 @@ mod tests {
             Vec::new(),
             Some((signature, TransactionResult::Ok(TransactionMetadata::default()))),
         );
-        apply_commit_delta(&mut svm.accounts, &mut svm.history, delta).unwrap();
+        apply_commit_delta(&mut svm.state.accounts, &mut svm.state.history, delta).unwrap();
 
-        assert!(!svm.history.is_enabled());
-        assert!(!svm.history.check_transaction(&signature));
+        assert!(!svm.state.history.is_enabled());
+        assert!(!svm.state.history.check_transaction(&signature));
     }
 
     /// A write into a sysvar slot with malformed data must surface as an error
@@ -366,8 +370,8 @@ mod tests {
         };
 
         let error = apply_commit_delta(
-            &mut svm.accounts,
-            &mut svm.history,
+            &mut svm.state.accounts,
+            &mut svm.state.history,
             CommitDelta::new(vec![(sysvar, AccountSharedData::from(broken))], None),
         )
         .expect_err("a malformed sysvar must be rejected");
@@ -384,8 +388,8 @@ mod tests {
             svm.get_account(&sysvar).expect("a fresh VM must have a clock sysvar account");
 
         apply_commit_delta(
-            &mut svm.accounts,
-            &mut svm.history,
+            &mut svm.state.accounts,
+            &mut svm.state.history,
             CommitDelta::new(vec![(sysvar, AccountSharedData::from(existing))], None),
         )
         .expect("a valid clock sysvar must be accepted");
@@ -409,8 +413,8 @@ mod tests {
         };
 
         apply_commit_delta(
-            &mut svm.accounts,
-            &mut svm.history,
+            &mut svm.state.accounts,
+            &mut svm.state.history,
             CommitDelta::new(vec![(address, AccountSharedData::from(account))], None),
         )
         .expect("a regular account must be accepted");
