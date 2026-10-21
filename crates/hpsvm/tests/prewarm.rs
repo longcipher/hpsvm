@@ -1,4 +1,4 @@
-//! Task 4.3: `prewarm` driven by the batch read-set.
+//! `prewarm`, driven by the batch read-set.
 //!
 //! A batch stage must perform a single batched source load instead of
 //! per-transaction loads, while producing results identical to serial

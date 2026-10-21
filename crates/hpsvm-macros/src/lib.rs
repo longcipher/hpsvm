@@ -2,7 +2,7 @@
 //!
 //! The macro declares a builtin instruction handler from a plain function,
 //! removing hand-written entrypoint/registerer boilerplate. Scope is
-//! strictly hpsvm-owned builtins and precompiles (AD-10): the generated code
+//! strictly hpsvm-owned builtins and precompiles: the generated code
 //! produces an Agave `BuiltinFunctionRegisterer`-compatible entrypoint that
 //! is installed via [`Svm::add_builtin`](https://github.com/longcipher/hpsvm),
 //! and it must never be used for SBF program dispatch.
@@ -232,12 +232,47 @@ fn struct_name_for(fn_name: &str) -> String {
         .collect()
 }
 
+/// Parses a derived type name as a plain (non-raw) identifier.
+///
+/// `syn` accepts a raw identifier such as `R#type`, and `proc-macro2` builds
+/// one without complaint, but neither is a usable type name: the expansion
+/// would not compile. Only a plain identifier is accepted here.
+fn parse_plain_ident(name: &str) -> syn::Result<syn::Ident> {
+    if name.contains('#') {
+        return Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            format!("`{name}` is a raw identifier, which cannot name a type"),
+        ));
+    }
+    syn::parse_str::<syn::Ident>(name)
+}
+
 /// Last path segment of a type, e.g. `SvmInstructionCtx` for `&mut ...::SvmInstructionCtx`.
 fn last_segment(ty: &Type) -> Option<String> {
     if let Type::Path(path) = ty {
         path.path.segments.last().map(|segment| segment.ident.to_string())
     } else {
         None
+    }
+}
+
+/// Whether the type is `hpsvm::SvmInstructionCtx`.
+///
+/// The check looks at the whole path, not just its last segment: a
+/// user-defined type with the same name is a different type, and accepting
+/// it would only produce a confusing type mismatch at the call site.
+fn is_hpsvm_instruction_ctx(ty: &Type) -> bool {
+    let Type::Path(path) = ty else {
+        return false;
+    };
+    let segments: Vec<String> =
+        path.path.segments.iter().map(|segment| segment.ident.to_string()).collect();
+    match segments.as_slice() {
+        [one] => one == "SvmInstructionCtx",
+        [root, rest @ ..] => {
+            root == "hpsvm" && rest.last().is_some_and(|last| last == "SvmInstructionCtx")
+        }
+        _ => false,
     }
 }
 
@@ -299,10 +334,10 @@ fn check_handler_shape(func: &ItemFn) -> syn::Result<()> {
             format!("handler context must be `&mut SvmInstructionCtx`; {shape}"),
         ));
     }
-    if last_segment(&reference.elem).as_deref() != Some("SvmInstructionCtx") {
+    if !is_hpsvm_instruction_ctx(&reference.elem) {
         return Err(syn::Error::new_spanned(
             &reference.elem,
-            format!("handler context must be `SvmInstructionCtx`; {shape}"),
+            format!("handler context must be `hpsvm::SvmInstructionCtx`; {shape}"),
         ));
     }
     let ReturnType::Type(_, output) = &func.sig.output else {
@@ -382,7 +417,25 @@ pub fn svm_instruction(attr: TokenStream, item: TokenStream) -> TokenStream {
     let fn_name = &func.sig.ident;
     let fn_name_text = fn_name.to_string();
     let struct_name = struct_name_for(&fn_name_text);
-    let struct_ident = format_ident!("{struct_name}");
+    // `format_ident!` panics on an invalid identifier, and the derived name
+    // is not always a valid one (`fn _()` derives the empty string, `fn
+    // r#type()` derives `R#type`). The macro's contract is that anything
+    // else is rejected with a `compile_error!`, so the name is validated
+    // here.
+    let struct_ident = match parse_plain_ident(&struct_name) {
+        Ok(ident) => ident,
+        Err(error) => {
+            return syn::Error::new_spanned(
+                fn_name,
+                format!(
+                    "`{fn_name_text}` cannot be used as an instruction handler name: \
+                     the derived type name `{struct_name}` is not a valid identifier ({error})"
+                ),
+            )
+            .to_compile_error()
+            .into();
+        }
+    };
     let entrypoint_ident = format_ident!("{struct_name}Entrypoint");
     let compute_units = args.compute_units;
     let output = &func.sig.output;

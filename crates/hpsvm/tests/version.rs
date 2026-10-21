@@ -1,4 +1,4 @@
-//! Task 2.1: `Version` + `ClusterSpecId` replace `SvmCfg` + `RuntimeEnv`.
+//! `Version` and `ClusterSpecId` replace `SvmCfg` and `RuntimeEnv`.
 //!
 //! Every profile's base must reproduce the current default fee structure, rent
 //! parameters and feature set exactly; `base()` must hand out `&'static`

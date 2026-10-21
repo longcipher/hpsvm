@@ -5,7 +5,11 @@ license.workspace = true
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
-publish = true
+# The default search root is a workspace-relative path that only exists
+# inside this repository, so publishing the crate would ship a lookup that
+# can never find anything. Consumers point `HPSVM_TEST_PROGRAMS_DIR` at
+# their own build output instead.
+publish = false
 
 [lints]
 workspace = true

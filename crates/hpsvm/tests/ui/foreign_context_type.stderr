@@ -1,0 +1,5 @@
+error: handler context must be `hpsvm::SvmInstructionCtx`; expected `fn name(ctx: &mut SvmInstructionCtx) -> Result<(), InstructionError>`
+  --> tests/ui/foreign_context_type.rs:17:25
+   |
+17 | fn look_alike(ctx: &mut foreign::SvmInstructionCtx) -> Result<(), InstructionError> {
+   |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^

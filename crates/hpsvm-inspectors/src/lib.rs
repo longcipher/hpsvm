@@ -29,12 +29,13 @@
 //! ```
 
 use std::sync::{
-    Arc, Mutex,
+    Arc,
     atomic::{AtomicUsize, Ordering},
 };
 
 pub use hpsvm::{InspectMode, Inspector, OriginFilter, OriginFiltered, TransactionOrigin};
 use hpsvm::{Svm, SvmTypesHost};
+use parking_lot::Mutex;
 use solana_address::Address;
 use solana_transaction::sanitized::SanitizedTransaction;
 use solana_transaction_error::TransactionResult;
@@ -76,8 +77,8 @@ impl EventLog {
         self.lock().push(event);
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<String>> {
-        self.events.lock().expect("event log lock should not be poisoned")
+    fn lock(&self) -> parking_lot::MutexGuard<'_, Vec<String>> {
+        self.events.lock()
     }
 }
 
@@ -154,8 +155,8 @@ impl OriginLog {
         self.lock().push(origin);
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<TransactionOrigin>> {
-        self.origins.lock().expect("origin log lock should not be poisoned")
+    fn lock(&self) -> parking_lot::MutexGuard<'_, Vec<TransactionOrigin>> {
+        self.origins.lock()
     }
 }
 
@@ -268,7 +269,7 @@ impl<T: SvmTypesHost> Inspector<T> for OriginCountingInspector {
     }
 
     fn accepts_origin(&self, origin: TransactionOrigin) -> bool {
-        *self.last_origin.lock().expect("origin stash lock should not be poisoned") = Some(origin);
+        *self.last_origin.lock() = Some(origin);
         match origin {
             TransactionOrigin::User | TransactionOrigin::InternalAirdrop => true,
             // `TransactionOrigin` is `#[non_exhaustive]`, so a wildcard arm is
@@ -279,7 +280,7 @@ impl<T: SvmTypesHost> Inspector<T> for OriginCountingInspector {
     }
 
     fn instruction_start(&mut self, _index: usize, _program_id: &Address) {
-        let origin = *self.last_origin.lock().expect("origin stash lock should not be poisoned");
+        let origin = *self.last_origin.lock();
         match origin {
             Some(TransactionOrigin::User) => {
                 self.user_instructions.fetch_add(1, Ordering::SeqCst);

@@ -44,17 +44,31 @@ pub const CLOCK_EXAMPLE: &str = "hpsvm_clock_example.so";
 /// at once.
 pub const PROGRAMS: [&str; 4] = [COUNTER, FAILURE, CUSTOM_SYSCALL, CLOCK_EXAMPLE];
 
+/// The environment variable that overrides where the SBF test programs are
+/// looked up.
+///
+/// The default is the workspace-relative location, which only exists in this
+/// repository. A consumer that vendors the programs elsewhere (or builds
+/// them itself) points this variable at the directory that holds them.
+pub const PROGRAM_DIR_ENV: &str = "HPSVM_TEST_PROGRAMS_DIR";
+
 /// Returns the directories searched for SBF test programs, in priority order.
+///
+/// The search root is the `HPSVM_TEST_PROGRAMS_DIR` environment variable
+/// when it is set, and the workspace-relative location otherwise.
 #[must_use]
 pub fn program_dirs() -> Vec<PathBuf> {
-    let test_programs = Path::new(env!("CARGO_MANIFEST_DIR")).join("../hpsvm/test_programs");
+    let test_programs = match std::env::var_os(PROGRAM_DIR_ENV) {
+        Some(dir) if !dir.is_empty() => PathBuf::from(dir),
+        _ => Path::new(env!("CARGO_MANIFEST_DIR")).join("../hpsvm/test_programs"),
+    };
     vec![test_programs.join("target/deploy"), test_programs.join("prebuilt")]
 }
 
 /// Returns the command that builds the SBF test programs.
 #[must_use]
 pub const fn build_command() -> &'static str {
-    "cd crates/hpsvm/test_programs && cargo build-sbf"
+    "cargo build-sbf --manifest-path crates/hpsvm/test_programs/Cargo.toml"
 }
 
 /// Locates `name` in the first of `dirs` that holds it.
@@ -148,7 +162,9 @@ pub fn report_unavailable() -> Vec<&'static str> {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{COUNTER, PROGRAMS, build_command, find_in, find_program, program_dirs};
+    use super::{
+        COUNTER, PROGRAM_DIR_ENV, PROGRAMS, build_command, find_in, find_program, program_dirs,
+    };
 
     /// Returns a per-test scratch directory, emptied first.
     fn scratch(tag: &str) -> PathBuf {
@@ -175,7 +191,31 @@ mod tests {
 
     #[test]
     fn build_command_targets_the_test_programs_workspace() {
-        assert_eq!(build_command(), "cd crates/hpsvm/test_programs && cargo build-sbf");
+        assert_eq!(
+            build_command(),
+            "cargo build-sbf --manifest-path crates/hpsvm/test_programs/Cargo.toml"
+        );
+    }
+
+    /// The search root can be redirected, so a consumer that builds the
+    /// programs elsewhere can point the lookup at its own output.
+    #[test]
+    fn the_program_dir_environment_variable_redirects_the_search() {
+        let root = scratch("redirected");
+        let previous = std::env::var_os(PROGRAM_DIR_ENV);
+        // SAFETY: the test is the only writer of this variable in this
+        // process, and it restores the previous value before it returns.
+        unsafe { std::env::set_var(PROGRAM_DIR_ENV, &root) };
+        let dirs = program_dirs();
+        match previous {
+            Some(previous) => unsafe { std::env::set_var(PROGRAM_DIR_ENV, previous) },
+            None => unsafe { std::env::remove_var(PROGRAM_DIR_ENV) },
+        }
+
+        assert_eq!(dirs.len(), 2);
+        assert!(dirs[0].starts_with(&root), "got {}", dirs[0].display());
+        assert!(dirs[0].ends_with("target/deploy"));
+        assert!(dirs[1].ends_with("prebuilt"));
     }
 
     #[test]

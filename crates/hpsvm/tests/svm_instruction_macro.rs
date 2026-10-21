@@ -1,4 +1,4 @@
-//! Task 6.3: `#[svm_instruction]` end-to-end verification.
+//! `#[svm_instruction]` end-to-end verification.
 //!
 //! A plain function annotated with the macro must produce a working handler
 //! with bound accounts/data and a correct CU charge, behaving identically to

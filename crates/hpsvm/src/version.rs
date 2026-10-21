@@ -457,9 +457,9 @@ mod tests {
         assert_eq!(into_spec_id(ClusterSpecId::Devnet), ClusterSpecId::Devnet);
     }
 
-    // Task 2.2 RED probe: `FeatureGate` / `TxFeatureFlags` do not exist yet,
+    // `FeatureGate` and `TxFeatureFlags` did not exist yet, so the
     // so this module must fail to compile with unresolved imports until the
-    // hoisted flag container lands (design §3.2).
+    // hoisted flag container landed without them.
     use super::{FeatureGate, TxFeatureFlags};
 
     #[test]

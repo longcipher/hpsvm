@@ -1,4 +1,4 @@
-//! Task 6.1 (TxRegistry) acceptance tests.
+//! `TxRegistry` acceptance tests.
 //!
 //! * A transaction whose tag matches a registered handler executes that handler.
 //! * Dispatching an unregistered tag produces a typed error.

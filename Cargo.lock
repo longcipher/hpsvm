@@ -2215,6 +2215,7 @@ name = "hpsvm-inspectors"
 version = "0.2.1"
 dependencies = [
  "hpsvm",
+ "parking_lot",
  "solana-address 2.9.0",
  "solana-hash",
  "solana-keypair",

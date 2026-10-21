@@ -272,7 +272,7 @@ impl<T: SvmTypesHost> Svm<'_, T> {
         // (a pointer bump) and the write lock is taken for the `&mut` the
         // `InvokeContext` API requires. The per-transaction `HashMap` deep
         // clone this replaced was the documented `clone_program_cache`
-        // hot-path cost (REQ-02). The guard is held for the whole execution;
+        // hot-path cost. The guard is held for the whole execution;
         // nothing under it re-locks the cache (the entry-presence check below
         // reads through the guard), and transaction-scratch state is drained
         // before the guard drops so only committed entries persist.

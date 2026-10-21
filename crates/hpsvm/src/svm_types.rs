@@ -13,7 +13,7 @@
 //! # Deferred bounds
 //!
 //! None remain: `type SpecId: Copy + Into<ClusterSpecId>` is expressed now that
-//! `Version` (Task 2.1) provides [`ClusterSpecId`].
+//! [`Version`](crate::Version) provides [`ClusterSpecId`].
 
 use solana_transaction::versioned::VersionedTransaction;
 

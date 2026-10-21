@@ -92,7 +92,7 @@ impl<'a> ComputeUnitMatrixBencher<'a> {
         if programs.is_empty() {
             reports.insert(String::from(BUILTIN_VARIANT_NAME), execute_variant(&cases, None)?);
         } else {
-            for variant in group_variant_sets(programs) {
+            for variant in group_variant_sets(programs)? {
                 let report = execute_variant(&cases, Some(&variant))?;
                 reports.insert(variant.name, report);
             }
@@ -168,14 +168,23 @@ fn execute_variant(
     Ok(CuReport::new(rows))
 }
 
-fn group_variant_sets(programs: Vec<ProgramVariant>) -> Vec<ProgramVariantSet> {
+/// Groups the variants by name.
+///
+/// Several programs may share a variant name — that is how a variant is
+/// built — but the same program may not appear twice under one name, because
+/// the two ELFs would contradict each other.
+fn group_variant_sets(programs: Vec<ProgramVariant>) -> Result<Vec<ProgramVariantSet>, BenchError> {
     let mut grouped = BTreeMap::<String, BTreeMap<Address, ProgramVariant>>::new();
 
     for variant in programs {
-        grouped.entry(variant.name.clone()).or_default().insert(variant.program_id, variant);
+        let entry = grouped.entry(variant.name.clone()).or_default();
+        let name = variant.name.clone();
+        if entry.insert(variant.program_id, variant).is_some() {
+            return Err(BenchError::DuplicateProgramName { name });
+        }
     }
 
-    grouped.into_iter().map(|(name, programs)| ProgramVariantSet { name, programs }).collect()
+    Ok(grouped.into_iter().map(|(name, programs)| ProgramVariantSet { name, programs }).collect())
 }
 
 fn validate_variant_programs(
@@ -471,7 +480,8 @@ mod tests {
                 program_id: third,
                 elf: vec![3; 8],
             },
-        ]);
+        ])
+        .expect("grouping must succeed");
 
         assert_eq!(sets.len(), 1, "one name must produce one variant set");
         assert_eq!(sets[0].name, "shared");
@@ -498,7 +508,8 @@ mod tests {
                 program_id,
                 elf: vec![2; 8],
             },
-        ]);
+        ])
+        .expect("grouping must succeed");
 
         assert_eq!(sets.len(), 2);
         let names: Vec<&str> = sets.iter().map(|set| set.name.as_str()).collect();
@@ -508,40 +519,65 @@ mod tests {
         assert_eq!(names, vec!["alpha", "beta"]);
     }
 
-    /// A program registered under two names yields one entry per name, and a
-    /// repeated registration of the same program keeps only the last ELF.
+    /// A program registered under two names yields one entry per name, and
+    /// the sets are ordered by name.
     #[test]
-    fn grouping_is_ordered_and_deduplicated() {
+    fn grouping_is_ordered() {
         let loader = fixture_loader_id(Address::new_unique());
-        let program_id = Address::new_unique();
+        let zulu_program = Address::new_unique();
+        let alpha_program = Address::new_unique();
 
         let sets = group_variant_sets(vec![
             ProgramVariant {
                 name: String::from("zulu"),
                 loader_id: loader,
-                program_id,
-                elf: vec![1; 8],
-            },
-            ProgramVariant {
-                name: String::from("zulu"),
-                loader_id: loader,
-                program_id,
+                program_id: zulu_program,
                 elf: vec![9; 8],
             },
             ProgramVariant {
                 name: String::from("alpha"),
                 loader_id: loader,
-                program_id,
+                program_id: alpha_program,
                 elf: vec![2; 8],
             },
-        ]);
+        ])
+        .expect("grouping must succeed");
 
         let names: Vec<&str> = sets.iter().map(|set| set.name.as_str()).collect();
         assert_eq!(names, vec!["alpha", "zulu"]);
         assert_eq!(sets[1].programs.len(), 1, "a program id appears once per set");
         assert_eq!(
-            sets[1].programs.get(&program_id).expect("program is registered").elf,
+            sets[1].programs.get(&zulu_program).expect("program is registered").elf,
             vec![9u8; 8]
+        );
+    }
+
+    /// The same program registered twice under one name is a conflict: the
+    /// two ELFs would contradict each other.
+    #[test]
+    fn a_program_registered_twice_under_one_name_is_rejected() {
+        let loader = fixture_loader_id(Address::new_unique());
+        let program_id = Address::new_unique();
+
+        let error = group_variant_sets(vec![
+            ProgramVariant {
+                name: String::from("duplicated"),
+                loader_id: loader,
+                program_id,
+                elf: vec![1; 8],
+            },
+            ProgramVariant {
+                name: String::from("duplicated"),
+                loader_id: loader,
+                program_id,
+                elf: vec![2; 8],
+            },
+        ])
+        .expect_err("a repeated registration must be rejected");
+
+        assert!(
+            matches!(error, BenchError::DuplicateProgramName { .. }),
+            "expected DuplicateProgramName, got {error:?}"
         );
     }
 

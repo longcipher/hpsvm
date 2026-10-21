@@ -1,0 +1,5 @@
+error: `r#type` cannot be used as an instruction handler name: the derived type name `R#type` is not a valid identifier (`R#type` is a raw identifier, which cannot name a type)
+  --> tests/ui/invalid_handler_name.rs:13:4
+   |
+13 | fn r#type(ctx: &mut SvmInstructionCtx) -> Result<(), InstructionError> {
+   |    ^^^^^^

@@ -415,11 +415,11 @@ fn the_origin_less_hook_ignores_batch_stage_instructions() {
     assert_eq!(observed.load(Ordering::SeqCst), 0);
 }
 
-// Task 5.1 RED tests: the mutable-hook inspector API does not exist yet.
+// The mutable-hook inspector API.
 // Every test below must fail to compile until the trait is redefined with
 // `&mut self` hooks plus `set_inspector` / `clear_inspector` and the
 // `OriginFiltered` decorator.
-mod task_5_1_mutable_hooks {
+mod mutable_hooks {
     use std::any::Any;
 
     use hpsvm::{BaseSvmTypes, HPSVM, Inspector, OriginFilter, OriginFiltered, Svm};
@@ -442,8 +442,6 @@ mod task_5_1_mutable_hooks {
         instruction_ends: Vec<(usize, Address)>,
         tx_ends: usize,
         logs: Vec<String>,
-        cpi_starts: usize,
-        cpi_ends: usize,
     }
 
     impl Inspector<BaseSvmTypes> for MutableCountingInspector {
@@ -465,14 +463,6 @@ mod task_5_1_mutable_hooks {
 
         fn instruction_end(&mut self, index: usize, program_id: &Address) {
             self.instruction_ends.push((index, *program_id));
-        }
-
-        fn cpi_start(&mut self, _depth: u8, _program_id: &Address) {
-            self.cpi_starts += 1;
-        }
-
-        fn cpi_end(&mut self, _depth: u8, _program_id: &Address) {
-            self.cpi_ends += 1;
         }
 
         fn log(&mut self, message: &str) {
@@ -524,8 +514,6 @@ mod task_5_1_mutable_hooks {
         assert_eq!(counting.instruction_starts, vec![(0, system_program)]);
         assert_eq!(counting.instruction_ends, vec![(0, system_program)]);
         assert_eq!(counting.tx_ends, 1);
-        assert_eq!(counting.cpi_starts, 0);
-        assert_eq!(counting.cpi_ends, 0);
         assert_eq!(
             counting.logs,
             vec![
@@ -774,11 +762,11 @@ mod task_5_1_mutable_hooks {
     }
 }
 
-// Task 5.2 RED tests: monomorphized execution over `InspectMode` does not
+// The monomorphized execution over `InspectMode` does not
 // exist yet. Every test below must fail to compile until `InspectMode` is
 // defined, re-exported from `hpsvm`, and threaded through execution as a
 // const parameter.
-mod task_5_2_inspect_mode {
+mod inspect_mode {
     use std::any::Any;
 
     use hpsvm::{BaseSvmTypes, HPSVM, InspectMode, Inspector, Svm};

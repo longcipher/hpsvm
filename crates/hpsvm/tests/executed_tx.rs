@@ -1,4 +1,4 @@
-//! Task 3.2 (TDD RED): `ExecutedTx` commit/discard golden tests.
+//! `ExecutedTx` commit/discard golden tests.
 //!
 //! Goldens below were captured from the legacy `transact` +
 //! `commit_transaction` path before the migration:

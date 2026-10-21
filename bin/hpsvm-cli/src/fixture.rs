@@ -36,7 +36,7 @@ pub(crate) fn run_fixture(
         }
 
         eprintln!("FAIL: {}", fixture.header.name);
-        std::process::exit(1)
+        return Err(CliError::ComparisonFailed { name: fixture.header.name });
     }
 
     Ok(())
@@ -78,7 +78,7 @@ pub(crate) fn compare_fixture(
         }
 
         eprintln!("FAIL: {}", fixture.header.name);
-        std::process::exit(1)
+        return Err(CliError::ComparisonFailed { name: fixture.header.name });
     }
 
     Ok(())

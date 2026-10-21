@@ -134,7 +134,7 @@ impl CacheDb {
     }
 }
 
-/// Shared handle to the committed program cache (Task 4.2 / REQ-02).
+/// Shared handle to the committed program cache.
 ///
 /// Cloning the handle is a cheap `Arc` pointer bump. The inner
 /// `ProgramCacheForTxBatch` is never deep-cloned on the transaction path;
@@ -415,7 +415,7 @@ impl Accounts {
         self.source.get_accounts(pubkeys)
     }
 
-    /// Batch-loads `addrs` from the account source into the overlay (Task 4.3).
+    /// Batch-loads `addrs` from the account source into the overlay.
     ///
     /// Only addresses missing from the overlay (neither cached nor tombstoned)
     /// are fetched, in a single `source.get_accounts` round-trip. Hits are
@@ -1245,7 +1245,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Task 4.3 (TDD): prewarm driven by the batch read-set
+    // The prewarm path, driven by the batch read-set.
     // -----------------------------------------------------------------
 
     /// Map-backed source counting batched vs single loads separately.
@@ -1469,7 +1469,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Task 7.1: fatal classification survives the real `prewarm` path
+    // The fatal classification survives the real `prewarm` path.
     // -----------------------------------------------------------------
 
     #[test]
@@ -1540,7 +1540,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Task 3.1 (TDD RED): journal + StateCheckpoint / rollback
+    // The journal and the checkpoint/rollback pair.
     // -----------------------------------------------------------------
 
     fn journal_test_account(
@@ -1558,7 +1558,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Task 4.1 (TDD): account read fall-through + overlay hit
+    // Account reads: the overlay hit and the source fall-through.
     // -----------------------------------------------------------------
 
     #[test]
@@ -1633,7 +1633,7 @@ mod tests {
         assert!(c.get_account_ref(&addr).is_none());
     }
 
-    // -- proptest properties (Task 3.1) ------------------------------------
+    // -- proptest properties ------------------------------------------------
 
     use proptest::prelude::*;
 
@@ -1838,7 +1838,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Task 4.2 (TDD RED): program cache shared as Arc, never deep-cloned
+    // The program cache is shared as an `Arc`, never deep-cloned.
     // on the transaction path.
     // -----------------------------------------------------------------
 

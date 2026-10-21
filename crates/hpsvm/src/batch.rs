@@ -200,7 +200,7 @@ pub(crate) fn send_transaction_batch<T: SvmTypesHost>(
             continue;
         }
 
-        // Task 4.3 (AD-07): prewarm the stage read-set with a single batched
+        // Prewarm the stage read-set with a single batched
         // source load, so workers clone an already-warm overlay instead of
         // issuing per-transaction source round-trips. Single-transaction
         // stages skip this: they run serially on the live overlay, which is
@@ -272,7 +272,7 @@ pub(crate) fn send_transaction_batch<T: SvmTypesHost>(
 
 /// Union of static account keys referenced by a stage's transactions.
 ///
-/// This is the AD-07 read-set adaptation: the public plan carries only
+/// This is the read-set adaptation: the public plan carries only
 /// `transaction_indexes` (lock sets are consumed at plan time), so the
 /// prewarm set is re-derived from each stage transaction's static keys.
 /// Lookup-table dynamic addresses are excluded — planning already resolved

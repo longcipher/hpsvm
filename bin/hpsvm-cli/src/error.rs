@@ -1,4 +1,4 @@
-use hpsvm::error::HPSVMError;
+use hpsvm::HPSVMError;
 use hpsvm_fixture_bench::BenchError;
 use thiserror::Error;
 
@@ -32,6 +32,8 @@ pub(crate) enum CliError {
     TransactionEncoding { path: String, encoding: String, reason: String },
     #[error("no fixture files found in directory {path}")]
     NoFixturesInDirectory { path: String },
+    #[error("fixture `{name}` did not satisfy its expectations")]
+    ComparisonFailed { name: String },
     #[cfg(not(feature = "fd-compat"))]
     #[error("firedancer fixture compatibility requires the hpsvm-cli `fd-compat` feature")]
     FiredancerCompatDisabled,

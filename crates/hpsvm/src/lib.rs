@@ -288,7 +288,7 @@
 //!   [`Svm::set_precompile_provider`]).
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
-// Task 5.2: `InspectMode` is threaded through execution as a const-generic
+// `InspectMode` is threaded through execution as a const-generic
 // parameter. A fieldless enum as a const-param type needs minimal ADT const
 // params; the workspace already pins a nightly toolchain (rust-toolchain.toml).
 #![feature(min_adt_const_params)]
@@ -665,7 +665,7 @@ impl<T: SvmTypesHost> InvocationInspectCallback<T> for EmptyInvocationInspectCal
 }
 
 #[cfg(test)]
-mod task_1_2_red_probe {
+mod alias_red_probe {
     use super::*;
 
     #[test]

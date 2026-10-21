@@ -90,25 +90,25 @@ pub enum HPSVMError {
         /// The tag no handler owned.
         tag: TxTag,
     },
-    /// Layered database error (design §3.10).
+    /// Layered database error.
     ///
     /// Lossless [`DbError`] projection: [`DbError::is_fatal`] and
     /// [`DbError::downcast_ref`] keep working through this variant.
     #[error(transparent)]
     Database(#[from] DbError),
-    /// Layered load error (design §3.10).
+    /// Layered load error.
     #[error(transparent)]
     Load(#[from] LoadError),
-    /// Layered transaction error (design §3.10).
+    /// Layered transaction error.
     #[error(transparent)]
     Transaction(TxError),
-    /// Layered execution error (design §3.10).
+    /// Layered execution error.
     #[error(transparent)]
     Execution(ExecutionError),
-    /// Layered host error (design §3.10).
+    /// Layered host error.
     #[error(transparent)]
     Host(#[from] HostError),
-    /// Layered handler error (design §3.10).
+    /// Layered handler error.
     #[error(transparent)]
     Handler(#[from] HandlerError),
 }
@@ -149,7 +149,7 @@ impl From<TxError> for HPSVMError {
 }
 
 // ===========================================================================
-// Layered error taxonomy (design §3.10).
+// Layered error taxonomy.
 //
 // Placement: this taxonomy lives in `error.rs` (rather than a new `errors.rs`
 // module) because `error.rs` is already the crate's single error home — it
@@ -1038,7 +1038,7 @@ mod tests {
 }
 
 // ---------------------------------------------------------------------------
-// Task 7.1 (TDD RED): layered error taxonomy (§3.10).
+// The layered error taxonomy.
 //
 // These tests name the taxonomy types before they exist, so this module fails
 // to compile until the taxonomy is added below the `HPSVMError` section.

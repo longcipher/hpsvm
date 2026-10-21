@@ -422,12 +422,10 @@ fn instruction_account_from_proto(
     accounts: &[AccountSnapshot],
     account: fd_codec::proto::InstrAcct,
 ) -> Result<InstructionAccountMeta, AdapterError> {
-    let index = usize::try_from(account.index).map_err(|_| {
-        AdapterError::InvalidInstructionAccountIndex {
-            index: usize::MAX,
-            accounts_len: accounts.len(),
-        }
-    })?;
+    // The proto field is a `u32`, which fits in a `usize` on every supported
+    // target, so the conversion cannot fail. The out-of-range case below is
+    // the one that is actually reachable.
+    let index = account.index as usize;
     let address = accounts
         .get(index)
         .ok_or(AdapterError::InvalidInstructionAccountIndex {

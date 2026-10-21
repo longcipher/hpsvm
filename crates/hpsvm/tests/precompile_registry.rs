@@ -1,4 +1,4 @@
-//! Precompile registry tests (Task 6.2).
+//! Precompile registry tests.
 //!
 //! The default provider must reproduce today's agave-backed behaviour
 //! (equivalence is proven against the secp256k1 goldens from

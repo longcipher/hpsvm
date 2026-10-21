@@ -140,20 +140,6 @@ pub trait Inspector<T: SvmTypesHost>: Send + Sync {
     /// failed one: the hook fires before the error propagates.
     fn instruction_end(&mut self, _index: usize, _program_id: &Address) {}
 
-    /// Called on entry to a cross-program invocation.
-    ///
-    /// No firing site exists in the current execution pipeline (CPI depth is
-    /// only visible post-hoc through inner instructions), so this hook
-    /// currently never fires during execution. It is covered by direct unit
-    /// tests, and wiring it is documented future work.
-    fn cpi_start(&mut self, _depth: u8, _program_id: &Address) {}
-
-    /// Called on exit from a cross-program invocation.
-    ///
-    /// Same status as [`Inspector::cpi_start`]: default no-op, unit-tested,
-    /// execution wiring is future work.
-    fn cpi_end(&mut self, _depth: u8, _program_id: &Address) {}
-
     /// Called once per collected log message, after instruction processing
     /// and before `transaction_end`.
     fn log(&mut self, _message: &str) {}
@@ -298,14 +284,6 @@ impl<T: SvmTypesHost, I: Inspector<T> + 'static> Inspector<T> for OriginFiltered
 
     fn instruction_end(&mut self, index: usize, program_id: &Address) {
         self.inner.instruction_end(index, program_id);
-    }
-
-    fn cpi_start(&mut self, depth: u8, program_id: &Address) {
-        self.inner.cpi_start(depth, program_id);
-    }
-
-    fn cpi_end(&mut self, depth: u8, program_id: &Address) {
-        self.inner.cpi_end(depth, program_id);
     }
 
     fn log(&mut self, message: &str) {
@@ -567,13 +545,11 @@ mod tests {
         inspector.transaction_start(&svm, &tx);
         inspector.instruction_start(0, &program_id);
         inspector.instruction_end(0, &program_id);
-        inspector.cpi_start(1, &program_id);
-        inspector.cpi_end(1, &program_id);
         inspector.log("hello");
         inspector.account_change(AccountChange { address: program_id, before: None, after: None });
 
-        // `RecordingInspector` overrides only the four transaction/instruction
-        // hooks, so exactly those four record events; the rest stay no-ops.
+        // `RecordingInspector` overrides only the transaction/instruction
+        // hooks, so exactly those record events; the rest stay no-ops.
         assert_eq!(
             inspector.events,
             vec![
@@ -621,8 +597,6 @@ mod tests {
         inspector.transaction_start(&svm, &tx);
         inspector.instruction_start(0, &program_id);
         inspector.instruction_end(0, &program_id);
-        inspector.cpi_start(1, &program_id);
-        inspector.cpi_end(1, &program_id);
         inspector.log("hello");
         inspector.account_change(AccountChange { address: program_id, before: None, after: None });
     }

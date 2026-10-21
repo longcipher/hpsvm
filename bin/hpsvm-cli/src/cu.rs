@@ -39,5 +39,5 @@ pub(crate) fn report_compute_units(
     }
 
     eprintln!("FAIL: {}", fixture.header.name);
-    std::process::exit(1)
+    Err(crate::error::CliError::ComparisonFailed { name: fixture.header.name })
 }
