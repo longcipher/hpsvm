@@ -9,7 +9,8 @@
 //! lengths, out-of-range account indices, compute-unit underflow, inconsistent
 //! status pairs).
 
-use hpsvm_fixture::{AdapterError, FiredancerFixture, Fixture};
+use hpsvm_fixture::Fixture;
+use hpsvm_fixture_firedancer::{AdapterError, FiredancerFixture};
 use libfuzzer_sys::fuzz_target;
 use hpsvm_fd_fixture as fd_codec;
 use prost::Message;

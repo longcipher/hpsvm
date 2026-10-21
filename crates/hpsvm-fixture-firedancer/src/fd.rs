@@ -6,56 +6,125 @@ use std::{
 };
 
 use hpsvm_fd_fixture as fd_codec;
+use hpsvm_fixture::{
+    AccountCompareScope, AccountSnapshot, Compare, ExecutionFailure, ExecutionSnapshot,
+    ExecutionStatus, FixtureExpectations, FixtureHeader, FixtureInput, FixtureKind,
+    InstructionAccountMeta, InstructionFixture, ReturnDataSnapshot, RuntimeFixtureConfig,
+};
 use prost::Message;
 use solana_address::Address;
 
 pub use self::error::AdapterError;
-use crate::{
-    AccountCompareScope, AccountSnapshot, Compare, ExecutionSnapshot, ExecutionStatus,
-    FixtureExpectations, FixtureHeader, FixtureInput, FixtureKind, InstructionAccountMeta,
-    InstructionFixture, ReturnDataSnapshot, RuntimeFixtureConfig,
-};
 
 mod error {
     use thiserror::Error;
 
+    /// A failure while converting between the FireDancer fixture format and
+    /// the `hpsvm` fixture model.
     #[derive(Debug, Error)]
+    #[non_exhaustive]
     pub enum AdapterError {
+        /// A file could not be read or written.
         #[error("I/O error: {0}")]
         Io(#[from] std::io::Error),
+        /// The JSON form of the fixture could not be decoded.
         #[cfg(feature = "json-codec")]
         #[error("JSON codec error: {0}")]
         Json(#[from] serde_json::Error),
+        /// The protobuf form of the fixture could not be decoded.
         #[error("protobuf codec decode error: {0}")]
         Decode(#[from] prost::DecodeError),
+        /// The file extension does not name a FireDancer fixture format.
         #[error("unsupported firedancer fixture format for {path}")]
-        UnsupportedFormat { path: String },
+        UnsupportedFormat {
+            /// The path that was rejected.
+            path: String,
+        },
+        /// A field the FireDancer format requires is absent.
         #[error("missing firedancer fixture field {field}")]
-        MissingField { field: &'static str },
+        MissingField {
+            /// The name of the missing field.
+            field: &'static str,
+        },
+        /// An address field does not hold 32 bytes.
         #[error("invalid 32-byte address length for {field}: got {actual}")]
-        InvalidAddressLength { field: &'static str, actual: usize },
+        InvalidAddressLength {
+            /// The name of the malformed field.
+            field: &'static str,
+            /// The length that was found.
+            actual: usize,
+        },
+        /// An instruction references an account that does not exist.
         #[error("instruction account index {index} is out of range for {accounts_len} accounts")]
-        InvalidInstructionAccountIndex { index: usize, accounts_len: usize },
+        InvalidInstructionAccountIndex {
+            /// The out-of-range index.
+            index: usize,
+            /// The number of accounts that were available.
+            accounts_len: usize,
+        },
+        /// An instruction's account is not part of the fixture's pre-accounts.
         #[error("instruction account {address} is missing from pre_accounts")]
-        MissingInstructionAccount { address: String },
+        MissingInstructionAccount {
+            /// The address that was not found.
+            address: String,
+        },
+        /// A seed-derived account cannot be represented in the fixture model.
         #[error("seed-derived account metadata is not supported in {field}")]
-        UnsupportedSeedAddress { field: &'static str },
+        UnsupportedSeedAddress {
+            /// The name of the field that carried the seed.
+            field: &'static str,
+        },
+        /// The compute units before and after the execution disagree.
         #[error("firedancer compute units are inconsistent: before={before}, after={after}")]
-        InconsistentComputeUnits { before: u64, after: u64 },
+        InconsistentComputeUnits {
+            /// The compute units before the execution.
+            before: u64,
+            /// The compute units after the execution.
+            after: u64,
+        },
+        /// The fixture consumed more compute units than its budget allows.
         #[error("hpsvm fixture consumed {consumed} compute units but runtime budget is {budget}")]
-        ComputeUnitsExceedBudget { budget: u64, consumed: u64 },
+        ComputeUnitsExceedBudget {
+            /// The available budget.
+            budget: u64,
+            /// The compute units the fixture consumed.
+            consumed: u64,
+        },
+        /// The FireDancer status fields contradict each other.
         #[error(
             "firedancer execution status is inconsistent: result={result}, custom_err={custom_err}"
         )]
-        InconsistentExecutionStatus { result: i32, custom_err: u32 },
+        InconsistentExecutionStatus {
+            /// The program result code.
+            result: i32,
+            /// The program custom error code.
+            custom_err: u32,
+        },
+        /// The failure has no FireDancer program code to export.
         #[error("execution status {kind} cannot be exported to firedancer status fields")]
-        UnsupportedExecutionStatus { kind: String },
+        UnsupportedExecutionStatus {
+            /// The kind of failure that could not be exported.
+            kind: String,
+        },
+        /// The return data names a program the FireDancer format cannot express.
         #[error(
             "return data program {program_id} cannot be exported to firedancer fixture for instruction program {instruction_program_id}"
         )]
-        UnsupportedReturnDataProgram { program_id: String, instruction_program_id: String },
+        UnsupportedReturnDataProgram {
+            /// The program that produced the return data.
+            program_id: String,
+            /// The program the instruction invoked.
+            instruction_program_id: String,
+        },
+        /// The fixture kind has no FireDancer representation.
         #[error("hpsvm fixture kind {kind} cannot be exported to firedancer; expected {expected}")]
-        UnsupportedFixtureKind { kind: &'static str, expected: &'static str },
+        UnsupportedFixtureKind {
+            /// The fixture kind that was rejected.
+            kind: &'static str,
+            /// The fixture kind the adapter supports.
+            expected: &'static str,
+        },
+        /// The fixture does not carry the compute unit budget the export needs.
         #[error(
             "exporting hpsvm instruction fixtures requires the initial compute unit budget, which the canonical fixture model does not store"
         )]
@@ -66,6 +135,11 @@ mod error {
 const FIREDANCER_SOURCE: &str = "firedancer";
 const FIREDANCER_TAG: &str = "external:firedancer";
 
+/// A FireDancer instruction fixture.
+///
+/// The fixture is stored in the FireDancer protobuf shape; the conversion to
+/// the `hpsvm` fixture model happens through [`to_model`](Self::to_model) and
+/// the `TryFrom` implementations.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FiredancerFixture {
@@ -73,23 +147,31 @@ pub struct FiredancerFixture {
 }
 
 impl FiredancerFixture {
+    /// Wraps a decoded protobuf fixture.
     pub fn from_proto(inner: fd_codec::proto::InstrFixture) -> Self {
         Self { inner }
     }
 
+    /// Returns the underlying protobuf fixture.
     pub fn as_proto(&self) -> &fd_codec::proto::InstrFixture {
         &self.inner
     }
 
+    /// Consumes the wrapper and returns the underlying protobuf fixture.
     pub fn into_proto(self) -> fd_codec::proto::InstrFixture {
         self.inner
     }
 
+    /// Converts the fixture into the FireDancer model.
     #[must_use]
     pub fn to_model(&self) -> fd_codec::Fixture {
         self.inner.clone().into()
     }
 
+    /// Loads a fixture from a file.
+    ///
+    /// The format is chosen by the file extension: `.bin` for the protobuf
+    /// form and `.json` for the JSON form.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, AdapterError> {
         let path = path.as_ref();
         match fixture_format_for_path(path)? {
@@ -107,6 +189,10 @@ impl FiredancerFixture {
         }
     }
 
+    /// Saves the fixture to a file.
+    ///
+    /// The format is chosen by the file extension: `.bin` for the protobuf
+    /// form and `.json` for the JSON form.
     pub fn save(&self, path: impl AsRef<Path>) -> Result<(), AdapterError> {
         let path = path.as_ref();
         match fixture_format_for_path(path)? {
@@ -139,7 +225,7 @@ impl From<FiredancerFixture> for fd_codec::proto::InstrFixture {
     }
 }
 
-impl TryFrom<FiredancerFixture> for crate::Fixture {
+impl TryFrom<FiredancerFixture> for hpsvm_fixture::Fixture {
     type Error = AdapterError;
 
     fn try_from(value: FiredancerFixture) -> Result<Self, Self::Error> {
@@ -215,10 +301,10 @@ impl TryFrom<FiredancerFixture> for crate::Fixture {
     }
 }
 
-impl TryFrom<crate::Fixture> for FiredancerFixture {
+impl TryFrom<hpsvm_fixture::Fixture> for FiredancerFixture {
     type Error = AdapterError;
 
-    fn try_from(value: crate::Fixture) -> Result<Self, Self::Error> {
+    fn try_from(value: hpsvm_fixture::Fixture) -> Result<Self, Self::Error> {
         match value.input {
             FixtureInput::Instruction(instruction) => {
                 let input_cu_avail = instruction
@@ -265,6 +351,10 @@ impl TryFrom<crate::Fixture> for FiredancerFixture {
             }
             FixtureInput::Transaction(_) => Err(AdapterError::UnsupportedFixtureKind {
                 kind: "transaction",
+                expected: "instruction",
+            }),
+            _ => Err(AdapterError::UnsupportedFixtureKind {
+                kind: "unknown",
                 expected: "instruction",
             }),
         }
@@ -409,52 +499,35 @@ fn snapshot_to_proto_effects(
 fn status_to_output(status: &ExecutionStatus) -> Result<(i32, u32), AdapterError> {
     match status {
         ExecutionStatus::Success => Ok((0, 0)),
-        ExecutionStatus::Failure { kind, .. } => {
-            if let Some(value) = parse_firedancer_result_with_custom_error(kind) {
-                Ok(value)
-            } else if let Some(value) = parse_firedancer_custom_error(kind) {
-                Ok((1, value))
-            } else if let Some(value) = parse_firedancer_program_result(kind) {
-                Ok((value, 0))
-            } else {
+        // The failure is structured, so it is mapped directly: no rendering
+        // is parsed back.
+        ExecutionStatus::Failure { failure } => match failure {
+            ExecutionFailure::ProgramResult(result) => Ok((*result, 0)),
+            ExecutionFailure::CustomError(custom_error) => Ok((1, *custom_error)),
+            ExecutionFailure::ProgramResultWithCustomError { result, custom_error } => {
+                Ok((*result, *custom_error))
+            }
+            ExecutionFailure::Other { kind, .. } => {
                 Err(AdapterError::UnsupportedExecutionStatus { kind: kind.clone() })
             }
-        }
+            _ => Err(AdapterError::UnsupportedExecutionStatus { kind: "<unknown>".to_owned() }),
+        },
+        _ => Err(AdapterError::UnsupportedExecutionStatus { kind: "<unknown>".to_owned() }),
     }
-}
-
-fn parse_firedancer_result_with_custom_error(kind: &str) -> Option<(i32, u32)> {
-    let inner =
-        kind.strip_prefix("FiredancerProgramResult(").and_then(|value| value.strip_suffix(')'))?;
-    let (result, custom_err) = inner.split_once(",CustomError(")?;
-    Some((result.parse().ok()?, custom_err.strip_suffix(')')?.parse().ok()?))
-}
-
-fn parse_firedancer_custom_error(kind: &str) -> Option<u32> {
-    kind.strip_prefix("FiredancerCustomError(")
-        .and_then(|value| value.strip_suffix(')'))
-        .and_then(|value| value.parse::<u32>().ok())
-}
-
-fn parse_firedancer_program_result(kind: &str) -> Option<i32> {
-    kind.strip_prefix("FiredancerProgramResult(")
-        .and_then(|value| value.strip_suffix(')'))
-        .and_then(|value| value.parse::<i32>().ok())
 }
 
 fn status_from_output(result: i32, custom_err: u32) -> Result<ExecutionStatus, AdapterError> {
     match (result, custom_err) {
         (0, 0) => Ok(ExecutionStatus::Success),
         (0, custom_err) => Err(AdapterError::InconsistentExecutionStatus { result, custom_err }),
-        (result, 0) => Ok(ExecutionStatus::Failure {
-            kind: format!("FiredancerProgramResult({result})"),
-            message: format!("firedancer program returned status {result}"),
-        }),
+        (result, 0) => {
+            Ok(ExecutionStatus::Failure { failure: ExecutionFailure::ProgramResult(result) })
+        }
         (result, custom_err) => Ok(ExecutionStatus::Failure {
-            kind: format!("FiredancerProgramResult({result},CustomError({custom_err}))"),
-            message: format!(
-                "firedancer program returned status {result} with custom error {custom_err}"
-            ),
+            failure: ExecutionFailure::ProgramResultWithCustomError {
+                result,
+                custom_error: custom_err,
+            },
         }),
     }
 }
@@ -762,48 +835,38 @@ mod tests {
     }
 
     #[test]
-    fn status_to_output_parses_a_bare_program_result() {
-        let status = ExecutionStatus::Failure {
-            kind: String::from("FiredancerProgramResult(3)"),
-            message: String::new(),
-        };
+    fn status_to_output_maps_a_bare_program_result() {
+        let status = ExecutionStatus::Failure { failure: ExecutionFailure::ProgramResult(3) };
         assert_eq!(status_to_output(&status).unwrap(), (3, 0));
     }
 
     #[test]
-    fn status_to_output_parses_a_program_result_with_a_custom_error() {
+    fn status_to_output_maps_a_program_result_with_a_custom_error() {
         let status = ExecutionStatus::Failure {
-            kind: String::from("FiredancerProgramResult(7,CustomError(42))"),
-            message: String::new(),
+            failure: ExecutionFailure::ProgramResultWithCustomError { result: 7, custom_error: 42 },
         };
         assert_eq!(status_to_output(&status).unwrap(), (7, 42));
     }
 
     #[test]
-    fn status_to_output_parses_a_bare_custom_error() {
-        let status = ExecutionStatus::Failure {
-            kind: String::from("FiredancerCustomError(11)"),
-            message: String::new(),
-        };
+    fn status_to_output_maps_a_bare_custom_error() {
+        let status = ExecutionStatus::Failure { failure: ExecutionFailure::CustomError(11) };
         assert_eq!(status_to_output(&status).unwrap(), (1, 11));
     }
 
     #[test]
-    fn status_to_output_rejects_an_unparseable_kind() {
-        for kind in [
-            String::from("InstructionError"),
-            String::from("FiredancerProgramResult(x)"),
-            String::from("FiredancerProgramResult(1"),
-            String::from("FiredancerCustomError(nope)"),
-            String::from(""),
-        ] {
-            let status = ExecutionStatus::Failure { kind: kind.clone(), message: String::new() };
-            match status_to_output(&status) {
-                Err(AdapterError::UnsupportedExecutionStatus { kind: reported }) => {
-                    assert_eq!(reported, kind);
-                }
-                other => panic!("expected UnsupportedExecutionStatus for {kind:?}, got {other:?}"),
+    fn status_to_output_rejects_a_failure_without_a_program_code() {
+        let status = ExecutionStatus::Failure {
+            failure: ExecutionFailure::Other {
+                kind: String::from("InstructionError"),
+                message: String::new(),
+            },
+        };
+        match status_to_output(&status) {
+            Err(AdapterError::UnsupportedExecutionStatus { kind: reported }) => {
+                assert_eq!(reported, "InstructionError");
             }
+            other => panic!("expected UnsupportedExecutionStatus, got {other:?}"),
         }
     }
 
@@ -829,11 +892,10 @@ mod tests {
     fn status_from_output_maps_a_failure_without_a_custom_error() {
         let status = status_from_output(3, 0).unwrap();
         match status {
-            ExecutionStatus::Failure { kind, message } => {
-                assert_eq!(kind, "FiredancerProgramResult(3)");
-                assert_eq!(message, "firedancer program returned status 3");
+            ExecutionStatus::Failure { failure: ExecutionFailure::ProgramResult(result) } => {
+                assert_eq!(result, 3);
             }
-            other => panic!("expected ExecutionStatus::Failure, got {other:?}"),
+            other => panic!("expected ExecutionStatus::Failure(ProgramResult), got {other:?}"),
         }
     }
 
@@ -841,11 +903,15 @@ mod tests {
     fn status_from_output_maps_a_failure_with_a_custom_error() {
         let status = status_from_output(3, 42).unwrap();
         match status {
-            ExecutionStatus::Failure { kind, message } => {
-                assert_eq!(kind, "FiredancerProgramResult(3,CustomError(42))");
-                assert!(message.contains("42"));
+            ExecutionStatus::Failure {
+                failure: ExecutionFailure::ProgramResultWithCustomError { result, custom_error },
+            } => {
+                assert_eq!(result, 3);
+                assert_eq!(custom_error, 42);
             }
-            other => panic!("expected ExecutionStatus::Failure, got {other:?}"),
+            other => panic!(
+                "expected ExecutionStatus::Failure(ProgramResultWithCustomError), got {other:?}"
+            ),
         }
     }
 
@@ -956,8 +1022,10 @@ mod tests {
     fn snapshot_to_proto_effects_rejects_an_unmappable_failure() {
         let snapshot = ExecutionSnapshot {
             status: ExecutionStatus::Failure {
-                kind: String::from("InstructionError"),
-                message: String::new(),
+                failure: ExecutionFailure::Other {
+                    kind: String::from("InstructionError"),
+                    message: String::new(),
+                },
             },
             ..empty_snapshot()
         };
@@ -1126,9 +1194,9 @@ mod tests {
 
     #[test]
     fn try_from_fixture_rejects_a_transaction_fixture() {
-        let fixture = crate::Fixture::new(
+        let fixture = hpsvm_fixture::Fixture::new(
             FixtureHeader::new("tx", FixtureKind::Transaction),
-            FixtureInput::Transaction(crate::TransactionFixture::new(
+            FixtureInput::Transaction(hpsvm_fixture::TransactionFixture::new(
                 RuntimeFixtureConfig::new(0, None, false, false),
                 Vec::new(),
                 Vec::new(),
@@ -1150,7 +1218,7 @@ mod tests {
     /// `cu_avail`, so the export must be refused.
     #[test]
     fn try_from_fixture_requires_a_compute_unit_budget() {
-        let fixture = crate::Fixture::new(
+        let fixture = hpsvm_fixture::Fixture::new(
             FixtureHeader::new("ix", FixtureKind::Instruction),
             FixtureInput::Instruction(InstructionFixture::new(
                 RuntimeFixtureConfig::new(0, None, false, false),
@@ -1173,7 +1241,7 @@ mod tests {
     /// encoded, because `cu_avail` would underflow.
     #[test]
     fn try_from_fixture_rejects_a_baseline_over_budget() {
-        let fixture = crate::Fixture::new(
+        let fixture = hpsvm_fixture::Fixture::new(
             FixtureHeader::new("ix", FixtureKind::Instruction),
             FixtureInput::Instruction(InstructionFixture::new(
                 RuntimeFixtureConfig::new(0, None, false, false).with_compute_unit_limit(100),
@@ -1201,7 +1269,7 @@ mod tests {
     /// A budget consumed exactly is legal and must leave `cu_avail == 0`.
     #[test]
     fn try_from_fixture_accepts_a_baseline_consuming_the_whole_budget() {
-        let fixture = crate::Fixture::new(
+        let fixture = hpsvm_fixture::Fixture::new(
             FixtureHeader::new("ix", FixtureKind::Instruction),
             FixtureInput::Instruction(InstructionFixture::new(
                 RuntimeFixtureConfig::new(0, None, false, false).with_compute_unit_limit(100),
@@ -1231,7 +1299,7 @@ mod tests {
             input: None,
             output: Some(fd_codec::proto::InstrEffects::default()),
         };
-        match crate::Fixture::try_from(FiredancerFixture::from_proto(proto)) {
+        match hpsvm_fixture::Fixture::try_from(FiredancerFixture::from_proto(proto)) {
             Err(AdapterError::MissingField { field }) => assert_eq!(field, "input"),
             other => panic!("expected MissingField, got {other:?}"),
         }
@@ -1245,7 +1313,7 @@ mod tests {
             input: Some(fd_codec::proto::InstrContext::default()),
             output: None,
         };
-        match crate::Fixture::try_from(FiredancerFixture::from_proto(proto)) {
+        match hpsvm_fixture::Fixture::try_from(FiredancerFixture::from_proto(proto)) {
             Err(AdapterError::MissingField { field }) => assert_eq!(field, "output"),
             other => panic!("expected MissingField, got {other:?}"),
         }
@@ -1269,7 +1337,7 @@ mod tests {
                 ..Default::default()
             }),
         };
-        match crate::Fixture::try_from(FiredancerFixture::from_proto(proto)) {
+        match hpsvm_fixture::Fixture::try_from(FiredancerFixture::from_proto(proto)) {
             Err(AdapterError::InconsistentComputeUnits { before, after }) => {
                 assert_eq!(before, 100);
                 assert_eq!(after, 200);
@@ -1296,7 +1364,7 @@ mod tests {
             }),
         };
         assert!(matches!(
-            crate::Fixture::try_from(FiredancerFixture::from_proto(proto)).unwrap_err(),
+            hpsvm_fixture::Fixture::try_from(FiredancerFixture::from_proto(proto)).unwrap_err(),
             AdapterError::InvalidAddressLength { field: "input.program_id", actual: 4 }
         ));
     }
@@ -1327,7 +1395,7 @@ mod tests {
             }),
         };
 
-        let fixture = crate::Fixture::try_from(FiredancerFixture::from_proto(proto))
+        let fixture = hpsvm_fixture::Fixture::try_from(FiredancerFixture::from_proto(proto))
             .expect("failing fixture should import");
 
         assert!(matches!(fixture.expectations.baseline.status, ExecutionStatus::Failure { .. }));
@@ -1353,7 +1421,8 @@ mod tests {
             }),
         };
 
-        let fixture = crate::Fixture::try_from(FiredancerFixture::from_proto(proto)).unwrap();
+        let fixture =
+            hpsvm_fixture::Fixture::try_from(FiredancerFixture::from_proto(proto)).unwrap();
         assert_eq!(fixture.header.name, format!("firedancer-{}", address(9)));
         assert_eq!(fixture.header.source, Some(String::from(FIREDANCER_SOURCE)));
         assert_eq!(fixture.header.tags, vec![String::from(FIREDANCER_TAG)]);
@@ -1378,7 +1447,8 @@ mod tests {
             }),
         };
 
-        let fixture = crate::Fixture::try_from(FiredancerFixture::from_proto(proto)).unwrap();
+        let fixture =
+            hpsvm_fixture::Fixture::try_from(FiredancerFixture::from_proto(proto)).unwrap();
         assert_eq!(fixture.header.name, format!("firedancer-{}", address(9)));
     }
 
@@ -1402,8 +1472,9 @@ mod tests {
             }),
         };
 
-        let fixture = crate::Fixture::try_from(FiredancerFixture::from_proto(proto)).unwrap();
-        let crate::FixtureInput::Instruction(instruction) = &fixture.input else {
+        let fixture =
+            hpsvm_fixture::Fixture::try_from(FiredancerFixture::from_proto(proto)).unwrap();
+        let hpsvm_fixture::FixtureInput::Instruction(instruction) = &fixture.input else {
             panic!("expected an instruction fixture");
         };
         assert_eq!(instruction.runtime.compute_unit_limit, Some(1234));
@@ -1437,8 +1508,9 @@ mod tests {
             }),
         };
 
-        let fixture = crate::Fixture::try_from(FiredancerFixture::from_proto(proto)).unwrap();
-        let crate::FixtureInput::Instruction(instruction) = &fixture.input else {
+        let fixture =
+            hpsvm_fixture::Fixture::try_from(FiredancerFixture::from_proto(proto)).unwrap();
+        let hpsvm_fixture::FixtureInput::Instruction(instruction) = &fixture.input else {
             panic!("expected an instruction fixture");
         };
         assert_eq!(instruction.runtime.slot, 0);

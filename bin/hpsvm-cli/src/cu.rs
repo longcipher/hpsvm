@@ -1,8 +1,7 @@
-use std::{collections::HashMap, path::Path};
+use std::path::Path;
 
 use hpsvm::HPSVM;
-use hpsvm_fixture::{ComputeUnitBencher, Fixture};
-use solana_address::Address;
+use hpsvm_fixture_bench::ComputeUnitBencher;
 
 use crate::{
     FixtureFormatArg, error::CliError, fixture::load_fixture, program_map::parse_program_map,
@@ -18,10 +17,12 @@ pub(crate) fn report_compute_units(
 ) -> Result<(), CliError> {
     let fixture = load_fixture(path, format)?;
     let programs = parse_program_map(program_args)?;
-    let vm = preload_vm(HPSVM::new(), &fixture, &programs)?;
     let case_name = fixture.header.name.clone();
 
-    let mut bencher = ComputeUnitBencher::new(vm)
+    // The fixture's program bindings are resolved from the supplied ELFs, so
+    // a binding without an ELF is an error rather than a silent skip.
+    let mut bencher = ComputeUnitBencher::new(HPSVM::new())
+        .with_program_elfs(programs)
         .case((case_name.as_str(), &fixture))
         .output_dir(output_dir)
         .must_pass(must_pass);
@@ -39,16 +40,4 @@ pub(crate) fn report_compute_units(
 
     eprintln!("FAIL: {}", fixture.header.name);
     std::process::exit(1)
-}
-
-fn preload_vm(
-    mut vm: HPSVM,
-    fixture: &Fixture,
-    programs: &HashMap<Address, Vec<u8>>,
-) -> Result<HPSVM, CliError> {
-    // The library owns the binding: a binding without a matching ELF is an
-    // error there too, so the CLI and the runner cannot disagree about which
-    // programs a fixture needs.
-    hpsvm_fixture::bind_programs(&mut vm, fixture.programs(), programs)?;
-    Ok(vm)
 }

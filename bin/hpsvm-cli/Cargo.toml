@@ -13,7 +13,7 @@ doc = false
 
 [features]
 default = []
-fd-compat = ["hpsvm-fixture/fd-json"]
+fd-compat = ["hpsvm-fixture-firedancer/json-codec"]
 hotpath = ["dep:hotpath"]
 
 [dependencies]
@@ -28,6 +28,8 @@ hpsvm-fixture = { workspace = true, default-features = false, features = [
     "json-codec",
     "markdown",
 ] }
+hpsvm-fixture-bench = { workspace = true, default-features = false, features = ["markdown"] }
+hpsvm-fixture-firedancer = { workspace = true, default-features = false, optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 solana-address.workspace = true

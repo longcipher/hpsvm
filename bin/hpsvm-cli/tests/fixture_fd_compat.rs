@@ -5,7 +5,8 @@ use std::{path::PathBuf, process::Command};
 
 use hpsvm::{HPSVM, instruction::InstructionCase};
 use hpsvm_fd_fixture as fd_codec;
-use hpsvm_fixture::{AccountSnapshot, ExecutionSnapshot, FiredancerFixture};
+use hpsvm_fixture::{AccountSnapshot, ExecutionSnapshot};
+use hpsvm_fixture_firedancer::FiredancerFixture;
 use solana_account::Account;
 use solana_address::Address;
 use solana_system_interface::instruction::transfer;

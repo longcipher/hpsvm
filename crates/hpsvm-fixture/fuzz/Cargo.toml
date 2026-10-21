@@ -48,7 +48,8 @@ doc = false
 bench = false
 
 [dependencies]
-hpsvm-fixture = { path = "..", features = ["bin-codec", "json-codec", "fd-codec"] }
+hpsvm-fixture = { path = "..", features = ["bin-codec", "json-codec"] }
+hpsvm-fixture-firedancer = { path = "../../hpsvm-fixture-firedancer", features = ["fd-codec"] }
 libfuzzer-sys = "0.4"
 # The Firedancer adapter exposes only `FiredancerFixture`, so the fuzz target
 # needs the protobuf crate directly. This is its own workspace, so the version

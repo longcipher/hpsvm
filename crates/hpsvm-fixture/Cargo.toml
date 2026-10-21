@@ -12,21 +12,12 @@ serde = ["dep:serde"]
 bin-codec = ["dep:wincode", "serde"]
 json-codec = ["dep:serde_json", "serde"]
 instruction-fixture = []
-# Reading/writing compute-unit reports and their JSON baseline sidecar.
-report-io = ["dep:serde_json", "serde"]
 # Human-readable Markdown rendering of a compute-unit report. Write-only:
 # baselines always round-trip through the `report-io` JSON sidecar.
-markdown = ["report-io"]
-# FireDancer fixture codec, backed by the `hpsvm-fd-fixture` fork: upstream
-# `mollusk-svm-fuzz-fixture-firedancer` pins agave 4.3, which cannot resolve
-# against this workspace's agave 4.5 line. See `vendor/PATCHES.md`.
-fd-codec = ["dep:prost", "dep:hpsvm-fd-fixture", "instruction-fixture"]
-fd-json = ["fd-codec", "json-codec", "dep:serde_json"]
+markdown = ["dep:serde_json", "serde"]
 
 [dependencies]
 hpsvm.workspace = true
-hpsvm-fd-fixture = { workspace = true, optional = true }
-prost = { workspace = true, optional = true }
 serde = { workspace = true, optional = true, features = ["derive"] }
 serde_json = { workspace = true, optional = true }
 solana-account.workspace = true
@@ -40,20 +31,13 @@ thiserror.workspace = true
 wincode = { workspace = true, optional = true, features = ["derive"] }
 
 [dev-dependencies]
-hpsvm-test-support.workspace = true
 proptest.workspace = true
-prost.workspace = true
 solana-account.workspace = true
 solana-keypair.workspace = true
 solana-message.workspace = true
-solana-sdk-ids.workspace = true
 solana-signer.workspace = true
 solana-system-interface.workspace = true
 solana-transaction.workspace = true
-
-[[test]]
-name = "fd_adapter"
-required-features = ["fd-codec"]
 
 [lints]
 workspace = true

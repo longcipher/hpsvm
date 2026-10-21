@@ -1,12 +1,19 @@
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
 use hpsvm::HPSVM;
+use hpsvm_fixture::{FixtureRunner, ResultConfig};
+use solana_address::Address;
 
 use crate::{
-    BenchError, Fixture, FixtureBenchCase, FixtureInput, FixtureRunner, ResultConfig,
+    BenchError, FixtureBenchCase,
     report::{CuDelta, CuReport, CuReportRow},
 };
 
+/// The compute-unit bencher for a set of fixtures.
+///
+/// Every fixture's program bindings are resolved from the ELFs the caller
+/// supplies, exactly like the matrix bencher does: a binding without an ELF
+/// is an error, never a silent skip.
 #[derive(Debug)]
 #[must_use = "benchers must be configured and executed"]
 pub struct ComputeUnitBencher<'a> {
@@ -15,35 +22,66 @@ pub struct ComputeUnitBencher<'a> {
     must_pass: bool,
     baseline_dir: Option<PathBuf>,
     output_dir: Option<PathBuf>,
+    program_elfs: HashMap<Address, Vec<u8>>,
 }
 
 impl<'a> ComputeUnitBencher<'a> {
+    /// Creates a bencher that runs its cases on `vm`.
     pub fn new(vm: HPSVM) -> Self {
-        Self { vm, cases: Vec::new(), must_pass: false, baseline_dir: None, output_dir: None }
+        Self {
+            vm,
+            cases: Vec::new(),
+            must_pass: false,
+            baseline_dir: None,
+            output_dir: None,
+            program_elfs: HashMap::new(),
+        }
     }
 
+    /// Binds a program id to the ELF the fixtures reference it with.
+    pub fn with_program_elf(mut self, program_id: Address, elf: Vec<u8>) -> Self {
+        self.program_elfs.insert(program_id, elf);
+        self
+    }
+
+    /// Binds every program id in `elfs` to its ELF.
+    pub fn with_program_elfs(mut self, elfs: impl IntoIterator<Item = (Address, Vec<u8>)>) -> Self {
+        for (program_id, elf) in elfs {
+            self.program_elfs.insert(program_id, elf);
+        }
+        self
+    }
+
+    /// Adds a fixture to the benchmark.
     pub fn case(mut self, case: FixtureBenchCase<'a>) -> Self {
         self.cases.push(case);
         self
     }
 
+    /// Requires every fixture to satisfy its expectations.
     pub fn must_pass(mut self, must_pass: bool) -> Self {
         self.must_pass = must_pass;
         self
     }
 
+    /// Reads the previous report from `path` to compute per-case deltas.
+    ///
+    /// The directory is read-only: it supplies the baseline the deltas are
+    /// computed against.
     pub fn baseline_dir(mut self, path: impl Into<PathBuf>) -> Self {
         self.baseline_dir = Some(path.into());
         self
     }
 
+    /// Writes the report to `path`.
     pub fn output_dir(mut self, path: impl Into<PathBuf>) -> Self {
         self.output_dir = Some(path.into());
         self
     }
 
+    /// Replays every case and produces the report.
     pub fn execute(self) -> Result<CuReport, BenchError> {
-        let Self { vm, cases, must_pass, baseline_dir, output_dir } = self;
+        let Self { vm, cases, must_pass, baseline_dir, output_dir, program_elfs } = self;
         if cases.is_empty() {
             return Err(BenchError::MissingCases);
         }
@@ -53,9 +91,14 @@ impl<'a> ComputeUnitBencher<'a> {
         let mut rows = Vec::with_capacity(cases.len());
 
         for (name, fixture) in cases {
-            let normalized_fixture = fixture_for_preloaded_vm(fixture);
+            // The fixture's own program bindings are resolved from the
+            // supplied ELFs, exactly like the matrix bencher does: a
+            // binding without an ELF is an error, never a silent skip.
+            runner = runner
+                .with_fixture_programs(fixture, &program_elfs)
+                .map_err(|source| BenchError::Fixture { name: String::from(name), source })?;
             let execution = runner
-                .run(&normalized_fixture)
+                .run(fixture)
                 .map_err(|source| BenchError::Fixture { name: String::from(name), source })?;
 
             let pass = execution.snapshot.compare_with(
@@ -83,18 +126,13 @@ impl<'a> ComputeUnitBencher<'a> {
     }
 }
 
-fn fixture_for_preloaded_vm(fixture: &Fixture) -> Fixture {
-    let mut normalized = fixture.clone();
-    match &mut normalized.input {
-        FixtureInput::Transaction(transaction) => transaction.programs.clear(),
-        #[cfg(feature = "instruction-fixture")]
-        FixtureInput::Instruction(instruction) => instruction.programs.clear(),
-    }
-    normalized
-}
-
 #[cfg(all(test, feature = "bin-codec"))]
 mod tests {
+    use hpsvm_fixture::{
+        AccountSnapshot, CaptureBuilder, Compare, ExecutionSnapshot, ExecutionStatus, Fixture,
+        FixtureExpectations, FixtureHeader, FixtureInput, FixtureKind, RuntimeFixtureConfig,
+        TransactionFixture,
+    };
     use solana_address::Address;
     use solana_keypair::Keypair;
     use solana_message::{Message, VersionedMessage};
@@ -103,10 +141,6 @@ mod tests {
     use solana_transaction::versioned::VersionedTransaction;
 
     use super::*;
-    use crate::{
-        AccountSnapshot, CaptureBuilder, Compare, ExecutionSnapshot, ExecutionStatus,
-        FixtureExpectations, FixtureHeader, FixtureKind, RuntimeFixtureConfig, TransactionFixture,
-    };
 
     fn empty_snapshot() -> ExecutionSnapshot {
         ExecutionSnapshot {
@@ -318,19 +352,31 @@ mod tests {
     /// A fixture that *does* bind a program still runs, because the bindings are
     /// stripped before the runner resolves them.
     #[test]
-    fn fixture_program_bindings_are_stripped_before_running() {
+    fn a_fixture_program_binding_without_an_elf_is_reported() {
         let mut fixture = passing_fixture();
         let FixtureInput::Transaction(transaction) = &mut fixture.input else {
             unreachable!("transaction fixture");
         };
-        transaction.programs =
-            vec![crate::ProgramBinding::new(Address::new_unique(), Address::new_unique(), None)];
+        transaction.programs = vec![hpsvm_fixture::ProgramBinding::new(
+            Address::new_unique(),
+            Address::new_unique(),
+            None,
+        )];
 
-        let report = ComputeUnitBencher::new(HPSVM::new())
+        let error = ComputeUnitBencher::new(HPSVM::new())
             .case(("bound", &fixture))
             .execute()
-            .expect("bindings should be stripped, not resolved");
-        assert!(report.rows[0].pass);
+            .expect_err("a bound program without an ELF must be reported");
+        assert!(
+            matches!(
+                error,
+                BenchError::Fixture {
+                    source: hpsvm_fixture::FixtureError::MissingProgramElf { .. },
+                    ..
+                }
+            ),
+            "expected a missing-ELF failure, got {error:?}"
+        );
     }
 
     /// A baseline directory that does not exist yields no deltas rather than an

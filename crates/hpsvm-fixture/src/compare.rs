@@ -7,32 +7,46 @@ use crate::{
     outcome::{Mismatch, MismatchKind, report_mismatch},
 };
 
+/// A part of an execution snapshot two snapshots are compared on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "bin-codec", derive(wincode::SchemaWrite, wincode::SchemaRead))]
 #[non_exhaustive]
 pub enum Compare {
+    /// The execution's status.
     Status,
+    /// Whether the execution was included in a block.
     Included,
+    /// The compute units the execution consumed.
     ComputeUnits,
+    /// The fee the execution paid.
     Fee,
+    /// The data the execution returned.
     ReturnData,
+    /// The execution's logs.
     Logs,
+    /// The number of inner instructions the execution ran.
     InnerInstructionCount,
+    /// The accounts the execution touched.
     Accounts(AccountCompareScope),
 }
 
+/// Which of the execution's accounts a comparison covers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "bin-codec", derive(wincode::SchemaWrite, wincode::SchemaRead))]
 #[non_exhaustive]
 pub enum AccountCompareScope {
+    /// Every account the execution touched.
     All,
+    /// Only the listed accounts.
     Only(Vec<Address>),
+    /// Every account except the listed ones.
     AllExcept(Vec<Address>),
 }
 
 impl Compare {
+    /// Every part of a snapshot, including the compute units.
     pub fn everything() -> Vec<Self> {
         vec![
             Self::Status,
@@ -46,6 +60,10 @@ impl Compare {
         ]
     }
 
+    /// Every part of a snapshot except the compute units.
+    ///
+    /// Useful when the candidate build is expected to consume a different
+    /// number of compute units but must otherwise behave identically.
     pub fn everything_but_compute_units() -> Vec<Self> {
         vec![
             Self::Status,
@@ -165,7 +183,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::{ExecutionStatus, InnerInstructionSnapshot, ReturnDataSnapshot};
+    use crate::{ExecutionFailure, ExecutionStatus, InnerInstructionSnapshot, ReturnDataSnapshot};
 
     fn config() -> ResultConfig {
         ResultConfig { panic: false, verbose: false }
@@ -203,8 +221,10 @@ mod tests {
 
         let failed = ExecutionSnapshot {
             status: ExecutionStatus::Failure {
-                kind: String::from("InstructionError"),
-                message: String::from("boom"),
+                failure: ExecutionFailure::Other {
+                    kind: String::from("InstructionError"),
+                    message: String::from("boom"),
+                },
             },
             ..base()
         };
@@ -466,8 +486,10 @@ mod tests {
         let perturbations = vec![
             ExecutionSnapshot {
                 status: ExecutionStatus::Failure {
-                    kind: String::from("x"),
-                    message: String::from("y"),
+                    failure: ExecutionFailure::Other {
+                        kind: String::from("x"),
+                        message: String::from("y"),
+                    },
                 },
                 ..base()
             },

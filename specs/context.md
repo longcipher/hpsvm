@@ -20,8 +20,10 @@ hpsvm/
 │   │                       #   feature `token` / `token-2022`: SPL builders
 │   │                       #   feature `fork`: RPC-backed account source
 │   │                       #   feature `precompiles`, `register-tracing`, ...
-│   └── hpsvm-fixture/      # Fixture capture/replay + CU benching
-│                           #   feature `fd-codec`: Firedancer fixtures
+│   ├── hpsvm-fixture/      # Fixture model, codecs and runner
+│   ├── hpsvm-fixture-bench/    # Compute-unit benchmarking and reporting
+│   ├── hpsvm-fixture-firedancer/ # FireDancer protobuf codec
+│   └── hpsvm-inspectors/   # Reusable Inspector implementations
 └── Justfile                # Task runner recipes
 ```
 

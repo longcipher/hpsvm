@@ -1,0 +1,37 @@
+[package]
+name = "hpsvm-fixture-firedancer"
+description = "FireDancer protobuf fixture codec for hpsvm"
+license.workspace = true
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+
+[features]
+default = ["fd-codec"]
+# The protobuf codec, backed by the `hpsvm-fd-fixture` fork: upstream
+# `mollusk-svm-fuzz-fixture-firedancer` pins agave 4.3, which cannot resolve
+# against this workspace's agave 4.5 line. See `vendor/PATCHES.md`.
+fd-codec = ["dep:prost", "dep:hpsvm-fd-fixture", "hpsvm-fixture/instruction-fixture"]
+# The JSON form of the FireDancer fixture.
+json-codec = ["fd-codec", "dep:serde_json", "hpsvm-fixture/json-codec"]
+# The instruction-shaped fixture the FireDancer format models.
+instruction-fixture = ["hpsvm-fixture/instruction-fixture"]
+
+[dependencies]
+hpsvm-fd-fixture = { workspace = true, optional = true }
+hpsvm-fixture = { workspace = true, default-features = false }
+prost = { workspace = true, optional = true }
+serde = { workspace = true, optional = true, features = ["derive"] }
+serde_json = { workspace = true, optional = true }
+solana-address.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[[test]]
+name = "fd_adapter"
+required-features = ["fd-codec"]
+
+[lints]
+workspace = true

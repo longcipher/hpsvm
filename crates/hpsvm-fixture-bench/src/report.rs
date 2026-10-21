@@ -15,30 +15,42 @@ pub(crate) const BASELINE_REPORT_FILE_NAME: &str = "cu-report.baseline.json";
 #[cfg(feature = "markdown")]
 pub(crate) const MARKDOWN_REPORT_FILE_NAME: &str = "cu-report.md";
 
+/// The compute units a set of fixtures consumed.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct CuReport {
+    /// When the report was produced, as seconds since the Unix epoch.
     pub generated_at: String,
+    /// The Solana runtime version the measurements were taken with.
     pub solana_runtime_version: String,
+    /// One row per fixture.
     pub rows: Vec<CuReportRow>,
 }
 
+/// The compute units one fixture consumed.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct CuReportRow {
+    /// The name of the fixture.
     pub name: String,
+    /// The compute units the fixture consumed.
     pub compute_units: u64,
+    /// The difference against the baseline, when a baseline was supplied.
     pub delta: Option<CuDelta>,
+    /// Whether the fixture satisfied its expectations.
     pub pass: bool,
 }
 
+/// The difference between a measurement and its baseline.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct CuDelta {
+    /// The difference in compute units.
     pub absolute: i64,
+    /// The difference in percent.
     pub percent: f64,
 }
 
@@ -51,6 +63,7 @@ impl CuReport {
         }
     }
 
+    /// Renders the report as a human-readable Markdown report.
     #[cfg(feature = "markdown")]
     pub fn render_markdown(&self) -> String {
         let mut markdown = String::from("# Compute Unit Report\n\n");
@@ -96,6 +109,7 @@ impl CuReport {
 }
 
 impl CuDelta {
+    /// Computes the difference between a baseline and a current measurement.
     pub fn between(baseline: u64, current: u64) -> Self {
         // Both operands come from a baseline sidecar that a user can edit, so the
         // difference is widened through `i128` and saturated. Subtracting
@@ -114,6 +128,7 @@ impl CuDelta {
 }
 
 #[cfg(feature = "markdown")]
+/// Renders a report's rows as a Markdown table.
 pub(crate) fn render_table(report: &CuReport) -> String {
     let mut markdown = String::new();
     markdown.push_str("| Name | Compute Units | Delta | Pass |\n");

@@ -1,0 +1,39 @@
+[package]
+name = "hpsvm-fixture-bench"
+description = "Compute-unit benchmarking and reporting for hpsvm fixtures"
+license.workspace = true
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+
+[features]
+default = ["markdown"]
+serde = ["dep:serde", "hpsvm-fixture/serde"]
+bin-codec = ["hpsvm-fixture/bin-codec"]
+instruction-fixture = ["hpsvm-fixture/instruction-fixture"]
+# Reading/writing compute-unit reports and their JSON baseline sidecar.
+report-io = ["dep:serde_json", "serde"]
+# Human-readable Markdown rendering of a compute-unit report. Write-only:
+# baselines always round-trip through the `report-io` JSON sidecar.
+markdown = ["report-io"]
+
+[dependencies]
+hpsvm = { workspace = true }
+hpsvm-fixture = { workspace = true, default-features = false }
+serde = { workspace = true, optional = true, features = ["derive"] }
+serde_json = { workspace = true, optional = true }
+solana-address.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+hpsvm-test-support.workspace = true
+proptest.workspace = true
+solana-keypair.workspace = true
+solana-message.workspace = true
+solana-sdk-ids.workspace = true
+solana-signer.workspace = true
+solana-system-interface.workspace = true
+solana-transaction.workspace = true
+
+[lints]
+workspace = true

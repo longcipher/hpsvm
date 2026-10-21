@@ -1,5 +1,5 @@
 use hpsvm::error::HPSVMError;
-use hpsvm_fixture::BenchError;
+use hpsvm_fixture_bench::BenchError;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -13,7 +13,7 @@ pub(crate) enum CliError {
     Fixture(#[from] hpsvm_fixture::FixtureError),
     #[cfg(feature = "fd-compat")]
     #[error(transparent)]
-    Firedancer(#[from] hpsvm_fixture::AdapterError),
+    Firedancer(#[from] hpsvm_fixture_firedancer::AdapterError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]

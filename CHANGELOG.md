@@ -11,6 +11,8 @@
 - Document the full `hpsvm` CLI surface (fixture record/inspect/run/compare and cu report) in the README.
 - Add `hpsvm_fixture::Mismatch` and `hpsvm_fixture::MismatchKind`: a failed comparison or check is now reported as data, through `try_compare_with` and `try_run_checks`, instead of aborting the caller's process.
 - Add `hpsvm_fixture::configure_vm`, `hpsvm_fixture::bind_programs` and `Fixture::programs()`: the library now owns the fixture runtime configuration and the program bindings, so a recording and a replay cannot drift apart.
+- Add `hpsvm_fixture::ExecutionFailure`: an execution's failure is a structured value, not a formatted string that has to be parsed back.
+- Add `hpsvm_fixture_bench`, the compute-unit benchmarking and reporting crate, and `hpsvm_fixture_firedancer`, the FireDancer protobuf codec crate.
 - Export `hpsvm::HPSVMError` from the crate root: it is the crate's primary error type and was previously only reachable through `hpsvm::error::HPSVMError`.
 
 ### Changed
@@ -24,6 +26,8 @@
 - **Breaking:** `TxRegistry::dispatch` reports a `TxError` instead of the `TxRegistryError` that has been removed. An unroutable envelope is `TxError::UnknownTag`.
 - **Breaking:** the `Host` trait's write methods (`set_account`, `set_sysvar`) report a `HostError` instead of an `HPSVMError`.
 - **Breaking:** `ResultConfig::default()` no longer panics on a mismatch; the fail-fast behaviour is an explicit opt-in through the `panic` flag.
+- **Breaking:** the fixture crates are split. `hpsvm-fixture` keeps the fixture model, its codecs and the runner; the compute-unit benchmarking moved to `hpsvm-fixture-bench` and the FireDancer protobuf codec to `hpsvm-fixture-firedancer`. The `fd-codec` and `fd-json` features moved to `hpsvm-fixture-firedancer`, and the `report-io` and `markdown` features moved to `hpsvm-fixture-bench`. A consumer that only records and replays fixtures no longer compiles the protobuf dependency or the vendored FireDancer fork.
+- **Breaking:** `ExecutionStatus::Failure` carries a structured `ExecutionFailure` instead of a `kind`/`message` pair of strings, and `ExecutionSnapshotFields` is gone: `ExecutionSnapshot` is now constructible directly.
 - `hpsvm-cli` decodes base64 and hex transaction encodings with the `base64` and `hex` crates instead of hand-written codecs.
 
 ### Fixed
@@ -39,6 +43,7 @@
 - Fill the tightest conflict-free stage in the batch planner instead of the first one, which tends to produce fewer serial rounds.
 - Report the loss of the installed inspector on a parallel batch stage instead of dropping the hooks silently, and document the semantics on `send_transaction_batch`.
 - Keep the VM's field list in one place: the parallel batch workers used to hand-write it, so a new field could be silently dropped from a worker.
+- Report a program binding without an ELF as an error in every fixture path: the compute-unit bencher used to strip the bindings and run the fixture against a different program than the one it named.
 
 ## [0.11.0] - 2026-03-30
 

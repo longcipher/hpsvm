@@ -1,6 +1,6 @@
 use std::{collections::HashMap, fs};
 
-use hpsvm_fixture::{Fixture, FixtureRunner};
+use hpsvm_fixture::{Fixture, FixtureError, FixtureRunner};
 use solana_address::Address;
 
 use crate::error::CliError;
@@ -24,21 +24,17 @@ pub(crate) fn parse_program_map(values: &[String]) -> Result<HashMap<Address, Ve
 
 /// Binds the fixture's programs to the ELFs the caller supplied.
 ///
-/// The bindings come from the fixture itself ([`Fixture::programs`]), so the
-/// CLI and the library always resolve the same list. A binding without a
-/// matching ELF is reported by the runner, which owns the error type.
+/// The bindings come from the fixture itself ([`Fixture::programs`]) and the
+/// resolution lives in the library ([`FixtureRunner::with_fixture_programs`]),
+/// so the CLI and the runner always agree. A binding without a matching ELF
+/// is an error, not a silent skip: the fixture would otherwise run against a
+/// different program than the one it names.
 pub(crate) fn preload_runner(
-    mut runner: FixtureRunner,
+    runner: FixtureRunner,
     fixture: &Fixture,
     programs: &HashMap<Address, Vec<u8>>,
-) -> FixtureRunner {
-    for binding in fixture.programs() {
-        if let Some(bytes) = programs.get(&binding.program_id) {
-            runner = runner.with_program_elf(binding.program_id, bytes.clone());
-        }
-    }
-
-    runner
+) -> Result<FixtureRunner, FixtureError> {
+    runner.with_fixture_programs(fixture, programs)
 }
 
 #[cfg(test)]
@@ -261,7 +257,8 @@ mod tests {
         let mut programs = HashMap::new();
         programs.insert(program_id, b"not-a-real-elf".to_vec());
 
-        let mut runner = preload_runner(FixtureRunner::new(HPSVM::new()), &fixture, &programs);
+        let mut runner = preload_runner(FixtureRunner::new(HPSVM::new()), &fixture, &programs)
+            .expect("the injected ELF must satisfy the binding");
         let result = runner.run(&fixture);
 
         assert!(
@@ -270,19 +267,19 @@ mod tests {
         );
     }
 
-    /// A map that does not cover a bound program id is skipped, leaving the
-    /// runner reporting the missing program.
+    /// A map that does not cover a bound program id is reported: the fixture
+    /// must not run against a different program than the one it names.
     #[test]
-    fn preload_runner_skips_unbound_program_ids() {
+    fn preload_runner_rejects_unbound_program_ids() {
         let fixture = fixture_binding(Address::new_unique());
         let programs = HashMap::new();
 
-        let mut runner = preload_runner(FixtureRunner::new(HPSVM::new()), &fixture, &programs);
-        let result = runner.run(&fixture);
+        let error = preload_runner(FixtureRunner::new(HPSVM::new()), &fixture, &programs)
+            .expect_err("a bound program without an ELF must fail");
 
         assert!(
-            matches!(result, Err(FixtureError::MissingProgramElf { .. })),
-            "expected MissingProgramElf, got {result:?}"
+            matches!(error, FixtureError::MissingProgramElf { .. }),
+            "expected MissingProgramElf, got {error:?}"
         );
     }
 
@@ -294,10 +291,10 @@ mod tests {
         let mut programs = HashMap::new();
         programs.insert(Address::new_unique(), b"unrelated".to_vec());
 
-        let mut runner = preload_runner(FixtureRunner::new(HPSVM::new()), &fixture, &programs);
-        let result = runner.run(&fixture);
+        let error = preload_runner(FixtureRunner::new(HPSVM::new()), &fixture, &programs)
+            .expect_err("an unrelated ELF must not satisfy the binding");
 
-        assert!(matches!(result, Err(FixtureError::MissingProgramElf { .. })), "got {result:?}");
+        assert!(matches!(error, FixtureError::MissingProgramElf { .. }), "got {error:?}");
     }
 
     #[test]
@@ -305,7 +302,8 @@ mod tests {
         let fixture = minimal_fixture();
         let programs = HashMap::new();
 
-        let mut runner = preload_runner(FixtureRunner::new(HPSVM::new()), &fixture, &programs);
+        let mut runner = preload_runner(FixtureRunner::new(HPSVM::new()), &fixture, &programs)
+            .expect("a fixture without bindings must bind cleanly");
         let result = runner.run(&fixture);
 
         assert!(result.is_ok(), "expected a clean run, got {result:?}");

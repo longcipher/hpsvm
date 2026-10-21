@@ -8,10 +8,11 @@ use std::{
 
 use hpsvm_fd_fixture as fd_codec;
 use hpsvm_fixture::{
-    AccountCompareScope, AccountSnapshot, AdapterError, Compare, ExecutionSnapshot,
-    ExecutionStatus, FiredancerFixture, Fixture, FixtureExpectations, FixtureHeader, FixtureInput,
-    FixtureKind, InstructionAccountMeta, InstructionFixture, RuntimeFixtureConfig,
+    AccountCompareScope, AccountSnapshot, Compare, ExecutionFailure, ExecutionSnapshot,
+    ExecutionStatus, Fixture, FixtureExpectations, FixtureHeader, FixtureInput, FixtureKind,
+    InstructionAccountMeta, InstructionFixture, RuntimeFixtureConfig,
 };
+use hpsvm_fixture_firedancer::{AdapterError, FiredancerFixture};
 use solana_address::Address;
 
 fn address_bytes(fill: u8) -> Vec<u8> {
@@ -264,8 +265,7 @@ fn firedancer_status_preserves_program_result_and_custom_error() -> Result<(), A
     assert_eq!(
         imported.expectations.baseline.status,
         ExecutionStatus::Failure {
-            kind: String::from("FiredancerProgramResult(7,CustomError(42))"),
-            message: String::from("firedancer program returned status 7 with custom error 42"),
+            failure: ExecutionFailure::ProgramResultWithCustomError { result: 7, custom_error: 42 },
         }
     );
 

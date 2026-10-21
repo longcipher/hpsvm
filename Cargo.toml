@@ -19,6 +19,8 @@ repository = "https://github.com/longcipher/hpsvm"
 hpsvm = { path = "crates/hpsvm", version = "0.2.1" }
 hpsvm-cli = { path = "bin/hpsvm-cli", version = "0.2.1" }
 hpsvm-fixture = { path = "crates/hpsvm-fixture", version = "0.2.1", default-features = false }
+hpsvm-fixture-bench = { path = "crates/hpsvm-fixture-bench", version = "0.2.1", default-features = false }
+hpsvm-fixture-firedancer = { path = "crates/hpsvm-fixture-firedancer", version = "0.2.1", default-features = false }
 hpsvm-inspectors = { path = "crates/hpsvm-inspectors", version = "0.2.1" }
 hpsvm-macros = { path = "crates/hpsvm-macros", version = "0.2.1" }
 hpsvm-test-support = { path = "crates/hpsvm-test-support", version = "0.2.1" }

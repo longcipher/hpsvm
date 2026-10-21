@@ -2121,6 +2121,8 @@ dependencies = [
  "hpsvm",
  "hpsvm-fd-fixture",
  "hpsvm-fixture",
+ "hpsvm-fixture-bench",
+ "hpsvm-fixture-firedancer",
  "serde",
  "serde_json",
  "solana-account",
@@ -2157,10 +2159,7 @@ name = "hpsvm-fixture"
 version = "0.2.1"
 dependencies = [
  "hpsvm",
- "hpsvm-fd-fixture",
- "hpsvm-test-support",
  "proptest",
- "prost",
  "serde",
  "serde_json",
  "solana-account",
@@ -2168,7 +2167,6 @@ dependencies = [
  "solana-keypair",
  "solana-message 6.0.0",
  "solana-rent",
- "solana-sdk-ids",
  "solana-signer",
  "solana-system-interface",
  "solana-transaction 6.0.0",
@@ -2176,6 +2174,40 @@ dependencies = [
  "solana-transaction-error",
  "thiserror 2.0.21",
  "wincode",
+]
+
+[[package]]
+name = "hpsvm-fixture-bench"
+version = "0.2.1"
+dependencies = [
+ "hpsvm",
+ "hpsvm-fixture",
+ "hpsvm-test-support",
+ "proptest",
+ "serde",
+ "serde_json",
+ "solana-address 2.9.0",
+ "solana-keypair",
+ "solana-message 6.0.0",
+ "solana-sdk-ids",
+ "solana-signer",
+ "solana-system-interface",
+ "solana-transaction 6.0.0",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "hpsvm-fixture-firedancer"
+version = "0.2.1"
+dependencies = [
+ "hpsvm-fd-fixture",
+ "hpsvm-fixture",
+ "proptest",
+ "prost",
+ "serde",
+ "serde_json",
+ "solana-address 2.9.0",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

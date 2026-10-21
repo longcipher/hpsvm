@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use hpsvm::HPSVM;
-#[cfg(feature = "bin-codec")]
 use solana_address::Address;
 #[cfg(feature = "bin-codec")]
 use solana_transaction::versioned::VersionedTransaction;
@@ -48,12 +47,20 @@ pub fn bind_programs<S: std::hash::BuildHasher>(
     Ok(())
 }
 
+/// The outcome of one fixture execution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FixtureExecution {
+    /// The snapshot the execution produced.
     pub snapshot: ExecutionSnapshot,
+    /// Whether the execution satisfied the fixture's expectations, when the
+    /// execution was validated against them.
     pub pass: Option<bool>,
 }
 
+/// Executes fixtures against a base VM.
+///
+/// The runner clones the base VM for every fixture, so the fixtures cannot
+/// observe each other's state.
 #[must_use = "fixture runners must be used to execute fixtures"]
 pub struct FixtureRunner {
     base_vm: HPSVM,
@@ -61,11 +68,23 @@ pub struct FixtureRunner {
     jit_policy: Option<hpsvm::JitPolicy>,
 }
 
+impl std::fmt::Debug for FixtureRunner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FixtureRunner")
+            .field("base_vm", &self.base_vm)
+            .field("program_elfs", &self.program_elfs.keys().collect::<Vec<_>>())
+            .field("jit_policy", &self.jit_policy)
+            .finish()
+    }
+}
+
 impl FixtureRunner {
+    /// Creates a runner that executes its fixtures on clones of `vm`.
     pub fn new(vm: HPSVM) -> Self {
         Self { base_vm: vm, program_elfs: HashMap::new(), jit_policy: None }
     }
 
+    /// Binds a program id to the ELF the fixtures reference it with.
     pub fn with_program_elf(mut self, program_id: Address, elf: Vec<u8>) -> Self {
         self.program_elfs.insert(program_id, elf);
         self
@@ -105,6 +124,7 @@ impl FixtureRunner {
         Ok(self)
     }
 
+    /// Executes a fixture and returns its snapshot.
     pub fn run(&mut self, fixture: &Fixture) -> Result<FixtureExecution, FixtureError> {
         let snapshot = match &fixture.input {
             FixtureInput::Transaction(transaction) => self.run_transaction_fixture(transaction)?,
@@ -115,6 +135,7 @@ impl FixtureRunner {
         Ok(FixtureExecution { snapshot, pass: None })
     }
 
+    /// Executes a fixture and compares the outcome against its baseline.
     pub fn run_and_validate(
         &mut self,
         fixture: &Fixture,

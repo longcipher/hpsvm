@@ -19,26 +19,70 @@ use solana_transaction_error::{TransactionError, TransactionResult};
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "bin-codec", derive(wincode::SchemaWrite, wincode::SchemaRead))]
 pub struct ExecutionSnapshot {
+    /// Whether the execution succeeded, and why it failed when it did.
     pub status: ExecutionStatus,
+    /// Whether the execution was included in a block.
     pub included: bool,
+    /// The compute units the execution consumed.
     pub compute_units_consumed: u64,
+    /// The fee the execution paid.
     pub fee: u64,
+    /// The execution's logs.
     pub logs: Vec<String>,
+    /// The data the execution returned, when it returned any.
     pub return_data: Option<ReturnDataSnapshot>,
+    /// The inner (CPI) instructions the execution ran.
     pub inner_instructions: Vec<InnerInstructionSnapshot>,
+    /// The accounts the execution wrote.
     pub post_accounts: Vec<AccountSnapshot>,
 }
 
+/// Why an execution failed.
+///
+/// The failure is a structured value, never a formatted string. A formatted
+/// string has to be parsed back to be useful, and the parse breaks whenever
+/// the rendering of the underlying error changes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "bin-codec", derive(wincode::SchemaWrite, wincode::SchemaRead))]
+#[non_exhaustive]
+pub enum ExecutionFailure {
+    /// The program returned a non-zero result code.
+    ProgramResult(i32),
+    /// The program returned a custom error code.
+    CustomError(u32),
+    /// The program returned a result code and a custom error code.
+    ProgramResultWithCustomError {
+        /// The program result code.
+        result: i32,
+        /// The program custom error code.
+        custom_error: u32,
+    },
+    /// A failure with no program-level code.
+    ///
+    /// `kind` is the rendered error kind and `message` the human-readable
+    /// description. Both are reported, never interpreted.
+    Other {
+        /// The rendered error kind.
+        kind: String,
+        /// The human-readable description.
+        message: String,
+    },
+}
+
+/// The outcome of an execution, as recorded in a fixture.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "bin-codec", derive(wincode::SchemaWrite, wincode::SchemaRead))]
 #[non_exhaustive]
 pub enum ExecutionStatus {
+    /// The execution succeeded.
     #[default]
     Success,
+    /// The execution failed.
     Failure {
-        kind: String,
-        message: String,
+        /// Why it failed.
+        failure: ExecutionFailure,
     },
 }
 
@@ -54,11 +98,17 @@ pub enum ExecutionStatus {
 #[cfg_attr(feature = "bin-codec", derive(wincode::SchemaWrite, wincode::SchemaRead))]
 #[non_exhaustive]
 pub struct AccountSnapshot {
+    /// The account's address.
     pub address: Address,
+    /// The account's lamport balance.
     pub lamports: u64,
+    /// The account's owner.
     pub owner: Address,
+    /// Whether the account is executable.
     pub executable: bool,
+    /// The account's rent epoch.
     pub rent_epoch: u64,
+    /// The account's data.
     pub data: Vec<u8>,
 }
 
@@ -66,8 +116,11 @@ pub struct AccountSnapshot {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "bin-codec", derive(wincode::SchemaWrite, wincode::SchemaRead))]
 #[non_exhaustive]
+/// The data a program returned.
 pub struct ReturnDataSnapshot {
+    /// The program that produced the data.
     pub program_id: Address,
+    /// The returned data.
     pub data: Vec<u8>,
 }
 
@@ -75,15 +128,22 @@ pub struct ReturnDataSnapshot {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "bin-codec", derive(wincode::SchemaWrite, wincode::SchemaRead))]
 #[non_exhaustive]
+/// One inner (CPI) instruction an execution ran.
 pub struct InnerInstructionSnapshot {
+    /// The call stack depth the instruction ran at.
     pub stack_height: u8,
+    /// The index of the invoked program in the transaction's account keys.
     pub program_id_index: u8,
+    /// The indexes of the accounts the instruction passed.
     pub accounts: Vec<u8>,
+    /// The instruction's data.
     pub data: Vec<u8>,
+    /// The index of the top-level instruction the call belongs to.
     pub outer_instruction_index: usize,
 }
 
 impl ExecutionSnapshot {
+    /// Captures the snapshot of an executed transaction.
     pub fn from_outcome(outcome: &DetachedTx) -> Self {
         Self {
             status: ExecutionStatus::from_result(outcome.status()),
@@ -101,6 +161,7 @@ impl ExecutionSnapshot {
         }
     }
 
+    /// Captures the snapshot of a simulated transaction.
     pub fn from_simulation(result: &SimulatedTransactionInfo) -> Self {
         Self {
             status: ExecutionStatus::Success,
@@ -118,6 +179,7 @@ impl ExecutionSnapshot {
         }
     }
 
+    /// Captures the snapshot of a transaction that failed before executing.
     pub fn from_failed_simulation(error: &FailedTransactionMetadata) -> Self {
         Self {
             status: ExecutionStatus::from_error(&error.err),
@@ -141,11 +203,17 @@ impl ExecutionStatus {
     }
 
     fn from_error(error: &TransactionError) -> Self {
-        Self::Failure { kind: format!("{error:?}"), message: error.to_string() }
+        Self::Failure {
+            failure: ExecutionFailure::Other {
+                kind: format!("{error:?}"),
+                message: error.to_string(),
+            },
+        }
     }
 }
 
 impl AccountSnapshot {
+    /// Creates an account snapshot.
     pub fn new(
         address: Address,
         lamports: u64,
@@ -157,6 +225,7 @@ impl AccountSnapshot {
         Self { address, lamports, owner, executable, rent_epoch, data }
     }
 
+    /// Captures an account snapshot from a readable account.
     pub fn from_readable(address: Address, account: &impl ReadableAccount) -> Self {
         Self {
             address,
@@ -195,6 +264,7 @@ impl From<AccountSnapshot> for Account {
 }
 
 impl ReturnDataSnapshot {
+    /// Creates a return-data snapshot.
     pub fn new(program_id: Address, data: Vec<u8>) -> Self {
         Self { program_id, data }
     }
@@ -209,6 +279,7 @@ impl ReturnDataSnapshot {
 }
 
 impl InnerInstructionSnapshot {
+    /// Creates an inner-instruction snapshot.
     pub fn new(
         stack_height: u8,
         program_id_index: u8,
@@ -305,7 +376,7 @@ mod tests {
         assert_eq!(snapshot.logs, vec![String::from("Program log: partial")]);
         assert!(snapshot.post_accounts.is_empty());
         match &snapshot.status {
-            ExecutionStatus::Failure { kind, message } => {
+            ExecutionStatus::Failure { failure: ExecutionFailure::Other { kind, message } } => {
                 assert_eq!(kind, &format!("{:?}", TransactionError::AccountNotFound));
                 assert_eq!(message, &TransactionError::AccountNotFound.to_string());
             }
@@ -349,7 +420,7 @@ mod tests {
             let error = FailedTransactionMetadata { err, meta: Default::default() };
             let snapshot = ExecutionSnapshot::from_failed_simulation(&error);
             match snapshot.status {
-                ExecutionStatus::Failure { kind, message } => {
+                ExecutionStatus::Failure { failure: ExecutionFailure::Other { kind, message } } => {
                     assert_eq!(kind, expected_kind);
                     assert_eq!(message, expected_message);
                 }

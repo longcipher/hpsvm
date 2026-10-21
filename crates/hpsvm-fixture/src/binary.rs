@@ -18,9 +18,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        AccountSnapshot, Compare, ExecutionSnapshot, ExecutionStatus, FixtureExpectations,
-        FixtureHeader, FixtureInput, FixtureKind, ProgramBinding, RuntimeFixtureConfig,
-        TransactionFixture,
+        AccountSnapshot, Compare, ExecutionFailure, ExecutionSnapshot, ExecutionStatus,
+        FixtureExpectations, FixtureHeader, FixtureInput, FixtureKind, ProgramBinding,
+        RuntimeFixtureConfig, TransactionFixture,
     };
 
     fn address(seed: u8) -> Address {
@@ -87,8 +87,10 @@ mod tests {
                         ExecutionStatus::Success
                     } else {
                         ExecutionStatus::Failure {
-                            kind: String::from("InstructionError"),
-                            message: String::from("boom"),
+                            failure: ExecutionFailure::Other {
+                                kind: String::from("InstructionError"),
+                                message: String::from("boom"),
+                            },
                         }
                     },
                     compute_units,

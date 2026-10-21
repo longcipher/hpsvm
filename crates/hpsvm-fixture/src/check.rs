@@ -6,36 +6,59 @@ use crate::{
     outcome::{Mismatch, MismatchKind, report_mismatch},
 };
 
+/// A predicate an execution's snapshot must satisfy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum Check {
+    /// The execution succeeded.
     Success,
+    /// The execution failed.
     Failure,
+    /// The execution was included in a block.
     Included(bool),
+    /// The execution consumed the given number of compute units.
     ComputeUnits(u64),
+    /// The execution paid the given fee.
     Fee(u64),
+    /// The execution returned the given data.
     ReturnData(Vec<u8>),
+    /// One of the execution's logs contains the given text.
     LogContains(String),
+    /// The execution ran the given number of inner instructions.
     InnerInstructionCount(usize),
+    /// One of the execution's accounts matches the expectation.
     Account(AccountExpectation),
+    /// Every account the execution touched is rent exempt.
     AllRentExempt,
 }
 
+/// What one account of an execution must look like.
+///
+/// Every field is optional: an unset field is not checked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct AccountExpectation {
+    /// The account's address.
     pub address: Address,
+    /// The account's lamport balance.
     pub lamports: Option<u64>,
+    /// The account's owner.
     pub owner: Option<Address>,
+    /// Whether the account is executable.
     pub executable: Option<bool>,
+    /// The account's data.
     pub data: Option<Vec<u8>>,
+    /// A slice of the account's data, as an offset and the expected bytes.
     pub data_slice: Option<(usize, Vec<u8>)>,
+    /// Whether the account was closed.
     pub closed: Option<bool>,
+    /// Whether the account is rent exempt.
     pub rent_exempt: Option<bool>,
 }
 
+/// Builds an [`AccountExpectation`].
 #[derive(Debug, Clone)]
 #[must_use = "builder methods return a new builder"]
 pub struct AccountExpectationBuilder {
@@ -43,6 +66,7 @@ pub struct AccountExpectationBuilder {
 }
 
 impl Check {
+    /// Starts an account expectation for the given address.
     pub fn account(address: &Address) -> AccountExpectationBuilder {
         AccountExpectationBuilder {
             inner: AccountExpectation {
@@ -60,41 +84,49 @@ impl Check {
 }
 
 impl AccountExpectationBuilder {
+    /// Expects the account's lamport balance.
     pub fn lamports(mut self, lamports: u64) -> Self {
         self.inner.lamports = Some(lamports);
         self
     }
 
+    /// Expects the account's owner.
     pub fn owner(mut self, owner: Address) -> Self {
         self.inner.owner = Some(owner);
         self
     }
 
+    /// Expects whether the account is executable.
     pub fn executable(mut self, executable: bool) -> Self {
         self.inner.executable = Some(executable);
         self
     }
 
+    /// Expects the account's data.
     pub fn data(mut self, data: Vec<u8>) -> Self {
         self.inner.data = Some(data);
         self
     }
 
+    /// Expects a slice of the account's data.
     pub fn data_slice(mut self, offset: usize, data: Vec<u8>) -> Self {
         self.inner.data_slice = Some((offset, data));
         self
     }
 
+    /// Expects the account to be closed.
     pub fn closed(mut self) -> Self {
         self.inner.closed = Some(true);
         self
     }
 
+    /// Expects the account to be rent exempt.
     pub fn rent_exempt(mut self) -> Self {
         self.inner.rent_exempt = Some(true);
         self
     }
 
+    /// Finishes the builder into a check.
     pub fn build(self) -> Check {
         Check::Account(self.inner)
     }
@@ -192,7 +224,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::{InnerInstructionSnapshot, ReturnDataSnapshot};
+    use crate::{ExecutionFailure, InnerInstructionSnapshot, ReturnDataSnapshot};
 
     fn config() -> ResultConfig {
         ResultConfig { panic: false, verbose: false }
@@ -222,8 +254,10 @@ mod tests {
     fn failed_snapshot() -> ExecutionSnapshot {
         ExecutionSnapshot {
             status: ExecutionStatus::Failure {
-                kind: String::from("InstructionError"),
-                message: String::from("boom"),
+                failure: ExecutionFailure::Other {
+                    kind: String::from("InstructionError"),
+                    message: String::from("boom"),
+                },
             },
             ..snapshot()
         }

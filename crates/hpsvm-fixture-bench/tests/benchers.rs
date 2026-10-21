@@ -6,10 +6,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use hpsvm::HPSVM;
 use hpsvm_fixture::{
-    AccountSnapshot, BenchError, CaptureBuilder, Compare, ComputeUnitBencher,
-    ComputeUnitMatrixBencher, CuDelta, ExecutionSnapshot, Fixture, FixtureInput, ProgramBinding,
-    RuntimeFixtureConfig,
+    AccountSnapshot, CaptureBuilder, Compare, ExecutionSnapshot, Fixture, FixtureInput,
+    ProgramBinding, RuntimeFixtureConfig,
 };
+use hpsvm_fixture_bench::{BenchError, ComputeUnitBencher, ComputeUnitMatrixBencher, CuDelta};
 use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_message::Message;
@@ -89,29 +89,61 @@ fn single_bencher_executes_system_transfer_fixture() {
     assert!(row.delta.is_none());
 }
 
+/// A fixture that binds a program the caller did not supply an ELF for is
+/// reported: the fixture must not run against a different program than the
+/// one it names.
 #[test]
-fn single_bencher_executes_fixture_with_program_bindings_using_passed_vm() {
+fn single_bencher_reports_a_program_binding_without_an_elf() {
     let mut fixture = build_fixture();
     let FixtureInput::Transaction(transaction) = &mut fixture.input else {
         panic!("fixture input should be a transaction")
     };
+    let program_id = Address::new_unique();
     transaction.programs.push(ProgramBinding::new(
+        program_id,
         Address::new_unique(),
+        Some(String::from("synthetic-binding")),
+    ));
+
+    let error = ComputeUnitBencher::new(HPSVM::new())
+        .case(("system-transfer-unbound-program", &fixture))
+        .execute()
+        .expect_err("a bound program without an ELF must be reported");
+
+    assert!(
+        matches!(
+            error,
+            BenchError::Fixture {
+                source: hpsvm_fixture::FixtureError::MissingProgramElf { .. },
+                ..
+            }
+        ),
+        "expected a missing-ELF failure, got {error:?}"
+    );
+}
+
+/// A fixture whose programs are all bound runs against the supplied ELFs.
+#[test]
+fn single_bencher_executes_a_fixture_whose_programs_are_bound() {
+    let mut fixture = build_fixture();
+    let FixtureInput::Transaction(transaction) = &mut fixture.input else {
+        panic!("fixture input should be a transaction")
+    };
+    let program_id = Address::new_unique();
+    transaction.programs.push(ProgramBinding::new(
+        program_id,
         Address::new_unique(),
         Some(String::from("synthetic-binding")),
     ));
 
     let report = ComputeUnitBencher::new(HPSVM::new())
-        .case(("system-transfer-preloaded-vm", &fixture))
-        .execute()
-        .unwrap();
+        .with_program_elf(program_id, b"not-a-real-elf".to_vec())
+        .case(("system-transfer-bound-program", &fixture))
+        .execute();
 
-    assert_eq!(report.rows.len(), 1);
-
-    let row = &report.rows[0];
-    assert_eq!(row.name, "system-transfer-preloaded-vm");
-    assert!(row.compute_units > 0);
-    assert!(row.pass);
+    // The ELF is deliberately bogus, so the execution fails — what matters
+    // is that the binding was resolved rather than skipped.
+    assert!(report.is_err(), "a bogus ELF must not produce a passing report");
 }
 
 #[test]

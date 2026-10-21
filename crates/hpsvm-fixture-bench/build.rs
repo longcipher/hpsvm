@@ -1,4 +1,4 @@
-//! Exports the packaged Agave runtime version for fixture report metadata.
+//! Exports the packaged Agave runtime version for the report metadata.
 
 use std::{
     env, fs,

@@ -3,10 +3,8 @@
 //!
 //! The CLI (`hpsvm-cli`) records and replays these fixtures; the `fd-codec`
 //! and `json-codec` features decode third-party fixture formats into them.
-#![allow(missing_debug_implementations, missing_docs)]
 #![deny(rustdoc::broken_intra_doc_links)]
 
-mod bench_error;
 #[cfg(feature = "bin-codec")]
 mod binary;
 mod capture;
@@ -14,59 +12,41 @@ mod check;
 mod compare;
 mod config;
 mod error;
-#[cfg(feature = "fd-codec")]
-mod fd;
 #[cfg(feature = "json-codec")]
 mod json;
-mod matrix;
 mod model;
 mod outcome;
-mod report;
 mod runner;
-mod single;
 mod snapshot;
 
-#[cfg(feature = "fd-codec")]
-pub use crate::fd::{AdapterError, FiredancerFixture};
 #[cfg(feature = "instruction-fixture")]
 pub use crate::model::{InstructionAccountMeta, InstructionFixture};
 pub use crate::{
-    bench_error::BenchError,
     capture::CaptureBuilder,
     check::{AccountExpectation, AccountExpectationBuilder, Check},
     compare::{AccountCompareScope, Compare},
     config::ResultConfig,
     error::FixtureError,
-    matrix::{ComputeUnitMatrixBencher, MatrixReport},
     model::{
         Fixture, FixtureExpectations, FixtureFormat, FixtureHeader, FixtureInput, FixtureKind,
         ProgramBinding, RuntimeFixtureConfig, TransactionFixture,
     },
     outcome::{Mismatch, MismatchKind},
-    report::{CuDelta, CuReport, CuReportRow},
     runner::{FixtureExecution, FixtureRunner, bind_programs, configure_vm},
-    single::ComputeUnitBencher,
     snapshot::{
-        AccountSnapshot, ExecutionSnapshot, ExecutionStatus, InnerInstructionSnapshot,
-        ReturnDataSnapshot,
+        AccountSnapshot, ExecutionFailure, ExecutionSnapshot, ExecutionStatus,
+        InnerInstructionSnapshot, ReturnDataSnapshot,
     },
 };
 
+/// A benchmark case: a name and the fixture to replay.
 pub type FixtureBenchCase<'a> = (&'a str, &'a Fixture);
 
-pub(crate) const BUILTIN_VARIANT_NAME: &str = "builtin";
-
-pub(crate) fn generated_at_string() -> String {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or_else(|_| String::from("0"), |duration| duration.as_secs().to_string())
-}
-
-pub(crate) fn solana_runtime_version_string() -> String {
-    option_env!("HPSVM_AGAVE_FEATURE_SET_VERSION").unwrap_or("unknown").to_owned()
-}
-
 impl Fixture {
+    /// Loads a fixture from a file.
+    ///
+    /// The format is chosen by the file extension: `.json` for the JSON form
+    /// and `.bin` for the binary form.
     #[cfg(any(feature = "json-codec", feature = "bin-codec"))]
     pub fn load(path: impl AsRef<std::path::Path>) -> Result<Self, FixtureError> {
         let path = path.as_ref();
@@ -94,6 +74,7 @@ impl Fixture {
         }
     }
 
+    /// Saves the fixture to a file in the given format.
     #[cfg(any(feature = "json-codec", feature = "bin-codec"))]
     pub fn save(
         &self,
@@ -153,18 +134,6 @@ mod tests {
             Address::new_unique(),
             extension
         ))
-    }
-
-    #[test]
-    fn solana_runtime_version_string_is_known() {
-        assert_ne!(solana_runtime_version_string(), "unknown");
-    }
-
-    #[test]
-    fn generated_at_string_is_a_decimal_seconds_count() {
-        let generated = generated_at_string();
-        assert!(!generated.is_empty());
-        assert!(generated.chars().all(|c| c.is_ascii_digit()), "got {generated:?}");
     }
 
     #[cfg(any(feature = "json-codec", feature = "bin-codec"))]

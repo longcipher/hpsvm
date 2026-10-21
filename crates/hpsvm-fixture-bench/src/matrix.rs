@@ -1,21 +1,26 @@
 use std::collections::BTreeMap;
 
 use hpsvm::HPSVM;
+use hpsvm_fixture::{FixtureRunner, ResultConfig};
 use solana_address::Address;
 
 use crate::{
-    BUILTIN_VARIANT_NAME, BenchError, FixtureBenchCase, FixtureInput, FixtureRunner, ResultConfig,
-    generated_at_string,
+    BUILTIN_VARIANT_NAME, BenchError, FixtureBenchCase, generated_at_string,
     report::{CuReport, CuReportRow},
     solana_runtime_version_string,
 };
 
+/// The compute units of a set of fixtures, measured once per program
+/// variant.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct MatrixReport {
+    /// When the report was produced, as seconds since the Unix epoch.
     pub generated_at: String,
+    /// The Solana runtime version the measurements were taken with.
     pub solana_runtime_version: String,
+    /// The per-variant reports, keyed by variant name.
     pub reports: BTreeMap<String, CuReport>,
 }
 
@@ -33,6 +38,12 @@ struct ProgramVariantSet {
     programs: BTreeMap<Address, ProgramVariant>,
 }
 
+/// The compute-unit bencher for a set of fixtures, measured once per program
+/// variant.
+///
+/// A variant is a named set of programs: the same fixtures are replayed with
+/// each variant's ELFs, so the compute units of two program builds can be
+/// compared directly.
 #[derive(Debug)]
 #[must_use = "benchers must be configured and executed"]
 pub struct ComputeUnitMatrixBencher<'a> {
@@ -41,10 +52,15 @@ pub struct ComputeUnitMatrixBencher<'a> {
 }
 
 impl<'a> ComputeUnitMatrixBencher<'a> {
+    /// Creates an empty matrix bencher.
     pub fn new() -> Self {
         Self { programs: Vec::new(), cases: Vec::new() }
     }
 
+    /// Adds a program to a named variant.
+    ///
+    /// Programs added under the same name form one variant; a fixture that
+    /// binds the program with a different loader is rejected.
     pub fn program(
         mut self,
         name: impl Into<String>,
@@ -56,11 +72,16 @@ impl<'a> ComputeUnitMatrixBencher<'a> {
         self
     }
 
+    /// Adds a fixture to the matrix.
     pub fn case(mut self, case: FixtureBenchCase<'a>) -> Self {
         self.cases.push(case);
         self
     }
 
+    /// Replays every fixture once per variant and collects the reports.
+    ///
+    /// With no variant configured, the fixtures are measured against the
+    /// built-in programs.
     pub fn execute(self) -> Result<MatrixReport, BenchError> {
         let Self { programs, cases } = self;
         if cases.is_empty() {
@@ -93,6 +114,7 @@ impl Default for ComputeUnitMatrixBencher<'_> {
 
 #[cfg(feature = "markdown")]
 impl MatrixReport {
+    /// Renders the matrix as a human-readable Markdown report.
     pub fn render_markdown(&self) -> String {
         let mut markdown = String::from("# Compute Unit Matrix\n\n");
         markdown.push_str(&format!("Generated at: {}\n", self.generated_at));
@@ -158,11 +180,11 @@ fn group_variant_sets(programs: Vec<ProgramVariant>) -> Vec<ProgramVariantSet> {
 
 fn validate_variant_programs(
     case_name: &str,
-    fixture: &crate::Fixture,
+    fixture: &hpsvm_fixture::Fixture,
     variant: &ProgramVariantSet,
 ) -> Result<(), BenchError> {
     let mut bound_programs = BTreeMap::new();
-    for program in fixture_programs(fixture) {
+    for program in fixture.programs() {
         bound_programs.insert(program.program_id, program.loader_id);
     }
 
@@ -199,16 +221,13 @@ fn validate_variant_programs(
     Ok(())
 }
 
-fn fixture_programs(fixture: &crate::Fixture) -> &[crate::ProgramBinding] {
-    match &fixture.input {
-        FixtureInput::Transaction(transaction) => &transaction.programs,
-        #[cfg(feature = "instruction-fixture")]
-        FixtureInput::Instruction(instruction) => &instruction.programs,
-    }
-}
-
 #[cfg(all(test, feature = "bin-codec"))]
 mod tests {
+    use hpsvm_fixture::{
+        AccountSnapshot, CaptureBuilder, Compare, ExecutionSnapshot, ExecutionStatus, Fixture,
+        FixtureExpectations, FixtureHeader, FixtureKind, ProgramBinding, RuntimeFixtureConfig,
+        TransactionFixture,
+    };
     use solana_keypair::Keypair;
     use solana_message::{Message, VersionedMessage};
     use solana_signer::Signer;
@@ -216,11 +235,6 @@ mod tests {
     use solana_transaction::versioned::VersionedTransaction;
 
     use super::*;
-    use crate::{
-        AccountSnapshot, CaptureBuilder, Compare, ExecutionSnapshot, ExecutionStatus, Fixture,
-        FixtureExpectations, FixtureHeader, FixtureKind, ProgramBinding, RuntimeFixtureConfig,
-        TransactionFixture,
-    };
 
     fn empty_snapshot() -> ExecutionSnapshot {
         ExecutionSnapshot {
@@ -237,7 +251,7 @@ mod tests {
 
     /// A transfer fixture whose baseline matches what the VM produces, so the
     /// matrix rows report `pass == true`.
-    fn passing_fixture() -> crate::Fixture {
+    fn passing_fixture() -> hpsvm_fixture::Fixture {
         let mut svm = hpsvm::HPSVM::new();
         let payer = Keypair::new();
         let recipient = Address::new_unique();
@@ -278,13 +292,13 @@ mod tests {
     /// dropped, which would leave the mutation unnoticed.
     fn failing_fixture() -> Fixture {
         let fixture = passing_fixture();
-        let crate::FixtureInput::Transaction(transaction) = &fixture.input else {
+        let hpsvm_fixture::FixtureInput::Transaction(transaction) = &fixture.input else {
             unreachable!("transaction fixture");
         };
         let actual_fee = fixture.expectations.baseline.fee;
         Fixture::new(
             fixture.header.clone(),
-            crate::FixtureInput::Transaction(TransactionFixture::new(
+            hpsvm_fixture::FixtureInput::Transaction(TransactionFixture::new(
                 transaction.runtime,
                 transaction.programs.clone(),
                 transaction.pre_accounts.clone(),
@@ -536,7 +550,7 @@ mod tests {
     fn a_runner_failure_is_wrapped_with_the_case_name() {
         let fixture = Fixture::new(
             FixtureHeader::new("broken", FixtureKind::Transaction),
-            crate::FixtureInput::Transaction(TransactionFixture::new(
+            hpsvm_fixture::FixtureInput::Transaction(TransactionFixture::new(
                 RuntimeFixtureConfig::new(0, None, false, false),
                 Vec::new(),
                 Vec::new(),
@@ -617,7 +631,7 @@ mod tests {
     // helpers
     // -------------------------------------------------------------------
 
-    fn bound_fixture(program_id: Address) -> crate::Fixture {
+    fn bound_fixture(program_id: Address) -> hpsvm_fixture::Fixture {
         bound_fixture_multi(program_id, Address::new_unique())
     }
 
@@ -627,9 +641,9 @@ mod tests {
         Address::new_from_array(LOADER)
     }
 
-    fn bound_fixture_multi(first: Address, second: Address) -> crate::Fixture {
+    fn bound_fixture_multi(first: Address, second: Address) -> hpsvm_fixture::Fixture {
         let mut fixture = passing_fixture();
-        let crate::FixtureInput::Transaction(transaction) = &mut fixture.input else {
+        let hpsvm_fixture::FixtureInput::Transaction(transaction) = &mut fixture.input else {
             unreachable!("transaction fixture");
         };
         transaction.programs = vec![
@@ -639,7 +653,7 @@ mod tests {
         fixture
     }
 
-    fn blockhash_checked_fixture() -> crate::Fixture {
+    fn blockhash_checked_fixture() -> hpsvm_fixture::Fixture {
         let mut svm = hpsvm::HPSVM::new();
         let payer = Keypair::new();
         svm.airdrop(&payer.pubkey(), 10_000).unwrap();

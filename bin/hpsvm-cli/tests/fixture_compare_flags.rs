@@ -217,6 +217,7 @@ fn write_fixture(stem: &str, name: &str, format: FixtureFormat) -> TempPath {
         match format {
             FixtureFormat::Json => "json",
             FixtureFormat::Binary => "bin",
+            _ => "bin",
         },
     );
     let fixture = transfer_fixture(name);

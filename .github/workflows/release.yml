@@ -102,7 +102,7 @@ jobs:
         # yet on the index — the bug that blocked the 0.1.19 release.
         #
         # `--no-verify` skips the packaged-tarball build. Verification would
-        # compile hpsvm-fixture's optional `fd-codec` dependency against the
+        # compile hpsvm-fixture-firedancer's `fd-codec` dependency against the
         # agave 4.3 line, which does not build on this toolchain line; the
         # feature is opt-in, so the published crate stays resolvable without it.
         #
@@ -110,7 +110,8 @@ jobs:
         # onto (upstream `mollusk-svm-fuzz-fixture-firedancer` pins agave 4.3).
         # It is not a workspace member — its source lives in `vendor/` — so it
         # is published first, outside the guarded member list below, and the
-        # retry loop covers index propagation before `hpsvm-fixture` needs it.
+        # retry loop covers index propagation before
+        # `hpsvm-fixture-firedancer` needs it.
         run: |
           set -euo pipefail
           publish_one() {
@@ -143,17 +144,21 @@ jobs:
           sleep 20
 
           # Dependency order (dev-dependencies included):
-          #   hpsvm-macros        no local deps
-          #   hpsvm-test-support  no local deps
-          #   hpsvm               dev-deps on the two above
-          #   hpsvm-fixture       deps: hpsvm
-          #   hpsvm-inspectors    deps: hpsvm
-          #   hpsvm-cli           deps: hpsvm, hpsvm-fixture
+          #   hpsvm-macros               no local deps
+          #   hpsvm-test-support         no local deps
+          #   hpsvm                      dev-deps on the two above
+          #   hpsvm-fixture              deps: hpsvm
+          #   hpsvm-fixture-bench        deps: hpsvm, hpsvm-fixture
+          #   hpsvm-fixture-firedancer   deps: hpsvm-fixture, hpsvm-fd-fixture
+          #   hpsvm-inspectors           deps: hpsvm
+          #   hpsvm-cli                  deps: hpsvm, hpsvm-fixture, and the two above
           crates=(
             hpsvm-macros
             hpsvm-test-support
             hpsvm
             hpsvm-fixture
+            hpsvm-fixture-bench
+            hpsvm-fixture-firedancer
             hpsvm-inspectors
             hpsvm-cli
           )

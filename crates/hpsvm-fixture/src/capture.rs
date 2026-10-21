@@ -8,6 +8,11 @@ use crate::{
 #[cfg(feature = "bin-codec")]
 use crate::{Fixture, FixtureError, FixtureExpectations, FixtureInput, TransactionFixture};
 
+/// Builds a fixture from a recorded execution.
+///
+/// The builder collects the fixture's metadata, its runtime configuration,
+/// the programs it calls, the state it starts from and the baseline it must
+/// reproduce.
 #[derive(Debug, Default, Clone)]
 #[must_use = "capture builders do nothing unless you finish them into a fixture"]
 pub struct CaptureBuilder {
@@ -20,6 +25,7 @@ pub struct CaptureBuilder {
 }
 
 impl CaptureBuilder {
+    /// Creates a builder for a transaction fixture with the given name.
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             header: Some(FixtureHeader {
@@ -33,6 +39,7 @@ impl CaptureBuilder {
         }
     }
 
+    /// Records where the fixture came from.
     pub fn source(mut self, source: impl Into<String>) -> Self {
         if let Some(header) = self.header.as_mut() {
             header.source = Some(source.into());
@@ -40,6 +47,7 @@ impl CaptureBuilder {
         self
     }
 
+    /// Adds a free-form label.
     pub fn tag(mut self, tag: impl Into<String>) -> Self {
         if let Some(header) = self.header.as_mut() {
             header.tags.push(tag.into());
@@ -47,31 +55,37 @@ impl CaptureBuilder {
         self
     }
 
+    /// Sets the runtime configuration the fixture is replayed under.
     pub fn runtime(mut self, runtime: RuntimeFixtureConfig) -> Self {
         self.runtime = Some(runtime);
         self
     }
 
+    /// Sets the programs the fixture calls.
     pub fn programs(mut self, programs: Vec<ProgramBinding>) -> Self {
         self.programs = programs;
         self
     }
 
+    /// Sets the accounts the fixture starts from.
     pub fn pre_accounts(mut self, pre_accounts: Vec<AccountSnapshot>) -> Self {
         self.pre_accounts = pre_accounts;
         self
     }
 
+    /// Sets the recorded baseline the replay must reproduce.
     pub fn baseline(mut self, baseline: ExecutionSnapshot) -> Self {
         self.baseline = Some(baseline);
         self
     }
 
+    /// Sets which parts of the baseline the comparison covers.
     pub fn compares(mut self, compares: Vec<Compare>) -> Self {
         self.compares = compares;
         self
     }
 
+    /// Finishes the builder into a fixture around the given transaction.
     #[cfg(feature = "bin-codec")]
     pub fn capture_transaction(self, tx: &VersionedTransaction) -> Result<Fixture, FixtureError> {
         let transaction_bytes = wincode::serialize(tx).map_err(FixtureError::EncodeTransaction)?;
