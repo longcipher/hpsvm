@@ -290,7 +290,10 @@ mod tests {
         let hpsvm_fixture::FixtureInput::Transaction(transaction) = &fixture.input else {
             unreachable!("transaction fixture");
         };
-        let actual_fee = fixture.expectations.baseline.fee;
+        let mut baseline = fixture.expectations.baseline.clone();
+        // The fixture differs from the real execution in the fee alone, so
+        // the comparison fails on exactly that field.
+        baseline.fee = baseline.fee.saturating_add(1);
         Fixture::new(
             fixture.header.clone(),
             hpsvm_fixture::FixtureInput::Transaction(TransactionFixture::new(
@@ -299,13 +302,7 @@ mod tests {
                 transaction.pre_accounts.clone(),
                 transaction.transaction_bytes.clone(),
             )),
-            FixtureExpectations::new(
-                ExecutionSnapshot {
-                    fee: actual_fee.saturating_add(1),
-                    ..ExecutionSnapshot::default()
-                },
-                Compare::everything(),
-            ),
+            FixtureExpectations::new(baseline, Compare::everything()),
         )
     }
 

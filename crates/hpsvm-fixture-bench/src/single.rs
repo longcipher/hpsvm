@@ -182,17 +182,14 @@ mod tests {
     /// dropped, which would leave the mutation unnoticed.
     fn failing_fixture() -> Fixture {
         let fixture = passing_fixture();
-        let actual_fee = fixture.expectations.baseline.fee;
+        let mut baseline = fixture.expectations.baseline.clone();
+        // The fixture differs from the real execution in the fee alone, so
+        // the comparison fails on exactly that field.
+        baseline.fee = baseline.fee.saturating_add(1);
         Fixture::new(
             fixture.header,
             fixture.input,
-            FixtureExpectations::new(
-                ExecutionSnapshot {
-                    fee: actual_fee.saturating_add(1),
-                    ..ExecutionSnapshot::default()
-                },
-                Compare::everything(),
-            ),
+            FixtureExpectations::new(baseline, Compare::everything()),
         )
     }
 

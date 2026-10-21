@@ -2077,6 +2077,55 @@ mod tests {
         }
     }
 
+    /// A reconfiguration keeps a registered custom syscall.
+    ///
+    /// The runtime environments are refreshed during the reconfiguration, so
+    /// the custom syscall has to be registered again — otherwise a program
+    /// that uses it no longer verifies.
+    #[test]
+    fn a_feature_set_reconfiguration_keeps_the_custom_syscall() {
+        use solana_program_runtime::{
+            invoke_context::InvokeContext, solana_sbpf::program::BuiltinProgram,
+        };
+
+        solana_program_runtime::solana_sbpf::declare_builtin_function!(
+            /// A custom syscall, registered to observe the environment refresh.
+            SyscallProbe,
+            fn rust(
+                _invoke_context: &mut InvokeContext<'_, '_>,
+                _arg1: u64,
+                _arg2: u64,
+                _arg3: u64,
+                _arg4: u64,
+                _arg5: u64,
+            ) -> Result<u64, Box<dyn std::error::Error>> {
+                Ok(0)
+            }
+        );
+
+        fn register(
+            loader: &mut BuiltinProgram<InvokeContext<'static, 'static>>,
+            name: &str,
+        ) -> Result<(), solana_program_runtime::solana_sbpf::elf::ElfError> {
+            loader.register_definition::<SyscallProbe>(name)
+        }
+
+        let Some(program) = hpsvm_test_support::read_program(hpsvm_test_support::CUSTOM_SYSCALL)
+        else {
+            // The SBF program is not built on this host; nothing to observe.
+            return;
+        };
+
+        let mut svm = Hpsvm::new();
+        svm.register_custom_syscall("sol_probe_cus", register)
+            .expect("custom syscall registration should succeed");
+        let program_id = Address::new_unique();
+        svm.add_program(program_id, &program).expect("the program should load");
+
+        svm.set_feature_set(FeatureSet::all_enabled())
+            .expect("the reconfiguration must keep the custom syscall registered");
+    }
+
     /// A reconfiguration that turns a feature gate off removes the built-in
     /// program that gate enabled.
     #[test]
@@ -2096,6 +2145,43 @@ mod tests {
         assert!(
             svm.get_account(&zk_token_proof).is_none(),
             "the built-in must be removed when its gate is turned off"
+        );
+    }
+
+    /// A reconfiguration syncs the compiled-tier policy into the account
+    /// database, even when the policy was assigned directly on the version
+    /// instead of through the setter.
+    #[test]
+    fn a_feature_set_reconfiguration_syncs_the_compiled_tier_policy() {
+        let mut svm = Hpsvm::new();
+        // A direct assignment bypasses the setter, so the database's copy is
+        // still the default until something syncs it.
+        svm.version.jit_policy = JitPolicy::Off;
+        assert_ne!(
+            svm.state.accounts.jit_policy(),
+            JitPolicy::Off,
+            "the database must not have the policy yet"
+        );
+
+        svm.set_feature_set(FeatureSet::all_enabled()).expect("reconfiguration should succeed");
+
+        assert_eq!(
+            svm.state.accounts.jit_policy(),
+            JitPolicy::Off,
+            "the reconfiguration must sync the compiled-tier policy"
+        );
+    }
+
+    /// A VM built without sysvars reports the missing component.
+    #[test]
+    fn a_vm_without_sysvars_reports_the_missing_component() {
+        let svm = Hpsvm::builder().build().expect("a minimal VM should build");
+        assert!(
+            matches!(
+                svm.require_sysvars_loaded(),
+                Err(HPSVMError::MissingRuntimeComponent { component: "sysvars" })
+            ),
+            "the missing component must be reported"
         );
     }
 
