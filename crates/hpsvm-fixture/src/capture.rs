@@ -102,7 +102,7 @@ impl CaptureBuilder {
 #[cfg(all(test, feature = "bin-codec"))]
 mod tests {
     use super::*;
-    use crate::{ExecutionSnapshotFields, ExecutionStatus};
+    use crate::ExecutionStatus;
 
     fn transaction() -> VersionedTransaction {
         use solana_keypair::Keypair;
@@ -118,7 +118,7 @@ mod tests {
     }
 
     fn baseline() -> ExecutionSnapshot {
-        ExecutionSnapshot::from_fields(ExecutionSnapshotFields {
+        ExecutionSnapshot {
             status: ExecutionStatus::Success,
             included: true,
             compute_units_consumed: 10,
@@ -127,7 +127,7 @@ mod tests {
             return_data: None,
             inner_instructions: Vec::new(),
             post_accounts: Vec::new(),
-        })
+        }
     }
 
     fn complete_builder() -> CaptureBuilder {

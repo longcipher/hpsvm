@@ -47,8 +47,8 @@ pub use crate::{
     runner::{FixtureExecution, FixtureRunner, bind_programs, configure_vm},
     single::ComputeUnitBencher,
     snapshot::{
-        AccountSnapshot, ExecutionSnapshot, ExecutionSnapshotFields, ExecutionStatus,
-        InnerInstructionSnapshot, ReturnDataSnapshot,
+        AccountSnapshot, ExecutionSnapshot, ExecutionStatus, InnerInstructionSnapshot,
+        ReturnDataSnapshot,
     },
 };
 
@@ -306,7 +306,7 @@ mod tests {
     }
 
     fn empty_snapshot() -> ExecutionSnapshot {
-        ExecutionSnapshot::from_fields(ExecutionSnapshotFields {
+        ExecutionSnapshot {
             status: ExecutionStatus::Success,
             included: true,
             compute_units_consumed: 0,
@@ -315,7 +315,7 @@ mod tests {
             return_data: None,
             inner_instructions: Vec::new(),
             post_accounts: Vec::new(),
-        })
+        }
     }
 
     #[cfg(all(feature = "json-codec", feature = "bin-codec"))]

@@ -11,9 +11,9 @@ use solana_address::Address;
 
 pub use self::error::AdapterError;
 use crate::{
-    AccountCompareScope, AccountSnapshot, Compare, ExecutionSnapshot, ExecutionSnapshotFields,
-    ExecutionStatus, FixtureExpectations, FixtureHeader, FixtureInput, FixtureKind,
-    InstructionAccountMeta, InstructionFixture, ReturnDataSnapshot, RuntimeFixtureConfig,
+    AccountCompareScope, AccountSnapshot, Compare, ExecutionSnapshot, ExecutionStatus,
+    FixtureExpectations, FixtureHeader, FixtureInput, FixtureKind, InstructionAccountMeta,
+    InstructionFixture, ReturnDataSnapshot, RuntimeFixtureConfig,
 };
 
 mod error {
@@ -172,7 +172,7 @@ impl TryFrom<FiredancerFixture> for crate::Fixture {
                 after: output.cu_avail,
             },
         )?;
-        let baseline = ExecutionSnapshot::from_fields(ExecutionSnapshotFields {
+        let baseline = ExecutionSnapshot {
             status: status_from_output(output.result, output.custom_err)?,
             included: true,
             compute_units_consumed,
@@ -181,7 +181,7 @@ impl TryFrom<FiredancerFixture> for crate::Fixture {
             return_data: return_data_from_output(program_id, output.return_data),
             inner_instructions: Vec::new(),
             post_accounts: post_accounts.clone(),
-        });
+        };
 
         let header = FixtureHeader::new(
             metadata
@@ -514,7 +514,7 @@ mod tests {
     }
 
     fn empty_snapshot() -> ExecutionSnapshot {
-        ExecutionSnapshot::from_fields(ExecutionSnapshotFields {
+        ExecutionSnapshot {
             status: ExecutionStatus::Success,
             included: true,
             compute_units_consumed: 0,
@@ -523,7 +523,7 @@ mod tests {
             return_data: None,
             inner_instructions: Vec::new(),
             post_accounts: Vec::new(),
-        })
+        }
     }
 
     // ---------------------------------------------------------------------

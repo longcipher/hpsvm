@@ -9,9 +9,8 @@ use std::{
 use hpsvm_fd_fixture as fd_codec;
 use hpsvm_fixture::{
     AccountCompareScope, AccountSnapshot, AdapterError, Compare, ExecutionSnapshot,
-    ExecutionSnapshotFields, ExecutionStatus, FiredancerFixture, Fixture, FixtureExpectations,
-    FixtureHeader, FixtureInput, FixtureKind, InstructionAccountMeta, InstructionFixture,
-    RuntimeFixtureConfig,
+    ExecutionStatus, FiredancerFixture, Fixture, FixtureExpectations, FixtureHeader, FixtureInput,
+    FixtureKind, InstructionAccountMeta, InstructionFixture, RuntimeFixtureConfig,
 };
 use solana_address::Address;
 
@@ -169,7 +168,7 @@ fn hpsvm_instruction_fixture_exports_to_firedancer_proto() -> Result<(), Adapter
             vec![1, 2, 3],
         )),
         FixtureExpectations::new(
-            ExecutionSnapshot::from_fields(ExecutionSnapshotFields {
+            ExecutionSnapshot {
                 status: ExecutionStatus::Success,
                 included: true,
                 compute_units_consumed: 12,
@@ -185,7 +184,7 @@ fn hpsvm_instruction_fixture_exports_to_firedancer_proto() -> Result<(), Adapter
                     0,
                     vec![2],
                 )],
-            }),
+            },
             vec![Compare::Status],
         ),
     );
@@ -235,7 +234,7 @@ fn hpsvm_instruction_fixture_export_requires_compute_unit_budget() {
             Vec::new(),
         )),
         FixtureExpectations::new(
-            ExecutionSnapshot::from_fields(ExecutionSnapshotFields {
+            ExecutionSnapshot {
                 status: ExecutionStatus::Success,
                 included: true,
                 compute_units_consumed: 12,
@@ -244,7 +243,7 @@ fn hpsvm_instruction_fixture_export_requires_compute_unit_budget() {
                 return_data: None,
                 inner_instructions: Vec::new(),
                 post_accounts: Vec::new(),
-            }),
+            },
             vec![Compare::Status],
         ),
     );

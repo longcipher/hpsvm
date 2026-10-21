@@ -2,16 +2,22 @@ use hpsvm::{
     DetachedTx,
     types::{FailedTransactionMetadata, SimulatedTransactionInfo},
 };
-use solana_account::ReadableAccount;
+use solana_account::{Account, ReadableAccount};
 use solana_address::Address;
 use solana_message::inner_instruction::InnerInstructionsList;
 use solana_transaction_context::transaction::TransactionReturnData;
 use solana_transaction_error::{TransactionError, TransactionResult};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A stable, persisted snapshot of one execution.
+///
+/// This is the on-disk format of a recorded fixture, not a view of
+/// [`hpsvm::types::TransactionMetadata`]: the two carry the same facts, but
+/// the snapshot is versioned by the fixture's `schema_version` and must not
+/// drift with the VM's metadata type. A change to the fields here is a
+/// format change and needs a schema-version bump.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "bin-codec", derive(wincode::SchemaWrite, wincode::SchemaRead))]
-#[non_exhaustive]
 pub struct ExecutionSnapshot {
     pub status: ExecutionStatus,
     pub included: bool,
@@ -23,27 +29,26 @@ pub struct ExecutionSnapshot {
     pub post_accounts: Vec<AccountSnapshot>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExecutionSnapshotFields {
-    pub status: ExecutionStatus,
-    pub included: bool,
-    pub compute_units_consumed: u64,
-    pub fee: u64,
-    pub logs: Vec<String>,
-    pub return_data: Option<ReturnDataSnapshot>,
-    pub inner_instructions: Vec<InnerInstructionSnapshot>,
-    pub post_accounts: Vec<AccountSnapshot>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "bin-codec", derive(wincode::SchemaWrite, wincode::SchemaRead))]
 #[non_exhaustive]
 pub enum ExecutionStatus {
+    #[default]
     Success,
-    Failure { kind: String, message: String },
+    Failure {
+        kind: String,
+        message: String,
+    },
 }
 
+/// A stable, persisted snapshot of one account's state.
+///
+/// The shape mirrors [`solana_account::Account`] field for field, with the
+/// account's address alongside it, because the fixture format stores an
+/// address and an account together. The two shapes are kept in sync through
+/// the [`From`] conversions below, so the field copies live in exactly one
+/// place.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "bin-codec", derive(wincode::SchemaWrite, wincode::SchemaRead))]
@@ -79,30 +84,6 @@ pub struct InnerInstructionSnapshot {
 }
 
 impl ExecutionSnapshot {
-    pub fn from_fields(fields: ExecutionSnapshotFields) -> Self {
-        let ExecutionSnapshotFields {
-            status,
-            included,
-            compute_units_consumed,
-            fee,
-            logs,
-            return_data,
-            inner_instructions,
-            post_accounts,
-        } = fields;
-
-        Self {
-            status,
-            included,
-            compute_units_consumed,
-            fee,
-            logs,
-            return_data,
-            inner_instructions,
-            post_accounts,
-        }
-    }
-
     pub fn from_outcome(outcome: &DetachedTx) -> Self {
         Self {
             status: ExecutionStatus::from_result(outcome.status()),
@@ -188,6 +169,31 @@ impl AccountSnapshot {
     }
 }
 
+impl From<(Address, Account)> for AccountSnapshot {
+    fn from((address, account): (Address, Account)) -> Self {
+        Self {
+            address,
+            lamports: account.lamports,
+            owner: account.owner,
+            executable: account.executable,
+            rent_epoch: account.rent_epoch,
+            data: account.data,
+        }
+    }
+}
+
+impl From<AccountSnapshot> for Account {
+    fn from(snapshot: AccountSnapshot) -> Self {
+        Self {
+            lamports: snapshot.lamports,
+            data: snapshot.data,
+            owner: snapshot.owner,
+            executable: snapshot.executable,
+            rent_epoch: snapshot.rent_epoch,
+        }
+    }
+}
+
 impl ReturnDataSnapshot {
     pub fn new(program_id: Address, data: Vec<u8>) -> Self {
         Self { program_id, data }
@@ -264,30 +270,25 @@ mod tests {
     }
 
     #[test]
-    fn from_fields_is_a_field_for_field_copy() {
-        let fields = ExecutionSnapshotFields {
-            status: ExecutionStatus::Success,
-            included: true,
-            compute_units_consumed: 10,
-            fee: 20,
-            logs: vec![String::from("a")],
-            return_data: Some(ReturnDataSnapshot::new(address(1), vec![2])),
-            inner_instructions: Vec::new(),
-            post_accounts: Vec::new(),
+    fn an_account_snapshot_round_trips_through_a_solana_account() {
+        let account = Account {
+            lamports: 42,
+            data: vec![1, 2, 3],
+            owner: address(9),
+            executable: true,
+            rent_epoch: 7,
         };
-        let snapshot = ExecutionSnapshot::from_fields(fields.clone());
+        let snapshot = AccountSnapshot::from((address(3), account.clone()));
 
-        assert_eq!(snapshot.status, ExecutionStatus::Success);
-        assert!(snapshot.included);
-        assert_eq!(snapshot.compute_units_consumed, 10);
-        assert_eq!(snapshot.fee, 20);
-        assert_eq!(snapshot.logs, vec![String::from("a")]);
-        assert_eq!(snapshot.return_data, Some(ReturnDataSnapshot::new(address(1), vec![2])));
-        assert_eq!(
-            ExecutionSnapshot::from_fields(fields),
-            snapshot,
-            "from_fields must be deterministic"
-        );
+        assert_eq!(snapshot.address, address(3));
+        assert_eq!(snapshot.lamports, 42);
+        assert_eq!(snapshot.owner, address(9));
+        assert!(snapshot.executable);
+        assert_eq!(snapshot.rent_epoch, 7);
+        assert_eq!(snapshot.data, vec![1, 2, 3]);
+
+        let restored: Account = snapshot.into();
+        assert_eq!(restored, account);
     }
 
     #[test]

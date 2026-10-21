@@ -104,13 +104,12 @@ mod tests {
 
     use super::*;
     use crate::{
-        AccountSnapshot, CaptureBuilder, Compare, ExecutionSnapshot, ExecutionSnapshotFields,
-        ExecutionStatus, FixtureExpectations, FixtureHeader, FixtureKind, RuntimeFixtureConfig,
-        TransactionFixture,
+        AccountSnapshot, CaptureBuilder, Compare, ExecutionSnapshot, ExecutionStatus,
+        FixtureExpectations, FixtureHeader, FixtureKind, RuntimeFixtureConfig, TransactionFixture,
     };
 
     fn empty_snapshot() -> ExecutionSnapshot {
-        ExecutionSnapshot::from_fields(ExecutionSnapshotFields {
+        ExecutionSnapshot {
             status: ExecutionStatus::Success,
             included: true,
             compute_units_consumed: 0,
@@ -119,7 +118,7 @@ mod tests {
             return_data: None,
             inner_instructions: Vec::new(),
             post_accounts: Vec::new(),
-        })
+        }
     }
 
     /// Builds a transfer fixture whose baseline matches the fresh VM, so the

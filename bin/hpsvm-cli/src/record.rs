@@ -9,7 +9,6 @@ use hpsvm_fixture::{
     ProgramBinding, RuntimeFixtureConfig,
 };
 use serde::Deserialize;
-use solana_account::Account;
 use solana_address::Address;
 use solana_sdk_ids::bpf_loader_upgradeable;
 use solana_transaction::versioned::VersionedTransaction;
@@ -128,16 +127,9 @@ pub(crate) fn record_fixture(request: &RecordRequest) -> Result<(), CliError> {
     }
 
     for account in &accounts {
-        vm.set_account(
-            account.address,
-            Account {
-                lamports: account.lamports,
-                data: account.data.clone(),
-                owner: account.owner,
-                executable: account.executable,
-                rent_epoch: account.rent_epoch,
-            },
-        )?;
+        // The snapshot and the account share their field layout, so the
+        // conversion is the only place that has to know it.
+        vm.set_account(account.address, account.clone().into())?;
     }
 
     let baseline = ExecutionSnapshot::from_outcome(&vm.transact_detached(transaction.clone()));

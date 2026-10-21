@@ -2,7 +2,6 @@ use std::collections::HashMap;
 
 use hpsvm::HPSVM;
 #[cfg(feature = "bin-codec")]
-use solana_account::Account;
 use solana_address::Address;
 #[cfg(feature = "bin-codec")]
 use solana_transaction::versioned::VersionedTransaction;
@@ -153,16 +152,9 @@ impl FixtureRunner {
             self.load_programs(&mut vm, &fixture.programs)?;
 
             for account in &fixture.pre_accounts {
-                vm.set_account(
-                    account.address,
-                    Account {
-                        lamports: account.lamports,
-                        data: account.data.clone(),
-                        owner: account.owner,
-                        executable: account.executable,
-                        rent_epoch: account.rent_epoch,
-                    },
-                )?;
+                // The snapshot and the account share their field layout, so
+                // the conversion is the only place that has to know it.
+                vm.set_account(account.address, account.clone().into())?;
             }
 
             let tx: VersionedTransaction = wincode::deserialize(&fixture.transaction_bytes)

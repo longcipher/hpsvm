@@ -22,9 +22,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        AccountSnapshot, Compare, ExecutionSnapshot, ExecutionSnapshotFields, ExecutionStatus,
-        FixtureExpectations, FixtureHeader, FixtureInput, FixtureKind, ProgramBinding,
-        RuntimeFixtureConfig, TransactionFixture,
+        AccountSnapshot, Compare, ExecutionSnapshot, ExecutionStatus, FixtureExpectations,
+        FixtureHeader, FixtureInput, FixtureKind, ProgramBinding, RuntimeFixtureConfig,
+        TransactionFixture,
     };
 
     fn address(seed: u8) -> Address {
@@ -43,7 +43,7 @@ mod tests {
                 data,
             )),
             FixtureExpectations::new(
-                ExecutionSnapshot::from_fields(ExecutionSnapshotFields {
+                ExecutionSnapshot {
                     status: ExecutionStatus::Success,
                     included: true,
                     compute_units_consumed: compute_units,
@@ -52,7 +52,7 @@ mod tests {
                     return_data: None,
                     inner_instructions: Vec::new(),
                     post_accounts: vec![account],
-                }),
+                },
                 Compare::everything(),
             ),
         )

@@ -18,9 +18,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        AccountSnapshot, Compare, ExecutionSnapshot, ExecutionSnapshotFields, ExecutionStatus,
-        FixtureExpectations, FixtureHeader, FixtureInput, FixtureKind, ProgramBinding,
-        RuntimeFixtureConfig, TransactionFixture,
+        AccountSnapshot, Compare, ExecutionSnapshot, ExecutionStatus, FixtureExpectations,
+        FixtureHeader, FixtureInput, FixtureKind, ProgramBinding, RuntimeFixtureConfig,
+        TransactionFixture,
     };
 
     fn address(seed: u8) -> Address {
@@ -32,7 +32,7 @@ mod tests {
         compute_units: u64,
         accounts: Vec<AccountSnapshot>,
     ) -> ExecutionSnapshot {
-        ExecutionSnapshot::from_fields(ExecutionSnapshotFields {
+        ExecutionSnapshot {
             status,
             included: compute_units % 2 == 0,
             compute_units_consumed: compute_units,
@@ -43,7 +43,7 @@ mod tests {
             return_data: None,
             inner_instructions: Vec::new(),
             post_accounts: accounts,
-        })
+        }
     }
 
     /// Builds a fixture with fully generated contents so the round-trip property
