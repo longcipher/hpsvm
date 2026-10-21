@@ -520,6 +520,15 @@ impl Accounts {
         self.journal.len()
     }
 
+    /// The journal entries recorded since `from`.
+    ///
+    /// A journal entry records the state an address had *before* the
+    /// mutation, so the entries describe what the overlay went through.
+    #[cfg(test)]
+    pub(crate) fn journal_since(&self, from: usize) -> &[JournalEntry] {
+        &self.journal[from.min(self.journal.len())..]
+    }
+
     /// Restores `inner` + `removed` to the state at `checkpoint` by undoing
     /// journal entries at indices `>= checkpoint.0` in reverse order.
     ///

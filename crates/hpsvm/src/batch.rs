@@ -791,6 +791,18 @@ mod tests {
             .expect("transaction should build")
     }
 
+    /// The lock set's size counts every account it locks, whether the
+    /// account is read or written.
+    #[test]
+    fn the_lock_set_size_counts_every_locked_account() {
+        let mut lock_set = TransactionLockSet::default();
+        lock_set.writable.insert(Address::new_unique());
+        lock_set.writable.insert(Address::new_unique());
+        lock_set.readonly.insert(Address::new_unique());
+
+        assert_eq!(lock_set.len(), 3);
+    }
+
     /// The planner fills the tightest conflict-free stage, not the first
     /// one, so the heavily locked stages stay free for the transactions that
     /// need them.

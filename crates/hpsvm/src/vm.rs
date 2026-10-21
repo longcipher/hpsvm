@@ -2007,8 +2007,8 @@ mod tests {
     /// rebuilds them, so every program account is written twice.
     ///
     /// The teardown is what makes a reconfiguration a clean slate: a program
-    /// the rebuild no longer covers would otherwise survive. The test pins the
-    /// teardown by counting the overlay writes.
+    /// the rebuild no longer covers would otherwise survive. The journal
+    /// records the removal of every account the teardown took out.
     #[test]
     fn a_feature_set_reconfiguration_tears_the_programs_down_before_rebuilding_them() {
         use crate::programs::DEFAULT_PROGRAM_IDS;
@@ -2018,19 +2018,62 @@ mod tests {
 
         svm.set_feature_set(FeatureSet::all_enabled()).expect("reconfiguration should succeed");
 
-        let written = svm.state.accounts.journal_len() - before;
-        // A teardown writes every program account once and the rebuild writes
-        // it again, so the reconfiguration writes at least three entries per
-        // program (the program account, its program data where the loader
-        // needs one, and the rebuild).
-        assert!(
-            written >= 3 * DEFAULT_PROGRAM_IDS.len(),
-            "the reconfiguration must tear the programs down first, wrote {written} entries"
-        );
+        let removed = removed_accounts(&svm, before);
+        for program_id in DEFAULT_PROGRAM_IDS {
+            assert!(
+                removed.contains(&program_id),
+                "{program_id} must be torn down before it is rebuilt"
+            );
+        }
 
         // The programs are back afterwards.
         for program_id in DEFAULT_PROGRAM_IDS {
             assert!(svm.get_account(&program_id).is_some(), "{program_id} must be reloaded");
+        }
+    }
+
+    /// A VM that carries the SPL programs alone still tears them down when
+    /// the feature set changes.
+    #[test]
+    fn a_feature_set_reconfiguration_tears_the_spl_programs_down() {
+        use crate::programs::SPL_PROGRAM_IDS;
+
+        let mut svm = Hpsvm::builder()
+            .with_sysvars()
+            .with_spl_programs()
+            .build()
+            .expect("a VM with the SPL programs should build");
+        let before = svm.state.accounts.journal_len();
+
+        svm.set_feature_set(FeatureSet::all_enabled()).expect("reconfiguration should succeed");
+
+        let removed = removed_accounts(&svm, before);
+        for program_id in SPL_PROGRAM_IDS {
+            assert!(
+                removed.contains(&program_id),
+                "{program_id} must be torn down before it is rebuilt"
+            );
+        }
+    }
+
+    /// A reconfiguration tears the precompile accounts down before it
+    /// rebuilds them.
+    #[cfg(feature = "precompiles")]
+    #[test]
+    fn a_feature_set_reconfiguration_tears_the_precompiles_down() {
+        let mut svm = Hpsvm::new();
+        let precompile_ids = svm.extensions.precompiles.program_ids();
+        assert!(!precompile_ids.is_empty(), "the default VM installs the native precompiles");
+        let before = svm.state.accounts.journal_len();
+
+        svm.set_feature_set(FeatureSet::all_enabled()).expect("reconfiguration should succeed");
+
+        let removed = removed_accounts(&svm, before);
+        for program_id in precompile_ids {
+            assert!(
+                removed.contains(&program_id),
+                "{program_id} must be torn down before it is rebuilt"
+            );
         }
     }
 
@@ -2081,10 +2124,24 @@ mod tests {
         );
     }
 
+    /// The accounts the overlay removed since the journal entry `from`.
+    fn removed_accounts(svm: &Hpsvm, from: usize) -> Vec<Address> {
+        use crate::accounts_db::JournalEntry;
+
+        svm.state
+            .accounts
+            .journal_since(from)
+            .iter()
+            .filter_map(|entry| match entry {
+                JournalEntry::Account { address, was_removed: true, .. } => Some(*address),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// A handler that panics during validation, used to drive a panic through
     /// the transaction pipeline.
     struct PanickingHandler;
-
     impl<T: SvmTypesHost> TxHandler<T, VersionedTransaction, DetachedTx> for PanickingHandler {
         fn validate(
             &self,
@@ -2200,6 +2257,13 @@ mod jit_parity_tests {
     #[test]
     fn default_vms_share_default_program_executables() {
         // Phase 0.1: the memo move must preserve cache-hit behavior.
+        //
+        // The shared default runtime environment is published by the first
+        // default VM, and a VM that races the publication keeps an equivalent
+        // but distinct environment. A throwaway VM publishes it first, so the
+        // two VMs below provably run under the same environment and the
+        // memoized executable is shared.
+        let _publisher = Hpsvm::new();
         let a = Hpsvm::new();
         let b = Hpsvm::new();
         let memo_id = solana_address::address!("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");

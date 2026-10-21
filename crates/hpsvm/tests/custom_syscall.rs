@@ -128,6 +128,35 @@ pub fn test_custom_syscall_after_new() {
 }
 
 #[test]
+pub fn a_feature_set_reconfiguration_keeps_the_custom_syscall() {
+    let mut svm = hpsvm_ctor();
+    let payer_kp = Keypair::new();
+    let payer_pk = payer_kp.pubkey();
+    let program_id = address!("GtdambwDgHWrDJdVPBkEHGhCwokqgAoch162teUjJse2");
+    let Some(custom_syscall) = read_custom_syscall_program() else {
+        return;
+    };
+    svm.add_program(program_id, &custom_syscall).unwrap();
+    svm.airdrop(&payer_pk, 1000000000).unwrap();
+
+    // A reconfiguration refreshes the runtime environments, so the custom
+    // syscall has to be registered again — otherwise the program that uses it
+    // no longer verifies.
+    svm.set_feature_set(FeatureSet::all_enabled())
+        .expect("the reconfiguration must keep the custom syscall registered");
+
+    let blockhash = svm.latest_blockhash();
+    let msg = Message::new_with_blockhash(
+        &[Instruction { program_id, accounts: vec![], data: CUS_TO_BURN.to_le_bytes().to_vec() }],
+        Some(&payer_pk),
+        &blockhash,
+    );
+    let tx = Transaction::new(&[payer_kp], msg, blockhash);
+    let res = svm.send_transaction(tx);
+    assert!(res.is_ok(), "custom syscall tx failed: {:?}", res.err());
+}
+
+#[test]
 pub fn test_custom_syscall_with_builder() {
     let mut svm = hpsvm_builder_ctor();
     let payer_kp = Keypair::new();
