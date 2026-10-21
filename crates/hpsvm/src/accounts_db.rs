@@ -464,6 +464,7 @@ impl Accounts {
     }
 
     pub(crate) fn remove_account(&mut self, pubkey: &Address) {
+        let was_managed_sysvar = is_managed_sysvar_account(pubkey);
         self.record_journal(*pubkey);
         self.cache.inner.remove(pubkey);
         self.cache.removed.insert(*pubkey);
@@ -475,6 +476,12 @@ impl Accounts {
         // so the removal is visible to them too — which matches the invariant
         // the cache is derived from: the account overlay.
         self.programs_cache.write().remove_entry(pubkey);
+        // The sysvar cache is derived from the overlay too, so a removed
+        // sysvar has to leave it — otherwise the runtime would keep reading a
+        // sysvar whose account no longer exists.
+        if was_managed_sysvar {
+            self.rebuild_sysvar_cache();
+        }
     }
 
     /// Captures the current end of the journal as a restorable checkpoint.

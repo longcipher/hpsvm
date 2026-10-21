@@ -777,16 +777,66 @@ mod tests {
             .expect("transaction should build")
     }
 
+    /// A transaction that writes two accounts, so its lock set is wider than
+    /// a single transfer's.
+    fn two_recipient_transfer_tx(
+        payer: &Keypair,
+        recipients: &[Address],
+        blockhash: solana_hash::Hash,
+    ) -> VersionedTransaction {
+        let instructions: Vec<_> =
+            recipients.iter().map(|recipient| transfer(&payer.pubkey(), recipient, 1)).collect();
+        let message = Message::new_with_blockhash(&instructions, Some(&payer.pubkey()), &blockhash);
+        VersionedTransaction::try_new(VersionedMessage::Legacy(message), &[payer])
+            .expect("transaction should build")
+    }
+
     /// The planner fills the tightest conflict-free stage, not the first
     /// one, so the heavily locked stages stay free for the transactions that
     /// need them.
+    ///
+    /// The first stage locks three accounts (the payer and two recipients)
+    /// and the second one two, so a transaction that fits in both belongs in
+    /// the second.
     #[test]
     fn the_planner_fills_the_tightest_conflict_free_stage() {
         let mut svm = Svm::<BaseSvmTypes>::new();
         let blockhash = svm.latest_blockhash();
 
-        // Two transactions that touch disjoint accounts, then a third that
-        // conflicts with the first one only.
+        let payer_a = Keypair::new();
+        let payer_b = Keypair::new();
+        for payer in [&payer_a, &payer_b] {
+            svm.airdrop(&payer.pubkey(), 1_000_000_000).unwrap();
+        }
+
+        // The first transaction locks the payer and two recipients; the
+        // second one locks the payer and one of them, so it cannot share the
+        // first stage.
+        let shared = Address::new_unique();
+        let transactions = vec![
+            two_recipient_transfer_tx(&payer_a, &[shared, Address::new_unique()], blockhash),
+            transfer_tx(&payer_a, &shared, 1, blockhash),
+            transfer_tx(&payer_b, &Address::new_unique(), 1, blockhash),
+        ];
+
+        let plan = plan_transaction_batch(&svm, &transactions).unwrap();
+
+        assert_eq!(plan.stages.len(), 2);
+        // The third transaction fits in both stages, and the tighter second
+        // one wins.
+        assert_eq!(plan.stages[0].transaction_indexes, vec![0]);
+        assert_eq!(plan.stages[1].transaction_indexes, vec![1, 2]);
+    }
+
+    /// Two stages that lock the same number of accounts are equally tight, so
+    /// the earlier one wins.
+    #[test]
+    fn the_planner_keeps_the_first_stage_on_a_tie() {
+        let mut svm = Svm::<BaseSvmTypes>::new();
+        let blockhash = svm.latest_blockhash();
+
+        // The first two transactions write the same account, so they land in
+        // two stages that each lock the same number of accounts.
         let payer_a = Keypair::new();
         let payer_b = Keypair::new();
         for payer in [&payer_a, &payer_b] {
@@ -795,17 +845,17 @@ mod tests {
         let shared = Address::new_unique();
         let transactions = vec![
             transfer_tx(&payer_a, &shared, 1, blockhash),
-            transfer_tx(&payer_b, &Address::new_unique(), 1, blockhash),
-            transfer_tx(&payer_a, &Address::new_unique(), 1, blockhash),
+            transfer_tx(&payer_a, &shared, 2, blockhash),
+            transfer_tx(&payer_b, &Address::new_unique(), 3, blockhash),
         ];
 
         let plan = plan_transaction_batch(&svm, &transactions).unwrap();
 
-        // The first two are conflict-free and share a stage. The third writes
-        // the same payer as the first, so it needs its own stage.
         assert_eq!(plan.stages.len(), 2);
-        assert_eq!(plan.stages[0].transaction_indexes, vec![0, 1]);
-        assert_eq!(plan.stages[1].transaction_indexes, vec![2]);
+        // The third transaction fits in both stages, and the equally tight
+        // earlier stage wins.
+        assert_eq!(plan.stages[0].transaction_indexes, vec![0, 2]);
+        assert_eq!(plan.stages[1].transaction_indexes, vec![1]);
     }
 
     #[test]

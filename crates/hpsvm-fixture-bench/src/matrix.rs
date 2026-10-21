@@ -233,9 +233,8 @@ fn validate_variant_programs(
 #[cfg(all(test, feature = "bin-codec"))]
 mod tests {
     use hpsvm_fixture::{
-        AccountSnapshot, CaptureBuilder, Compare, ExecutionSnapshot, ExecutionStatus, Fixture,
-        FixtureExpectations, FixtureHeader, FixtureKind, ProgramBinding, RuntimeFixtureConfig,
-        TransactionFixture,
+        AccountSnapshot, CaptureBuilder, Compare, ExecutionSnapshot, Fixture, FixtureExpectations,
+        FixtureHeader, FixtureKind, ProgramBinding, RuntimeFixtureConfig, TransactionFixture,
     };
     use solana_keypair::Keypair;
     use solana_message::{Message, VersionedMessage};
@@ -244,19 +243,6 @@ mod tests {
     use solana_transaction::versioned::VersionedTransaction;
 
     use super::*;
-
-    fn empty_snapshot() -> ExecutionSnapshot {
-        ExecutionSnapshot {
-            status: ExecutionStatus::Success,
-            included: true,
-            compute_units_consumed: 0,
-            fee: 0,
-            logs: Vec::new(),
-            return_data: None,
-            inner_instructions: Vec::new(),
-            post_accounts: Vec::new(),
-        }
-    }
 
     /// A transfer fixture whose baseline matches what the VM produces, so the
     /// matrix rows report `pass == true`.
@@ -314,7 +300,10 @@ mod tests {
                 transaction.transaction_bytes.clone(),
             )),
             FixtureExpectations::new(
-                ExecutionSnapshot { fee: actual_fee.saturating_add(1), ..empty_snapshot() },
+                ExecutionSnapshot {
+                    fee: actual_fee.saturating_add(1),
+                    ..ExecutionSnapshot::default()
+                },
                 Compare::everything(),
             ),
         )
@@ -592,7 +581,7 @@ mod tests {
                 Vec::new(),
                 vec![0xff; 8],
             )),
-            FixtureExpectations::new(empty_snapshot(), Compare::everything()),
+            FixtureExpectations::new(ExecutionSnapshot::default(), Compare::everything()),
         );
 
         let error = ComputeUnitMatrixBencher::new()
@@ -701,7 +690,7 @@ mod tests {
 
         CaptureBuilder::new("checked")
             .runtime(RuntimeFixtureConfig::new(svm.block_env().slot, None, true, true))
-            .baseline(empty_snapshot())
+            .baseline(ExecutionSnapshot::default())
             .compares(Compare::everything())
             .capture_transaction(&tx)
             .expect("fixture capture must succeed")

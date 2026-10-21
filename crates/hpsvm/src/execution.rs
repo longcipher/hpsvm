@@ -6,7 +6,6 @@ use solana_address::Address;
 use solana_compute_budget::compute_budget_limits::ComputeBudgetLimits;
 use solana_fee::FeeFeatures;
 use solana_program_runtime::invoke_context::{EnvironmentConfig, InvokeContext};
-use solana_rent::Rent;
 use solana_sdk_ids::native_loader;
 use solana_svm_log_collector::LogCollector;
 use solana_svm_timings::ExecuteTimings;
@@ -27,10 +26,7 @@ use crate::{
     helpers::execute_tx_helper,
     message_processor::process_message,
     types::{AccountSourceFailure, ExecutionResult},
-    utils::{
-        construct_instructions_account,
-        rent::{check_rent_state_with_account, get_account_rent_state},
-    },
+    utils::construct_instructions_account,
 };
 
 struct CheckAndProcessTransactionSuccessCore<'ix_data> {
@@ -280,6 +276,18 @@ impl<T: SvmTypesHost> Svm<'_, T> {
             "hpsvm::process_transaction::shared_program_cache",
             self.state.accounts.shared_programs_cache()
         );
+        // The rent-exemption rule is *not* enforced for the accounts a
+        // transaction writes. `hpsvm` allows a transfer to create an account
+        // below the rent-exempt minimum — that is what makes a small transfer
+        // to a fresh account work, and the crate's documented examples depend
+        // on it. The one transition that is enforced is the fee payer's own,
+        // which `validate_fee_payer` checks before the fee is charged.
+        //
+        // The check used to live here, comparing the account's state before
+        // the transaction with the state it had *before* the transaction: the
+        // two were the same, so it could never fail. It was removed rather
+        // than made live, because enforcing agave's rule would reject the
+        // transfers this crate exists to make easy.
         let mut program_cache_guard = shared_program_cache.write();
         let mut accumulated_consume_units = 0;
         let account_keys = message.account_keys();
@@ -393,17 +401,6 @@ impl<T: SvmTypesHost> Svm<'_, T> {
                 rent.as_ref().clone(),
             )
         );
-
-        let rent_check = hotpath_block!(
-            "hpsvm::process_transaction::check_accounts_rent",
-            self.check_accounts_rent(tx, &context, &rent, &mut account_source_failures)
-        );
-        if let Err(mut error) = rent_check {
-            error.compute_units_consumed = accumulated_consume_units;
-            error.fee = fee;
-            error.account_source_failures = account_source_failures;
-            return Err(error);
-        }
 
         // `runtime_features` is an agave API taking the full `FeatureSet`;
         // the hoisted static gates above already cover this transaction's
@@ -589,57 +586,6 @@ impl<T: SvmTypesHost> Svm<'_, T> {
         }
 
         Ok(program_indices)
-    }
-
-    fn check_accounts_rent(
-        &self,
-        tx: &SanitizedTransaction,
-        context: &TransactionContext<'_>,
-        rent: &Rent,
-        account_source_failures: &mut Vec<AccountSourceFailure>,
-    ) -> Result<(), ExecutionResult> {
-        let message = tx.message();
-        for index in 0..message.account_keys().len() {
-            if message.is_writable(index) {
-                let account =
-                    context.accounts().try_borrow(index as IndexOfAccount).map_err(|err| {
-                        ExecutionResult {
-                            tx_result: Err(TransactionError::InstructionError(index as u8, err)),
-                            ..Default::default()
-                        }
-                    })?;
-
-                let pubkey = context.get_key_of_account_at_index(index as IndexOfAccount).map_err(
-                    |err| ExecutionResult {
-                        tx_result: Err(TransactionError::InstructionError(index as u8, err)),
-                        ..Default::default()
-                    },
-                )?;
-
-                let post_rent_state =
-                    get_account_rent_state(rent, account.lamports(), account.data().len());
-                let pre_rent_state = match self.state.accounts.try_get_account(pubkey) {
-                    Ok(Some(acc)) => get_account_rent_state(rent, acc.lamports(), acc.data().len()),
-                    Ok(None) => crate::utils::rent::RentState::Uninitialized,
-                    Err(error) => {
-                        account_source_failures.push(AccountSourceFailure {
-                            pubkey: *pubkey,
-                            error: error.to_string(),
-                        });
-                        crate::utils::rent::RentState::Uninitialized
-                    }
-                };
-
-                check_rent_state_with_account(
-                    &pre_rent_state,
-                    &post_rent_state,
-                    pubkey,
-                    index as IndexOfAccount,
-                )
-                .map_err(|error| ExecutionResult { tx_result: Err(error), ..Default::default() })?;
-            }
-        }
-        Ok(())
     }
 
     pub(crate) fn execute_sanitized_transaction<const MODE: InspectMode>(
@@ -860,6 +806,39 @@ mod tests {
         };
         assert!(
             matches!(error.err, TransactionError::InvalidProgramForExecution),
+            "unexpected error: {:?}",
+            error.err
+        );
+    }
+
+    /// A missing rent sysvar fails the transaction instead of panicking.
+    #[test]
+    fn a_missing_rent_sysvar_fails_the_transaction() {
+        let mut svm = Hpsvm::new();
+        let payer = Keypair::new();
+        let recipient = Address::new_unique();
+        svm.airdrop(&payer.pubkey(), 1_000_000).expect("airdrop should succeed");
+
+        // The rent sysvar is materialized by `set_sysvars`; removing it makes
+        // the rent check impossible.
+        svm.state.accounts.remove_account(&solana_sdk_ids::sysvar::rent::id());
+
+        let blockhash = svm.latest_blockhash();
+        let message = Message::new_with_blockhash(
+            &[solana_system_interface::instruction::transfer(&payer.pubkey(), &recipient, 1)],
+            Some(&payer.pubkey()),
+            &blockhash,
+        );
+        let tx = VersionedTransaction::try_new(VersionedMessage::Legacy(message), &[&payer])
+            .expect("transaction should build");
+
+        let staged = svm.transact(tx).expect("staging should not fail fatally");
+        let error = match staged.result() {
+            Ok(_) => panic!("a missing rent sysvar must fail the transaction"),
+            Err(error) => error.clone(),
+        };
+        assert!(
+            matches!(error.err, TransactionError::SanitizeFailure),
             "unexpected error: {:?}",
             error.err
         );

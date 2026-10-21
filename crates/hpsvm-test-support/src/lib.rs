@@ -197,6 +197,24 @@ mod tests {
         );
     }
 
+    /// An empty override is ignored, so a misconfigured environment falls
+    /// back to the workspace location instead of searching an empty path.
+    #[test]
+    fn an_empty_program_dir_variable_falls_back_to_the_workspace() {
+        let previous = std::env::var_os(PROGRAM_DIR_ENV);
+        // SAFETY: the test is the only writer of this variable in this
+        // process, and it restores the previous value before it returns.
+        unsafe { std::env::set_var(PROGRAM_DIR_ENV, "") };
+        let dirs = program_dirs();
+        match previous {
+            Some(previous) => unsafe { std::env::set_var(PROGRAM_DIR_ENV, previous) },
+            None => unsafe { std::env::remove_var(PROGRAM_DIR_ENV) },
+        }
+
+        assert_eq!(dirs.len(), 2);
+        assert!(dirs[0].ends_with("test_programs/target/deploy"), "got {}", dirs[0].display());
+    }
+
     /// The search root can be redirected, so a consumer that builds the
     /// programs elsewhere can point the lookup at its own output.
     #[test]

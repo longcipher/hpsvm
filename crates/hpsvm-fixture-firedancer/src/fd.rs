@@ -584,19 +584,6 @@ mod tests {
         }
     }
 
-    fn empty_snapshot() -> ExecutionSnapshot {
-        ExecutionSnapshot {
-            status: ExecutionStatus::Success,
-            included: true,
-            compute_units_consumed: 0,
-            fee: 0,
-            logs: Vec::new(),
-            return_data: None,
-            inner_instructions: Vec::new(),
-            post_accounts: Vec::new(),
-        }
-    }
-
     // ---------------------------------------------------------------------
     // address decoding
     // ---------------------------------------------------------------------
@@ -966,7 +953,7 @@ mod tests {
 
     #[test]
     fn snapshot_to_proto_effects_encodes_a_success() {
-        let snapshot = empty_snapshot();
+        let snapshot = ExecutionSnapshot::default();
         let effects = snapshot_to_proto_effects(&snapshot, address(9), 400).unwrap();
 
         assert_eq!(effects.result, 0);
@@ -978,8 +965,10 @@ mod tests {
 
     #[test]
     fn snapshot_to_proto_effects_exports_modified_accounts() {
-        let snapshot =
-            ExecutionSnapshot { post_accounts: vec![account_snapshot(2)], ..empty_snapshot() };
+        let snapshot = ExecutionSnapshot {
+            post_accounts: vec![account_snapshot(2)],
+            ..ExecutionSnapshot::default()
+        };
         let effects = snapshot_to_proto_effects(&snapshot, address(9), 100).unwrap();
 
         assert_eq!(effects.modified_accounts.len(), 1);
@@ -990,7 +979,7 @@ mod tests {
     fn snapshot_to_proto_effects_carries_return_data_for_the_same_program() {
         let snapshot = ExecutionSnapshot {
             return_data: Some(ReturnDataSnapshot::new(address(9), vec![4, 2])),
-            ..empty_snapshot()
+            ..ExecutionSnapshot::default()
         };
         let effects = snapshot_to_proto_effects(&snapshot, address(9), 100).unwrap();
         assert_eq!(effects.return_data, vec![4, 2]);
@@ -1002,7 +991,7 @@ mod tests {
     fn snapshot_to_proto_effects_rejects_foreign_return_data() {
         let snapshot = ExecutionSnapshot {
             return_data: Some(ReturnDataSnapshot::new(address(8), vec![4, 2])),
-            ..empty_snapshot()
+            ..ExecutionSnapshot::default()
         };
         match snapshot_to_proto_effects(&snapshot, address(9), 100) {
             Err(AdapterError::UnsupportedReturnDataProgram {
@@ -1025,7 +1014,7 @@ mod tests {
                     message: String::new(),
                 },
             },
-            ..empty_snapshot()
+            ..ExecutionSnapshot::default()
         };
         assert!(matches!(
             snapshot_to_proto_effects(&snapshot, address(9), 100).unwrap_err(),
@@ -1200,7 +1189,7 @@ mod tests {
                 Vec::new(),
                 Vec::new(),
             )),
-            FixtureExpectations::new(empty_snapshot(), Vec::new()),
+            FixtureExpectations::new(ExecutionSnapshot::default(), Vec::new()),
         );
 
         match FiredancerFixture::try_from(fixture) {
@@ -1226,7 +1215,7 @@ mod tests {
                 Vec::new(),
                 Vec::new(),
             )),
-            FixtureExpectations::new(empty_snapshot(), Vec::new()),
+            FixtureExpectations::new(ExecutionSnapshot::default(), Vec::new()),
         );
 
         assert!(matches!(
@@ -1250,7 +1239,7 @@ mod tests {
                 Vec::new(),
             )),
             FixtureExpectations::new(
-                ExecutionSnapshot { compute_units_consumed: 200, ..empty_snapshot() },
+                ExecutionSnapshot { compute_units_consumed: 200, ..ExecutionSnapshot::default() },
                 Vec::new(),
             ),
         );
@@ -1278,7 +1267,7 @@ mod tests {
                 Vec::new(),
             )),
             FixtureExpectations::new(
-                ExecutionSnapshot { compute_units_consumed: 100, ..empty_snapshot() },
+                ExecutionSnapshot { compute_units_consumed: 100, ..ExecutionSnapshot::default() },
                 Vec::new(),
             ),
         );

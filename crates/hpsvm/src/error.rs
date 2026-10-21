@@ -841,6 +841,66 @@ mod tests {
 
     /// Every `InvalidSysvarDataError` variant must render a message that names
     /// the offending sysvar, and the `#[from]` conversion must preserve it.
+    /// The database error of an execution failure is reachable, and it keeps
+    /// its fatal classification.
+    #[test]
+    fn an_execution_error_exposes_its_database_error() {
+        let db = DbError::fatal(AccountSourceError::new("source is down"));
+        let error = ExecutionError::from(db);
+
+        let inner = error.db_error().expect("the database error must be reachable");
+        assert!(inner.is_fatal());
+        assert!(
+            matches!(error, ExecutionError::Database(_)),
+            "expected a database failure, got {error:?}"
+        );
+    }
+
+    /// An execution failure that is not a database failure has no database
+    /// error behind it.
+    #[test]
+    fn an_execution_failure_without_a_database_error_has_none() {
+        let error = ExecutionError::Halt(HaltReason::AlreadyProcessed);
+        assert!(error.db_error().is_none());
+    }
+
+    /// The error source of an execution failure is the failure it wraps.
+    #[test]
+    fn an_execution_error_exposes_its_source() {
+        let inner = AccountSourceError::new("boom");
+        let error = ExecutionError::Database(DbError::non_fatal(inner.clone()));
+        let source = std::error::Error::source(&error).expect("the source must be reachable");
+        assert_eq!(source.to_string(), inner.to_string());
+    }
+
+    /// The error source of a transaction failure is the failure it wraps.
+    #[test]
+    fn a_transaction_error_exposes_its_source() {
+        let inner = TxValidationError::Invalid(TransactionError::AccountNotFound);
+        let error = TxError::Validation(inner.clone());
+        let source = std::error::Error::source(&error).expect("the source must be reachable");
+        assert_eq!(source.to_string(), inner.to_string());
+    }
+
+    /// An account-source failure keeps its own fatal classification.
+    #[test]
+    fn an_account_source_failure_is_fatal_only_when_the_source_is_unavailable() {
+        let unavailable = ExecutionError::AccountSource {
+            pubkey: Address::new_unique(),
+            source: AccountSourceError::new("down"),
+        };
+        assert!(unavailable.is_fatal());
+
+        let invalid = ExecutionError::AccountSource {
+            pubkey: Address::new_unique(),
+            source: AccountSourceError::with_kind(
+                AccountSourceErrorKind::InvalidResponse,
+                "bad payload",
+            ),
+        };
+        assert!(!invalid.is_fatal());
+    }
+
     #[test]
     fn invalid_sysvar_data_error_variants_render_and_convert() {
         let cases: [(InvalidSysvarDataError, &str); 9] = [

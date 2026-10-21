@@ -2003,6 +2003,84 @@ mod tests {
         assert_eq!(svm.get_balance(&recipient), Some(64));
     }
 
+    /// A reconfiguration tears the materialized programs down before it
+    /// rebuilds them, so every program account is written twice.
+    ///
+    /// The teardown is what makes a reconfiguration a clean slate: a program
+    /// the rebuild no longer covers would otherwise survive. The test pins the
+    /// teardown by counting the overlay writes.
+    #[test]
+    fn a_feature_set_reconfiguration_tears_the_programs_down_before_rebuilding_them() {
+        use crate::programs::DEFAULT_PROGRAM_IDS;
+
+        let mut svm = Hpsvm::new();
+        let before = svm.state.accounts.journal_len();
+
+        svm.set_feature_set(FeatureSet::all_enabled()).expect("reconfiguration should succeed");
+
+        let written = svm.state.accounts.journal_len() - before;
+        // A teardown writes every program account once and the rebuild writes
+        // it again, so the reconfiguration writes at least three entries per
+        // program (the program account, its program data where the loader
+        // needs one, and the rebuild).
+        assert!(
+            written >= 3 * DEFAULT_PROGRAM_IDS.len(),
+            "the reconfiguration must tear the programs down first, wrote {written} entries"
+        );
+
+        // The programs are back afterwards.
+        for program_id in DEFAULT_PROGRAM_IDS {
+            assert!(svm.get_account(&program_id).is_some(), "{program_id} must be reloaded");
+        }
+    }
+
+    /// A reconfiguration that turns a feature gate off removes the built-in
+    /// program that gate enabled.
+    #[test]
+    fn a_feature_set_reconfiguration_drops_a_disabled_builtin() {
+        let zk_token_proof = solana_sdk_ids::zk_token_proof_program::id();
+        let mut svm = Hpsvm::new();
+
+        // The default VM enables every feature, so the gated built-in is
+        // loaded.
+        assert!(
+            svm.get_account(&zk_token_proof).is_some(),
+            "the gated built-in must be loaded while its gate is on"
+        );
+
+        svm.set_feature_set(FeatureSet::default()).expect("reconfiguration should succeed");
+
+        assert!(
+            svm.get_account(&zk_token_proof).is_none(),
+            "the built-in must be removed when its gate is turned off"
+        );
+    }
+
+    /// A VM built without sysvars cannot execute a transaction: the rent
+    /// sysvar is needed to check the accounts the transaction touches.
+    #[test]
+    fn a_vm_without_sysvars_rejects_execution() {
+        let mut svm = Hpsvm::builder().build().expect("a minimal VM should build");
+        let payer = Keypair::new();
+        let recipient = Address::new_unique();
+        let tx = Transaction::new(
+            &[&payer],
+            Message::new(&[transfer(&payer.pubkey(), &recipient, 1)], Some(&payer.pubkey())),
+            svm.latest_blockhash(),
+        );
+
+        let result = svm.transact(tx).expect("staging should not fail fatally");
+        let error = match result.result() {
+            Ok(_) => panic!("a VM without sysvars must not execute"),
+            Err(error) => error.clone(),
+        };
+        assert!(
+            matches!(error.err, TransactionError::SanitizeFailure),
+            "unexpected error: {:?}",
+            error.err
+        );
+    }
+
     /// A handler that panics during validation, used to drive a panic through
     /// the transaction pipeline.
     struct PanickingHandler;

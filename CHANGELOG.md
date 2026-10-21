@@ -26,8 +26,10 @@
 - **Breaking:** `TxRegistry::dispatch` reports a `TxError` instead of the `TxRegistryError` that has been removed. An unroutable envelope is `TxError::UnknownTag`.
 - **Breaking:** the `Host` trait's write methods (`set_account`, `set_sysvar`) report a `HostError` instead of an `HPSVMError`.
 - **Breaking:** `ResultConfig::default()` no longer panics on a mismatch; the fail-fast behaviour is an explicit opt-in through the `panic` flag.
+- **Breaking:** `Inspector::cpi_start` and `Inspector::cpi_end` are gone: the execution pipeline has no firing site for them, so they were a public promise the VM could not keep. The CPI depth remains observable through `ExecutionTrace`.
 - **Breaking:** the fixture crates are split. `hpsvm-fixture` keeps the fixture model, its codecs and the runner; the compute-unit benchmarking moved to `hpsvm-fixture-bench` and the FireDancer protobuf codec to `hpsvm-fixture-firedancer`. The `fd-codec` and `fd-json` features moved to `hpsvm-fixture-firedancer`, and the `report-io` and `markdown` features moved to `hpsvm-fixture-bench`. A consumer that only records and replays fixtures no longer compiles the protobuf dependency or the vendored FireDancer fork.
 - **Breaking:** `ExecutionStatus::Failure` carries a structured `ExecutionFailure` instead of a `kind`/`message` pair of strings, and `ExecutionSnapshotFields` is gone: `ExecutionSnapshot` is now constructible directly.
+- The VM's state is grouped into cohesive sub-structs: the mutable state, the pluggable facilities, and the record of which runtime components are materialized. The change is internal; the public surface is unchanged.
 - `hpsvm-cli` decodes base64 and hex transaction encodings with the `base64` and `hex` crates instead of hand-written codecs.
 
 ### Fixed
