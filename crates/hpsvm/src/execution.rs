@@ -22,6 +22,7 @@ use crate::{
     FeatureGate, InspectMode, Svm, SvmTypesHost, TxFeatureFlags,
     account_source::AccountSourceError,
     accounts_db::AccountSourceTrackingAddressLoader,
+    agave_compat::{AgaveMessage, to_agave_instruction},
     error::HPSVMError,
     helpers::execute_tx_helper,
     message_processor::process_message,
@@ -130,8 +131,15 @@ fn get_compute_budget_limits(
     sanitized_tx: &SanitizedTransaction,
     feature_set: &FeatureSet,
 ) -> Result<ComputeBudgetLimits, ExecutionResult> {
+    // `process_compute_budget_instructions` is typed against the agave-4.5
+    // (`solana-svm-transaction` 6.0.0) `SVMInstruction`, so each instruction is
+    // re-wrapped on the way in (see `agave_compat`). The mapping iterator stays
+    // `Clone` because the underlying message iterator is.
     solana_compute_budget_instruction::instructions_processor::process_compute_budget_instructions(
-        sanitized_tx.program_instructions_iter(),
+        sanitized_tx
+            .message()
+            .program_instructions_iter()
+            .map(|(program_id, instruction)| (program_id, to_agave_instruction(instruction))),
         feature_set,
     )
     .map_err(|e| ExecutionResult { tx_result: Err(e), ..Default::default() })
@@ -216,6 +224,12 @@ impl<T: SvmTypesHost> Svm<'_, T> {
     fn process_transaction<'a, 'b, const MODE: InspectMode>(
         &'a self,
         tx: &'b SanitizedTransaction,
+        // Agave-4.5 view of the same message: the runtime APIs below
+        // (`calculate_fee`, `prepare_top_level_instructions`) are typed against
+        // the older interface crates (see `agave_compat`). It borrows the
+        // sanitized transaction, so it must outlive the returned transaction
+        // context.
+        agave_message: &'b AgaveMessage<'b>,
         compute_budget_limits: ComputeBudgetLimits,
         log_collector: Rc<RefCell<LogCollector>>,
         flags: &TxFeatureFlags,
@@ -258,7 +272,7 @@ impl<T: SvmTypesHost> Svm<'_, T> {
         let prioritization_fee = compute_budget_limits.get_prioritization_fee();
         let fee = hotpath_block!("hpsvm::process_transaction::calculate_fee", {
             solana_fee::calculate_fee(
-                message,
+                agave_message,
                 self.version.fee_structure.lamports_per_signature,
                 prioritization_fee,
                 FeeFeatures {},
@@ -417,7 +431,7 @@ impl<T: SvmTypesHost> Svm<'_, T> {
         let tx_result = hotpath_block!("hpsvm::process_transaction::process_message", {
             process_message::<MODE, T>(
                 self,
-                message,
+                agave_message,
                 &program_indices,
                 &mut invoke_context,
                 &mut ExecuteTimings::default(),
@@ -623,13 +637,23 @@ impl<T: SvmTypesHost> Svm<'_, T> {
         log_collector: Rc<RefCell<LogCollector>>,
         flags: &TxFeatureFlags,
     ) -> ExecutionResult {
+        // Agave-4.5 view of the sanitized message (see `agave_compat`). Created
+        // here so the borrow outlives the transaction context returned from
+        // `check_and_process_transaction`, whose instruction data is borrowed
+        // through this view.
+        let agave_message = AgaveMessage::new(sanitized_tx.message());
         let CheckAndProcessTransactionSuccess {
             core: CheckAndProcessTransactionSuccessCore { result, compute_units_consumed, context },
             fee,
             payer_key,
             account_source_failures,
             inspector_live,
-        } = match self.check_and_process_transaction::<MODE>(sanitized_tx, log_collector, flags) {
+        } = match self.check_and_process_transaction::<MODE>(
+            sanitized_tx,
+            &agave_message,
+            log_collector,
+            flags,
+        ) {
             Ok(value) => value,
             Err(value) => return value,
         };
@@ -660,6 +684,7 @@ impl<T: SvmTypesHost> Svm<'_, T> {
     fn check_and_process_transaction<'a, 'b, const MODE: InspectMode>(
         &'a self,
         sanitized_tx: &'b SanitizedTransaction,
+        agave_message: &'b AgaveMessage<'b>,
         log_collector: Rc<RefCell<LogCollector>>,
         flags: &TxFeatureFlags,
     ) -> Result<CheckAndProcessTransactionSuccess<'b>, ExecutionResult>
@@ -679,7 +704,13 @@ impl<T: SvmTypesHost> Svm<'_, T> {
         let compute_budget_limits =
             get_compute_budget_limits(sanitized_tx, &self.version.feature_set)?;
         self.maybe_history_check(sanitized_tx)?;
-        self.process_transaction::<MODE>(sanitized_tx, compute_budget_limits, log_collector, flags)
+        self.process_transaction::<MODE>(
+            sanitized_tx,
+            agave_message,
+            compute_budget_limits,
+            log_collector,
+            flags,
+        )
     }
 
     fn maybe_history_check(

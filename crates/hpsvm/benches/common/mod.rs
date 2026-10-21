@@ -1,6 +1,10 @@
 #![allow(dead_code)]
 
-use std::{env, path::PathBuf};
+// `env` is only read by the `hotpath` / `register-tracing` guards below; gate
+// the import so the default-feature build does not warn about it.
+#[cfg(any(feature = "hotpath", feature = "register-tracing"))]
+use std::env;
+use std::path::PathBuf;
 
 use hpsvm::HPSVM;
 #[cfg(feature = "register-tracing")]

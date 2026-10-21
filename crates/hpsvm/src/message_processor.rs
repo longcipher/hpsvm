@@ -1,16 +1,22 @@
 // adapted from agave 4.x
 use solana_program_runtime::invoke_context::InvokeContext;
 use solana_svm_timings::ExecuteTimings;
-use solana_svm_transaction::svm_message::SVMMessage;
+// The agave-side copy of the message traits: `AgaveMessage` implements these,
+// and `InvokeContext` (agave 4.5) is typed against them.
+use solana_svm_transaction_agave::svm_message::SVMStaticMessage;
 use solana_transaction_context::IndexOfAccount;
 use solana_transaction_error::TransactionError;
 
-use crate::{InspectMode, Svm, SvmTypesHost};
+use crate::{InspectMode, Svm, SvmTypesHost, agave_compat::AgaveMessage};
 
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(crate) fn process_message<'ix_data, const MODE: InspectMode, T: SvmTypesHost>(
     svm: &Svm<'_, T>,
-    message: &'ix_data impl SVMMessage,
+    // The agave-4.5 view of the sanitized message: `InvokeContext` is typed
+    // against the older interface crates, so its `prepare_top_level_instructions`
+    // needs this bridge (see `agave_compat`). The borrow must outlive the
+    // transaction context the invoke context writes instruction data into.
+    message: &'ix_data AgaveMessage<'ix_data>,
     program_indices: &[IndexOfAccount],
     invoke_context: &mut InvokeContext<'_, 'ix_data>,
     execute_timings: &mut ExecuteTimings,

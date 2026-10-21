@@ -40,7 +40,10 @@ use solana_slot_hashes::{SlotHash, SlotHashes};
 use solana_slot_history::SlotHistory;
 use solana_stake_interface::stake_history::StakeHistory;
 use solana_svm_log_collector::LogCollector;
-use solana_svm_transaction::svm_message::{SVMMessage, SVMStaticMessage};
+use solana_svm_transaction::svm_message::SVMStaticMessage;
+// The agave-4.5 copy of the message traits, used for the nonce check in
+// `check_message_for_nonce` (see `agave_compat`).
+use solana_svm_transaction_agave::svm_message::SVMMessage as AgaveSVMMessage;
 use solana_sysvar::Sysvar;
 #[expect(deprecated)]
 use solana_sysvar::{
@@ -64,6 +67,7 @@ use crate::{
     CustomSyscallRegistration, Hpsvm, HpsvmBuilder, InspectMode, Inspector, JitPolicy,
     ProgramTierStats, RuntimeLimits, Svm, SvmTypesHost, TransactionOrigin, Version,
     account_source::EmptyAccountSource,
+    agave_compat::AgaveMessage,
     batch::{
         TransactionBatchError, TransactionBatchExecutionResult, TransactionBatchPlan,
         plan_transaction_batch, send_transaction_batch,
@@ -1693,7 +1697,16 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
     }
 
     pub(crate) fn check_message_for_nonce(&self, message: &SanitizedMessage) -> bool {
-        SVMMessage::get_durable_nonce(message)
+        // Nonce detection runs through the agave-4.5 (`solana-svm-transaction`
+        // 6.0.0) trait impl, i.e. the exact logic the agave bank this crate
+        // simulates applies: write-lock demotion is accounted for, so a nonce
+        // account that is also invoked as a program id is not treated as a
+        // durable nonce. The workspace's newer 8.0.0 copy moved this method to
+        // `SVMStaticMessage` behind a SIMD-0602 flag and dropped the demotion
+        // check; routing through the bridge keeps the pre-upgrade behaviour
+        // without re-implementing it (see `agave_compat`).
+        let agave_message = AgaveMessage::new(message);
+        AgaveSVMMessage::get_durable_nonce(&agave_message)
             .and_then(|nonce_address| self.accounts.get_account(nonce_address))
             .and_then(|nonce_account| {
                 verify_nonce_account(&nonce_account, message.recent_blockhash())

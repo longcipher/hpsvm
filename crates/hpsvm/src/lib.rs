@@ -340,8 +340,11 @@ pub mod token;
 /// Public return types and execution metadata.
 pub mod types;
 
+// Bridges the workspace's newer solana interface types to the older copies the
+// agave 4.5 runtime crates are compiled against (see `agave_compat`).
 mod account_source;
 mod accounts_db;
+mod agave_compat;
 mod builder;
 mod callback;
 mod commit;
