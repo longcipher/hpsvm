@@ -46,6 +46,9 @@
 - Report the loss of the installed inspector on a parallel batch stage instead of dropping the hooks silently, and document the semantics on `send_transaction_batch`.
 - Keep the VM's field list in one place: the parallel batch workers used to hand-write it, so a new field could be silently dropped from a worker.
 - Report a program binding without an ELF as an error in every fixture path: the compute-unit bencher used to strip the bindings and run the fixture against a different program than the one it named.
+- Rebuild the sysvar cache when a managed sysvar account is removed: the cache is derived from the overlay, so a removed sysvar must leave it.
+- Remove the dead rent check: it compared an account's state before the transaction with the state it had *before* the transaction, so it could never fail. The one transition that matters — the fee payer's own — is still checked. The divergence from agave (a transfer may create an account below the rent-exempt minimum) is now documented.
+- Make the default-VM memoization test deterministic: it raced the publication of the shared default runtime environment, so the two VMs could end up under equivalent but distinct environments.
 
 ## [0.11.0] - 2026-03-30
 
