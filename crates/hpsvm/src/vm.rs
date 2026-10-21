@@ -2126,6 +2126,54 @@ mod tests {
             .expect("the reconfiguration must keep the custom syscall registered");
     }
 
+    /// A reconfiguration refreshes the runtime environments.
+    ///
+    /// The environment encodes the feature set, so a feature-set change has
+    /// to rebuild it. A VM that carries a custom syscall but no built-ins
+    /// exercises exactly that path: the built-ins are not reloaded, so the
+    /// refresh is the only thing that can rebuild the environment.
+    #[test]
+    fn a_feature_set_reconfiguration_refreshes_the_runtime_environments() {
+        use solana_program_runtime::{
+            invoke_context::InvokeContext, solana_sbpf::program::BuiltinProgram,
+        };
+
+        solana_program_runtime::solana_sbpf::declare_builtin_function!(
+            /// A custom syscall, registered to observe the environment refresh.
+            SyscallProbeRefresh,
+            fn rust(
+                _invoke_context: &mut InvokeContext<'_, '_>,
+                _arg1: u64,
+                _arg2: u64,
+                _arg3: u64,
+                _arg4: u64,
+                _arg5: u64,
+            ) -> Result<u64, Box<dyn std::error::Error>> {
+                Ok(0)
+            }
+        );
+
+        fn register(
+            loader: &mut BuiltinProgram<InvokeContext<'static, 'static>>,
+            name: &str,
+        ) -> Result<(), solana_program_runtime::solana_sbpf::elf::ElfError> {
+            loader.register_definition::<SyscallProbeRefresh>(name)
+        }
+
+        let mut svm = Hpsvm::builder().with_sysvars().build().expect("a minimal VM should build");
+        svm.register_custom_syscall("sol_probe_refresh_cus", register)
+            .expect("custom syscall registration should succeed");
+
+        let before = Arc::as_ptr(svm.state.accounts.runtime_environments_arc());
+        svm.set_feature_set(FeatureSet::all_enabled()).expect("reconfiguration should succeed");
+        let after = Arc::as_ptr(svm.state.accounts.runtime_environments_arc());
+
+        assert_ne!(
+            before, after,
+            "the runtime environments must be rebuilt for the new feature set"
+        );
+    }
+
     /// A reconfiguration that turns a feature gate off removes the built-in
     /// program that gate enabled.
     #[test]
