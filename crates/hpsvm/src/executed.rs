@@ -22,9 +22,8 @@ use solana_transaction_error::TransactionError;
 use crate::{
     InspectMode, Svm, SvmTypesHost,
     accounts_db::{StateCheckpoint, is_managed_sysvar_account},
-    error::HPSVMError,
+    error::{ExecutionError, TxError},
     state_change_sink::{AccountChange, AccountChangeRecord, StateChangeSink},
-    tx_registry::TxRegistryError,
     types::{TransactionMetadata, TransactionResult},
 };
 
@@ -48,7 +47,7 @@ pub struct DetachedTx {
     pub(crate) status: Result<(), TransactionError>,
     pub(crate) included: bool,
     pub(crate) fee_payer: Option<Address>,
-    pub(crate) fatal_error: Option<HPSVMError>,
+    pub(crate) fatal_error: Option<ExecutionError>,
     /// Whether the installed inspector accepted this execution, captured at
     /// execution time so the staged commit path does not consult it again.
     pub(crate) inspector_live: bool,
@@ -85,7 +84,7 @@ impl DetachedTx {
     /// Used by the fallible entry points to preserve their legacy
     /// fatal-error conventions without losing the detached outcome.
     #[inline]
-    pub(crate) fn take_fatal(&mut self) -> Option<HPSVMError> {
+    pub(crate) fn take_fatal(&mut self) -> Option<ExecutionError> {
         self.fatal_error.take()
     }
 
@@ -98,7 +97,7 @@ impl DetachedTx {
     /// every tag [`tag_of`](crate::tag_of) can derive — but infallible paths
     /// still need a well-typed answer.
     #[cold]
-    pub(crate) fn for_dispatch_failure(error: &TxRegistryError, signature: Signature) -> Self {
+    pub(crate) fn for_dispatch_failure(error: &TxError, signature: Signature) -> Self {
         Self {
             meta: TransactionMetadata { signature, ..Default::default() },
             post_accounts: Vec::new(),

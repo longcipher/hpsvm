@@ -4,13 +4,11 @@
 //! account, sysvar, program-cache and log access. Only the subset expressible
 //! with the types that exist today is implemented here:
 //!
-//! * `Version` does NOT exist yet (Task 2.1 owns it), so there is no `version()` accessor.
+//! * The `Version` object lives in [`crate::Version`] and is reached through [`Svm::version`].
 //! * `BlockEnvExt` (the `T::BlockEnvExt` slot) selects the `ext` carried by [`BlockEnv`], so
 //!   `block_env()` returns `BlockEnv<T::BlockEnvExt>`.
-//! * `DbResult`, `LoadError` and `AccountHandle` do NOT exist yet (Task 7.1 owns the error model),
-//!   so account/sysvar methods bind to the real existing types: [`Account`], [`HPSVMError`], and
-//!   the `Svm` sysvar bounds (`Default + Serialize + SysvarId` for writes, `Sysvar + SysvarId +
-//!   DeserializeOwned` for reads).
+//! * Account and sysvar writes report through [`HostError`], the host layer of the error taxonomy,
+//!   so the fatal classification of a failed write survives the projection.
 //! * `ProgramCache` does NOT exist as a named type yet, so program-cache presence is exposed as
 //!   `has_program()`, delegating to the existing `AccountsDb::has_program_cache_entry`.
 //! * `log()` has no backing sink yet; it forwards to `tracing::info!` so the call is observable
@@ -22,7 +20,10 @@ use solana_address::Address;
 use solana_sysvar::Sysvar;
 use solana_sysvar_id::SysvarId;
 
-use crate::{BlockEnv, Svm, SvmTypesHost, error::HPSVMError};
+use crate::{
+    BlockEnv, Svm, SvmTypesHost,
+    error::{HPSVMError, HostError},
+};
 
 /// Host capabilities a type family runs against.
 ///
@@ -37,7 +38,7 @@ pub trait Host<T: SvmTypesHost> {
     fn account(&self, addr: &Address) -> Option<Account>;
 
     /// Writes `account` at `addr`, mirroring [`Svm::set_account`].
-    fn set_account(&mut self, addr: Address, account: Account) -> Result<(), HPSVMError>;
+    fn set_account(&mut self, addr: Address, account: Account) -> Result<(), HostError>;
 
     /// Reads a sysvar, mirroring [`Svm::get_sysvar`].
     fn sysvar<S>(&self) -> S
@@ -45,7 +46,7 @@ pub trait Host<T: SvmTypesHost> {
         S: Sysvar + SysvarId + DeserializeOwned;
 
     /// Overwrites a sysvar, mirroring [`Svm::set_sysvar`].
-    fn set_sysvar<S>(&mut self, sysvar: &S) -> Result<(), HPSVMError>
+    fn set_sysvar<S>(&mut self, sysvar: &S) -> Result<(), HostError>
     where
         S: Default + Serialize + SysvarId;
 
@@ -68,8 +69,8 @@ impl<T: SvmTypesHost> Host<T> for Svm<'_, T> {
         Svm::get_account(self, addr)
     }
 
-    fn set_account(&mut self, addr: Address, account: Account) -> Result<(), HPSVMError> {
-        Svm::set_account(self, addr, account)
+    fn set_account(&mut self, addr: Address, account: Account) -> Result<(), HostError> {
+        Svm::set_account(self, addr, account).map_err(host_error)
     }
 
     fn sysvar<S>(&self) -> S
@@ -79,11 +80,11 @@ impl<T: SvmTypesHost> Host<T> for Svm<'_, T> {
         Svm::get_sysvar(self)
     }
 
-    fn set_sysvar<S>(&mut self, sysvar: &S) -> Result<(), HPSVMError>
+    fn set_sysvar<S>(&mut self, sysvar: &S) -> Result<(), HostError>
     where
         S: Default + Serialize + SysvarId,
     {
-        Svm::set_sysvar(self, sysvar)
+        Svm::set_sysvar(self, sysvar).map_err(host_error)
     }
 
     fn has_program(&self, program_id: &Address) -> bool {
@@ -92,6 +93,20 @@ impl<T: SvmTypesHost> Host<T> for Svm<'_, T> {
 
     fn log(&mut self, message: &str) {
         tracing::info!(target: "hpsvm::host", "{message}");
+    }
+}
+
+/// Projects an outer error onto the host layer.
+///
+/// The concrete error stays recoverable by downcast through the erased
+/// execution failure, so no information is lost at the boundary.
+fn host_error(error: HPSVMError) -> HostError {
+    match error {
+        HPSVMError::Execution(error) => HostError::Execution(error),
+        HPSVMError::Database(error) => {
+            HostError::Execution(crate::error::ExecutionError::Database(error))
+        }
+        other => HostError::Execution(crate::error::ExecutionError::from(other)),
     }
 }
 

@@ -73,7 +73,7 @@ use crate::{
         plan_transaction_batch, send_transaction_batch,
     },
     commit::detached_into_result_and_delta,
-    error::HPSVMError,
+    error::{HPSVMError, TxError},
     executed::{DetachedTx, ExecutedTx, StagedFailure, staging_touches_caches},
     helpers::*,
     history::TransactionHistory,
@@ -81,7 +81,7 @@ use crate::{
     precompile_registry::PrecompileProvider,
     programs::{DEFAULT_PROGRAM_IDS, SPL_PROGRAM_IDS, load_default_programs, load_spl_programs},
     runtime_registry::RuntimeExtensionRegistry,
-    tx_registry::{TxHandler, TxRegistryError, TxTag, tag_of},
+    tx_registry::{TxHandler, TxTag, tag_of},
     types::{
         AccountDiff, AccountSourceFailure, ExecutionDiagnostics, ExecutionResult, ExecutionTrace,
         FailedTransactionMetadata, SimulatedTransactionInfo, TransactionMetadata,
@@ -1397,7 +1397,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
     ) -> Result<DetachedTx, HPSVMError> {
         let mut detached = self.dispatch_detached(tx.into()).map_err(HPSVMError::from)?;
         if let Some(error) = detached.take_fatal() {
-            return Err(error);
+            return Err(HPSVMError::from(error));
         }
         Ok(detached)
     }
@@ -1455,7 +1455,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
     pub(crate) fn dispatch_detached(
         &self,
         tx: VersionedTransaction,
-    ) -> Result<DetachedTx, TxRegistryError> {
+    ) -> Result<DetachedTx, TxError> {
         let tag = tag_of(&tx);
         self.registry.dispatch(tag, tx, self)
     }
@@ -1502,7 +1502,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
             // overlay), so report the fatal error with its legacy-identical
             // `Err` result and no history entry.
             let (result, _) = detached_into_result_and_delta(detached, false);
-            return Err(StagedFailure::new(error, result));
+            return Err(StagedFailure::new(HPSVMError::from(error), result));
         }
 
         let checkpoint = svm.accounts.checkpoint();
@@ -1998,7 +1998,7 @@ mod tests {
             &self,
             _tx: &VersionedTransaction,
             _host: &Svm<'_, T>,
-        ) -> Result<(), HPSVMError> {
+        ) -> Result<(), crate::error::TxValidationError> {
             panic!("handler panic");
         }
 
@@ -2006,7 +2006,7 @@ mod tests {
             &self,
             _tx: VersionedTransaction,
             _host: &Svm<'_, T>,
-        ) -> Result<DetachedTx, HPSVMError> {
+        ) -> Result<DetachedTx, crate::error::ExecutionError> {
             unreachable!("validate panics before execute runs")
         }
     }

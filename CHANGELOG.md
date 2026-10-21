@@ -9,6 +9,9 @@
 - Add extracted execution environment surfaces, including `HPSVM::block_env` and the public `Inspector` hook via `HPSVM::with_inspector`.
 - Add `hpsvm fixture record` to the CLI, closing the fixture authoring loop: a signed transaction plus a JSON pre-state and program ELFs now produce a replayable fixture with a recorded baseline. Transactions may be supplied as raw, base64, or hex bytes, and pre-accounts accept base58 or 32-byte addresses.
 - Document the full `hpsvm` CLI surface (fixture record/inspect/run/compare and cu report) in the README.
+- Add `hpsvm_fixture::Mismatch` and `hpsvm_fixture::MismatchKind`: a failed comparison or check is now reported as data, through `try_compare_with` and `try_run_checks`, instead of aborting the caller's process.
+- Add `hpsvm_fixture::configure_vm`, `hpsvm_fixture::bind_programs` and `Fixture::programs()`: the library now owns the fixture runtime configuration and the program bindings, so a recording and a replay cannot drift apart.
+- Export `hpsvm::HPSVMError` from the crate root: it is the crate's primary error type and was previously only reachable through `hpsvm::error::HPSVMError`.
 
 ### Changed
 
@@ -17,12 +20,25 @@
 - Centralize custom syscalls and standard precompile materialization behind an internal `RuntimeExtensionRegistry`.
 - Run doctests as part of `just test-all`; `--all-targets` alone skips them, so the documented examples were never verified in CI.
 - Compile and run every Rust example in the README as a doctest so the published quick-start cannot drift from the API.
+- **Breaking:** `TxHandler::validate` now reports a `TxValidationError` and `TxHandler::execute` an `ExecutionError` instead of the flat `HPSVMError`. The layered taxonomy is now live at every boundary, so the fatal classification travels in the type.
+- **Breaking:** `TxRegistry::dispatch` reports a `TxError` instead of the `TxRegistryError` that has been removed. An unroutable envelope is `TxError::UnknownTag`.
+- **Breaking:** the `Host` trait's write methods (`set_account`, `set_sysvar`) report a `HostError` instead of an `HPSVMError`.
+- **Breaking:** `ResultConfig::default()` no longer panics on a mismatch; the fail-fast behaviour is an explicit opt-in through the `panic` flag.
+- `hpsvm-cli` decodes base64 and hex transaction encodings with the `base64` and `hex` crates instead of hand-written codecs.
 
 ### Fixed
 
 - Persist `--compute-unit-limit` into the recorded fixture's runtime block. The limit was applied to the recording VM but not stored, so a replay used the VM default and a fixture recorded against a tight budget could not reproduce its own baseline.
 - Make the broken stake delegation path visible instead of silent. The vendored `core_bpf_stake-1.0.1.so` ELF has drifted from the crate generation and cannot decode a vote account, so `DelegateStake` fails with `InvalidAccountData`. `test_stake_delegate` now carries a reason on its `#[ignore]`, a new `delegate_is_blocked_by_the_stale_vendored_stake_elf` test runs by default and pins the current behaviour, and the ELF load site documents the drift and how to refresh it. The guard fails with an explicit instruction once the binary is rebuilt.
 - Add `just sbf-test-programs` and make `just test-all` depend on it, so a missing SBF test program reports which artifact is absent instead of failing later with a bare `Os { code: 2 }` from inside an unrelated test.
+- Remove the panic on an unreachable account source: the read-only program account fast path used to swallow the source error and then `expect` the account to be present, turning a classified, recoverable failure into a process abort.
+- Restore the `sigverify` flag when a panic escapes the transaction pipeline: `process_instruction_chain` used a bare save/restore, so a panic left signature verification permanently disabled on the VM.
+- Report a missing clock, slot-hashes or rent sysvar as an error instead of panicking: an `Accounts` database can legitimately be built without sysvars.
+- Invalidate the program cache entry when an account is removed, so a transaction can no longer invoke a program whose account no longer exists.
+- De-duplicate the prewarm read set through a hash set: the prewarm was quadratic in the number of accounts of a batch stage's read set.
+- Fill the tightest conflict-free stage in the batch planner instead of the first one, which tends to produce fewer serial rounds.
+- Report the loss of the installed inspector on a parallel batch stage instead of dropping the hooks silently, and document the semantics on `send_transaction_batch`.
+- Keep the VM's field list in one place: the parallel batch workers used to hand-write it, so a new field could be silently dropped from a worker.
 
 ## [0.11.0] - 2026-03-30
 

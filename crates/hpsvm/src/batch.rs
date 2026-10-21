@@ -10,7 +10,7 @@ use thiserror::Error;
 use crate::{
     AccountSourceError, StateChangeSet, Svm, SvmTypesHost, TransactionOrigin,
     account_source::AccountSourceErrorKind, accounts_db::AccountsDb, apply_commit_delta,
-    error::HPSVMError, history::TransactionHistory, types::TransactionResult,
+    error::ExecutionError, history::TransactionHistory, types::TransactionResult,
 };
 
 /// A conflict-free stage in a transaction batch plan.
@@ -309,7 +309,7 @@ fn sanitize_transaction_for_batch<T: SvmTypesHost>(
     };
 
     result.map_err(|execution| match execution.fatal_error {
-        Some(HPSVMError::AccountSource { pubkey, source }) => {
+        Some(ExecutionError::AccountSource { pubkey, source }) => {
             BatchSanitizeError::AccountSource { pubkey, source }
         }
         _ => BatchSanitizeError::Transaction(
@@ -553,7 +553,7 @@ mod tests {
             &self,
             _tx: &VersionedTransaction,
             _host: &Svm<'_, T>,
-        ) -> Result<(), crate::error::HPSVMError> {
+        ) -> Result<(), crate::error::TxValidationError> {
             Ok(())
         }
 
@@ -561,7 +561,7 @@ mod tests {
             &self,
             tx: VersionedTransaction,
             host: &Svm<'_, T>,
-        ) -> Result<DetachedTx, crate::error::HPSVMError> {
+        ) -> Result<DetachedTx, crate::error::ExecutionError> {
             self.counter.fetch_add(1, Ordering::SeqCst);
             Ok(host.default_execute_detached(tx))
         }

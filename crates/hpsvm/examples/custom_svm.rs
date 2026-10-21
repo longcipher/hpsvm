@@ -18,9 +18,9 @@ use std::{
 
 use agave_feature_set::FeatureSet;
 use hpsvm::{
-    AccountChange, BlockEnv, ClusterSpecId, Host, Precompile, PrecompileSet, StateChangeSink, Svm,
-    SvmInstructionCtx, SvmTypes, SvmTypesHost, TxHandler, TxRegistry, TxRegistryError, TxTag,
-    Version, error::HPSVMError,
+    AccountChange, BlockEnv, ClusterSpecId, ExecutionError, Host, Precompile, PrecompileSet,
+    StateChangeSink, Svm, SvmInstructionCtx, SvmTypes, SvmTypesHost, TxError, TxHandler,
+    TxRegistry, TxTag, TxValidationError, Version,
 };
 use hpsvm_macros::svm_instruction;
 use solana_account::{Account, ReadableAccount};
@@ -95,7 +95,7 @@ impl TxHandler<CustomSvm, VersionedTransaction, String> for L1GreetingHandler {
         &self,
         _tx: &VersionedTransaction,
         _host: &Svm<'_, CustomSvm>,
-    ) -> Result<(), HPSVMError> {
+    ) -> Result<(), TxValidationError> {
         Ok(())
     }
 
@@ -103,7 +103,7 @@ impl TxHandler<CustomSvm, VersionedTransaction, String> for L1GreetingHandler {
         &self,
         _tx: VersionedTransaction,
         host: &Svm<'_, CustomSvm>,
-    ) -> Result<String, HPSVMError> {
+    ) -> Result<String, ExecutionError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(format!("l1_slot={}", host.block_env().ext.l1_slot))
     }
@@ -277,7 +277,7 @@ fn main() {
         .dispatch(TxTag::Custom(9), legacy_tx(&payer, probe_ix, svm.latest_blockhash()), &svm)
         .expect_err("an unregistered tag must fail");
     assert!(
-        matches!(unknown, TxRegistryError::UnknownTag(TxTag::Custom(9))),
+        matches!(unknown, TxError::UnknownTag(TxTag::Custom(9))),
         "expected UnknownTag(Custom(9)), got {unknown:?}"
     );
 

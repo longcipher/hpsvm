@@ -8,13 +8,13 @@
 //! [`TxTag::Legacy`], [`TxTag::V0`] and [`TxTag::V1`] preserves the existing
 //! behaviour for real transaction kinds.
 //!
-//! # Deferred pieces
+//! # Boundaries
 //!
-//! * The design (§3.8) names a dedicated `TxError`. The taxonomy now exists as
-//!   [`TxError`](crate::error::TxError), and [`TxRegistryError::into_tx_error`] maps this boundary
-//!   onto it — but handlers still bind to [`HPSVMError`](crate::error::HPSVMError) and dispatch
-//!   failures still surface as [`TxRegistryError`], which converts into `HPSVMError` losslessly.
-//!   Switching the trait and `dispatch` signatures belongs to a future registry task.
+//! * A handler rejects a transaction with a [`TxValidationError`] and reports an execution failure
+//!   with an [`ExecutionError`]. Both are layered types: the fatal classification travels in the
+//!   type, never in a message string.
+//! * The registry reports a dispatch failure as a [`TxError`], which is the transaction layer of
+//!   the taxonomy. An unroutable envelope is a [`TxError::UnknownTag`].
 //! * The design (§3.8) takes `host: &mut T::Host<'_>`. The host is pinned to the VM itself by the
 //!   blanket marker (a family can only satisfy it by pointing its host at the VM), so handlers take
 //!   `&Svm<'_, T>` directly and avoid higher-ranked lifetime friction. The reference is shared
@@ -29,12 +29,10 @@ use std::{collections::HashMap, sync::Arc};
 
 use solana_message::VersionedMessage;
 use solana_transaction::versioned::VersionedTransaction;
-use solana_transaction_error::TransactionError;
-use thiserror::Error;
 
 use crate::{
     DetachedTx, Svm, SvmTypesHost,
-    error::{AnyError, ExecutionError, HPSVMError, TxError, TxValidationError},
+    error::{ExecutionError, TxError, TxValidationError},
 };
 
 /// Classifies a transaction envelope for handler dispatch.
@@ -78,14 +76,17 @@ pub trait TxHandler<T: SvmTypesHost, Tx, Output>: Send + Sync {
     ///
     /// The registry calls this before [`execute`](TxHandler::execute); a
     /// failure short-circuits execution and surfaces as
-    /// [`TxRegistryError::HandlerFailed`].
-    fn validate(&self, tx: &Tx, host: &Svm<'_, T>) -> Result<(), HPSVMError>;
+    /// [`TxError::Validation`]. A validation rejection is deterministic: it
+    /// is never fatal.
+    fn validate(&self, tx: &Tx, host: &Svm<'_, T>) -> Result<(), TxValidationError>;
 
     /// Runs the transaction against the host without staging any state.
     ///
     /// Staging stays with the caller (`transact_core`): handlers return the
-    /// owned readonly outcome only.
-    fn execute(&self, tx: Tx, host: &Svm<'_, T>) -> Result<Output, HPSVMError>;
+    /// owned readonly outcome only. An execution failure surfaces as
+    /// [`TxError::Execution`], which keeps the fatal classification of the
+    /// underlying failure.
+    fn execute(&self, tx: Tx, host: &Svm<'_, T>) -> Result<Output, ExecutionError>;
 }
 
 /// Object-safe erased handler over `VersionedTransaction` envelopes.
@@ -99,13 +100,13 @@ trait AnyTxHandler<T: SvmTypesHost, Output>: Send + Sync {
         &self,
         tx: &VersionedTransaction,
         host: &Svm<'_, T>,
-    ) -> Result<(), HPSVMError>;
+    ) -> Result<(), TxValidationError>;
 
     fn execute_erased(
         &self,
         tx: VersionedTransaction,
         host: &Svm<'_, T>,
-    ) -> Result<Output, HPSVMError>;
+    ) -> Result<Output, ExecutionError>;
 }
 
 impl<T, Output, H> AnyTxHandler<T, Output> for H
@@ -117,7 +118,7 @@ where
         &self,
         tx: &VersionedTransaction,
         host: &Svm<'_, T>,
-    ) -> Result<(), HPSVMError> {
+    ) -> Result<(), TxValidationError> {
         self.validate(tx, host)
     }
 
@@ -125,54 +126,8 @@ where
         &self,
         tx: VersionedTransaction,
         host: &Svm<'_, T>,
-    ) -> Result<Output, HPSVMError> {
+    ) -> Result<Output, ExecutionError> {
         self.execute(tx, host)
-    }
-}
-
-/// Dispatch failure: either no handler owns the tag, or the owning handler
-/// declined the transaction.
-#[derive(Debug, Error)]
-pub enum TxRegistryError {
-    /// No handler was registered for the transaction's tag.
-    #[error("no transaction handler registered for tag {0:?}")]
-    UnknownTag(TxTag),
-    /// The owning handler's `validate` or `execute` failed.
-    #[error(transparent)]
-    HandlerFailed(#[from] HPSVMError),
-}
-
-impl TxRegistryError {
-    /// Maps a dispatch failure onto the layered taxonomy without changing
-    /// the `dispatch` signature.
-    ///
-    /// An unroutable envelope is a validation rejection
-    /// ([`UnsupportedVersion`](TransactionError::UnsupportedVersion),
-    /// mirroring `TxRegistryError::transaction_error`);
-    /// a handler failure is an erased fatal execution error whose concrete
-    /// [`HPSVMError`] stays recoverable by downcast.
-    pub fn into_tx_error(self) -> TxError {
-        match self {
-            Self::UnknownTag(_) => TxError::Validation(TxValidationError::Invalid(
-                TransactionError::UnsupportedVersion,
-            )),
-            Self::HandlerFailed(error) => {
-                TxError::Execution(ExecutionError::Fatal(Box::new(AnyError::new(error))))
-            }
-        }
-    }
-
-    /// Maps a dispatch failure to the execution status a detached outcome
-    /// carries when the failure cannot propagate as an error.
-    ///
-    /// An unroutable envelope looks, from the chain's perspective, like an
-    /// unsupported version; a handler that declines a transaction rejects it
-    /// before execution, like a failed sanity check.
-    pub(crate) fn transaction_error(&self) -> TransactionError {
-        match self {
-            Self::UnknownTag(_) => TransactionError::UnsupportedVersion,
-            Self::HandlerFailed(_) => TransactionError::SanitizeFailure,
-        }
     }
 }
 
@@ -202,21 +157,21 @@ impl<T, Output> TxRegistry<T, Output> {
 
     /// Runs the handler for `tag`: `validate` first, then `execute`.
     ///
-    /// An unregistered tag yields [`TxRegistryError::UnknownTag`]; a
-    /// validation or execution failure yields
-    /// [`TxRegistryError::HandlerFailed`].
+    /// An unregistered tag yields [`TxError::UnknownTag`]; a validation
+    /// failure yields [`TxError::Validation`]; an execution failure yields
+    /// [`TxError::Execution`].
     pub fn dispatch(
         &self,
         tag: TxTag,
         tx: VersionedTransaction,
         host: &Svm<'_, T>,
-    ) -> Result<Output, TxRegistryError>
+    ) -> Result<Output, TxError>
     where
         T: SvmTypesHost,
     {
-        let handle = self.handlers.get(&tag).ok_or(TxRegistryError::UnknownTag(tag))?;
-        handle.validate_erased(&tx, host).map_err(TxRegistryError::HandlerFailed)?;
-        handle.execute_erased(tx, host).map_err(TxRegistryError::HandlerFailed)
+        let handle = self.handlers.get(&tag).ok_or(TxError::UnknownTag(tag))?;
+        handle.validate_erased(&tx, host).map_err(TxError::Validation)?;
+        handle.execute_erased(tx, host).map_err(TxError::Execution)
     }
 
     /// Lists the tags that currently own a handler.
@@ -283,7 +238,11 @@ impl<T: SvmTypesHost> TxRegistry<T, DetachedTx> {
 pub struct DefaultExecutionHandler;
 
 impl<T: SvmTypesHost> TxHandler<T, VersionedTransaction, DetachedTx> for DefaultExecutionHandler {
-    fn validate(&self, _tx: &VersionedTransaction, _host: &Svm<'_, T>) -> Result<(), HPSVMError> {
+    fn validate(
+        &self,
+        _tx: &VersionedTransaction,
+        _host: &Svm<'_, T>,
+    ) -> Result<(), TxValidationError> {
         Ok(())
     }
 
@@ -291,7 +250,7 @@ impl<T: SvmTypesHost> TxHandler<T, VersionedTransaction, DetachedTx> for Default
         &self,
         tx: VersionedTransaction,
         host: &Svm<'_, T>,
-    ) -> Result<DetachedTx, HPSVMError> {
+    ) -> Result<DetachedTx, ExecutionError> {
         Ok(host.default_execute_detached(tx))
     }
 }
@@ -313,14 +272,14 @@ pub fn handler<F, G>(validate: F, execute: G) -> HandlerFn<F, G> {
 impl<T, Tx, Output, F, G> TxHandler<T, Tx, Output> for HandlerFn<F, G>
 where
     T: SvmTypesHost,
-    F: Fn(&Tx, &Svm<'_, T>) -> Result<(), HPSVMError> + Send + Sync,
-    G: Fn(Tx, &Svm<'_, T>) -> Result<Output, HPSVMError> + Send + Sync,
+    F: Fn(&Tx, &Svm<'_, T>) -> Result<(), TxValidationError> + Send + Sync,
+    G: Fn(Tx, &Svm<'_, T>) -> Result<Output, ExecutionError> + Send + Sync,
 {
-    fn validate(&self, tx: &Tx, host: &Svm<'_, T>) -> Result<(), HPSVMError> {
+    fn validate(&self, tx: &Tx, host: &Svm<'_, T>) -> Result<(), TxValidationError> {
         (self.validate)(tx, host)
     }
 
-    fn execute(&self, tx: Tx, host: &Svm<'_, T>) -> Result<Output, HPSVMError> {
+    fn execute(&self, tx: Tx, host: &Svm<'_, T>) -> Result<Output, ExecutionError> {
         (self.execute)(tx, host)
     }
 }
@@ -341,7 +300,7 @@ mod tests {
     use solana_system_interface::instruction::transfer;
 
     use super::*;
-    use crate::{BaseSvmTypes, Hpsvm, types::TransactionMetadata};
+    use crate::{BaseSvmTypes, HPSVMError, Hpsvm, types::TransactionMetadata};
 
     /// A handler that logs `validate`/`execute` calls and then either fails
     /// validation on demand or returns a canned outcome.
@@ -367,10 +326,12 @@ mod tests {
             &self,
             _tx: &VersionedTransaction,
             _host: &Svm<'_, T>,
-        ) -> Result<(), HPSVMError> {
+        ) -> Result<(), TxValidationError> {
             self.log.lock().expect("log lock").push("validate");
             if self.fail_validate {
-                return Err(HPSVMError::ProgramLoad("validation declined".to_string()));
+                return Err(TxValidationError::Invalid(
+                    solana_transaction_error::TransactionError::InvalidAccountIndex,
+                ));
             }
             Ok(())
         }
@@ -379,7 +340,7 @@ mod tests {
             &self,
             _tx: VersionedTransaction,
             _host: &Svm<'_, T>,
-        ) -> Result<DetachedTx, HPSVMError> {
+        ) -> Result<DetachedTx, ExecutionError> {
             self.log.lock().expect("log lock").push("execute");
             Ok(canned_detached())
         }
@@ -466,7 +427,7 @@ mod tests {
             .expect_err("dispatch should fail");
 
         assert!(
-            matches!(error, TxRegistryError::UnknownTag(TxTag::Custom(9))),
+            matches!(error, TxError::UnknownTag(TxTag::Custom(9))),
             "expected UnknownTag(Custom(9)), got {error:?}"
         );
     }
@@ -486,8 +447,8 @@ mod tests {
             .expect_err("dispatch should fail");
 
         assert!(
-            matches!(error, TxRegistryError::HandlerFailed(_)),
-            "expected HandlerFailed, got {error:?}"
+            matches!(error, TxError::Validation(_)),
+            "expected TxError::Validation, got {error:?}"
         );
         assert_eq!(*log.lock().expect("log lock"), vec!["validate"]);
     }
@@ -511,26 +472,29 @@ mod tests {
 
     #[test]
     fn unknown_tag_renders_its_tag() {
-        let error = TxRegistryError::UnknownTag(TxTag::Custom(9));
+        let error = TxError::UnknownTag(TxTag::Custom(9));
         assert_eq!(error.to_string(), "no transaction handler registered for tag Custom(9)");
     }
 
     #[test]
-    fn task71_into_tx_error_maps_unknown_tag_to_validation() {
-        let error = TxRegistryError::UnknownTag(TxTag::Custom(9)).into_tx_error();
-        match &error {
-            TxError::Validation(TxValidationError::Invalid(
-                solana_transaction_error::TransactionError::UnsupportedVersion,
-            )) => {}
-            other => panic!("expected TxError::Validation(UnsupportedVersion), got {other:?}"),
-        }
+    fn an_unknown_tag_is_a_non_fatal_transaction_error() {
+        let error = TxError::UnknownTag(TxTag::Custom(9));
         assert!(!error.is_fatal());
     }
 
     #[test]
-    fn task71_into_tx_error_erases_handler_failures_recoverably() {
-        let error = TxRegistryError::HandlerFailed(HPSVMError::ProgramLoad("boom".to_string()))
-            .into_tx_error();
+    fn a_validation_failure_is_a_non_fatal_transaction_error() {
+        let error = TxError::Validation(TxValidationError::Invalid(
+            solana_transaction_error::TransactionError::InvalidAccountIndex,
+        ));
+        assert!(!error.is_fatal());
+    }
+
+    #[test]
+    fn an_execution_failure_keeps_its_fatal_classification() {
+        let error = TxError::Execution(ExecutionError::Fatal(Box::new(
+            crate::error::AnyError::new(HPSVMError::ProgramLoad("boom".to_string())),
+        )));
         match &error {
             TxError::Execution(ExecutionError::Fatal(erased)) => {
                 let recovered = erased

@@ -115,9 +115,15 @@
 //! [`TransactionMetadata`](crate::types::TransactionMetadata) or
 //! [`FailedTransactionMetadata`](crate::types::FailedTransactionMetadata),
 //! with [`ExecutionDiagnostics`](crate::types::ExecutionDiagnostics) for
-//! pre/post diffs. Handler failures use [`HandlerError`], registry misuse
-//! [`TxRegistryError`], validation [`TxValidationError`], and host violations
-//! [`HostError`].
+//! pre/post diffs.
+//!
+//! The error taxonomy is layered, and every layer is live: a handler
+//! rejects a transaction with [`TxValidationError`] and reports an
+//! execution failure with [`ExecutionError`]; the registry reports a
+//! dispatch failure as [`TxError`]; the host boundary reports through
+//! [`HostError`]. [`HPSVMError`] is the crate's outer projection of those
+//! layers, and it stays lossless: the fatal classification travels in the
+//! type, never in a message string.
 //!
 //! ## State model
 //!
@@ -385,8 +391,8 @@ pub use accounts_db::AccountsView;
 pub use builder::{FeatureConfigOpen, FeatureConfigSealed, HpsvmBuilder};
 pub use env::{BlockEnv, TxEnv};
 pub use error::{
-    AnyError, DbError, DbResult, ExecutionError, HaltReason, HandlerError, HostError, LoadError,
-    TxError, TxValidationError,
+    AnyError, DbError, DbResult, ExecutionError, HPSVMError, HaltReason, HandlerError, HostError,
+    LoadError, TxError, TxValidationError,
 };
 pub use executed::{DetachedTx, ExecutedTx};
 pub use host::Host;
@@ -399,9 +405,7 @@ pub use state_change_set::StateChangeSet;
 pub use state_change_sink::{AccountChange, AccountChangeRecord, StateChangeSink};
 pub use svm_instruction::{SvmInstructionAccount, SvmInstructionCtx};
 pub use svm_types::{BaseSvmTypes, SvmTypes, SvmTypesHost};
-pub use tx_registry::{
-    DefaultExecutionHandler, TxHandler, TxRegistry, TxRegistryError, TxTag, handler, tag_of,
-};
+pub use tx_registry::{DefaultExecutionHandler, TxHandler, TxRegistry, TxTag, handler, tag_of};
 pub use version::{
     ClusterInfo, ClusterSpecId, FeatureGate, RuntimeLimits, TxFeatureFlags, Version,
 };
@@ -410,7 +414,6 @@ pub use version::{
 // them as `crate::X` (descendant modules can read root-private items, but the
 // names must resolve via the crate root).
 pub(crate) use crate::commit::apply_commit_delta;
-pub(crate) use crate::error::HPSVMError;
 
 /// The core Solana Virtual Machine simulator, parameterized by its type family.
 ///

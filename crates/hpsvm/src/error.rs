@@ -101,10 +101,10 @@ pub enum HPSVMError {
     Load(#[from] LoadError),
     /// Layered transaction error (design §3.10).
     #[error(transparent)]
-    Transaction(#[from] TxError),
+    Transaction(TxError),
     /// Layered execution error (design §3.10).
     #[error(transparent)]
-    Execution(#[from] ExecutionError),
+    Execution(ExecutionError),
     /// Layered host error (design §3.10).
     #[error(transparent)]
     Host(#[from] HostError),
@@ -119,16 +119,31 @@ impl From<Box<dyn std::error::Error>> for HPSVMError {
     }
 }
 
-/// Converts a dispatch failure into the fallible-entry-point error.
+/// Projects an execution-layer failure onto the crate's outer error.
 ///
-/// [`TxRegistryError::UnknownTag`](crate::TxRegistryError::UnknownTag) becomes
-/// [`HPSVMError::UnknownTransactionTag`]; a handler failure already carries
-/// an [`HPSVMError`] and passes through unchanged.
-impl From<crate::TxRegistryError> for HPSVMError {
-    fn from(error: crate::TxRegistryError) -> Self {
+/// The account-source failure keeps its own outer variant, so a caller can
+/// still match it directly; every other execution failure is projected
+/// transparently.
+impl From<ExecutionError> for HPSVMError {
+    fn from(error: ExecutionError) -> Self {
         match error {
-            crate::TxRegistryError::UnknownTag(tag) => Self::UnknownTransactionTag { tag },
-            crate::TxRegistryError::HandlerFailed(error) => error,
+            ExecutionError::AccountSource { pubkey, source } => {
+                Self::AccountSource { pubkey, source }
+            }
+            other => Self::Execution(other),
+        }
+    }
+}
+
+/// Projects a transaction-layer failure onto the crate's outer error.
+///
+/// An unroutable envelope keeps its own outer variant, so a caller can
+/// still see which tag had no handler.
+impl From<TxError> for HPSVMError {
+    fn from(error: TxError) -> Self {
+        match error {
+            TxError::UnknownTag(tag) => Self::UnknownTransactionTag { tag },
+            other => Self::Transaction(other),
         }
     }
 }
@@ -358,11 +373,9 @@ pub type DbResult<T> = Result<T, DbError>;
 
 /// Load-layer error: which load site produced the [`DbError`].
 ///
-/// Deferred wiring: `add_account`/`sync_accounts` (sysvar validation) and
-/// `load_program`/`rebuild_program_cache` (program validation) still surface
-/// [`HPSVMError`] directly; their migration to `LoadError::Sysvar` /
-/// `LoadError::Program` belongs to a future database-layer task. Account
-/// reads migrate through the [`DbError`] conversions first.
+/// The load sites (account reads, program loads and sysvar validation) all
+/// report through this type, so the fatal classification of the underlying
+/// database failure survives the projection.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum LoadError {
@@ -421,10 +434,8 @@ impl std::error::Error for LoadError {
 
 /// Transaction-validation failure.
 ///
-/// Deferred wiring: [`TxHandler::validate`](crate::TxHandler::validate)
-/// still binds to [`HPSVMError`]; migrating that signature to
-/// `TxValidationError` belongs to a future registry task. The conversion
-/// here is what that task will use at the boundary.
+/// A handler rejects a transaction with this type; the rejection is
+/// deterministic and never fatal.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum TxValidationError {
@@ -517,17 +528,20 @@ impl std::error::Error for HaltReason {
 
 /// Execution-layer error: database failure, erased fatal, or machine halt.
 ///
-/// Deferred wiring: the `process_transaction` internals still report through
-/// `ExecutionResult` (in `crate::types`) with an
-/// [`HPSVMError`] fatal transport; migrating them to `ExecutionError`
-/// belongs to a future execution task. The account-source failure path is
-/// wired through
-/// `AccountSourceLoadFailure::into_execution_error` (in `crate::accounts_db`).
+/// The execution pipeline reports through this type, so the fatal
+/// classification and the concrete cause survive every boundary they cross.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum ExecutionError {
     /// The database layer failed; fatal-ness comes from the inner error.
     Database(DbError),
+    /// An external account source failed while loading an account.
+    AccountSource {
+        /// The account address whose load failed.
+        pubkey: Address,
+        /// The underlying account source error.
+        source: AccountSourceError,
+    },
     /// An erased fatal failure; recover the concrete error by downcast.
     Fatal(Box<AnyError>),
     /// The machine halted; the reason carries no strings.
@@ -540,6 +554,9 @@ impl ExecutionError {
     pub fn is_fatal(&self) -> bool {
         match self {
             Self::Database(error) => error.is_fatal(),
+            Self::AccountSource { source, .. } => {
+                matches!(source.kind(), AccountSourceErrorKind::Unavailable)
+            }
             Self::Fatal(_) | Self::Halt(_) => true,
         }
     }
@@ -548,7 +565,7 @@ impl ExecutionError {
     pub const fn db_error(&self) -> Option<&DbError> {
         match self {
             Self::Database(error) => Some(error),
-            Self::Fatal(_) | Self::Halt(_) => None,
+            _ => None,
         }
     }
 }
@@ -571,10 +588,24 @@ impl From<AnyError> for ExecutionError {
     }
 }
 
+impl From<HPSVMError> for ExecutionError {
+    fn from(error: HPSVMError) -> Self {
+        match error {
+            HPSVMError::Execution(error) => error,
+            HPSVMError::Database(error) => Self::Database(error),
+            HPSVMError::AccountSource { pubkey, source } => Self::AccountSource { pubkey, source },
+            other => Self::Fatal(Box::new(AnyError::new(other))),
+        }
+    }
+}
+
 impl std::fmt::Display for ExecutionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Database(error) => write!(f, "{error}"),
+            Self::AccountSource { pubkey, source } => {
+                write!(f, "account source failed while loading {pubkey}: {source}")
+            }
             Self::Fatal(error) => write!(f, "{error}"),
             Self::Halt(reason) => write!(f, "execution halted: {reason}"),
         }
@@ -585,6 +616,7 @@ impl std::error::Error for ExecutionError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Database(error) => Some(error),
+            Self::AccountSource { source, .. } => Some(source),
             Self::Fatal(error) => Some(error.as_ref()),
             Self::Halt(reason) => Some(reason),
         }
@@ -593,11 +625,8 @@ impl std::error::Error for ExecutionError {
 
 /// Transaction-layer error: validation, execution, or database.
 ///
-/// Deferred wiring: [`TxRegistry::dispatch`](crate::TxRegistry::dispatch)
-/// still reports [`TxRegistryError`](crate::TxRegistryError);
-/// [`TxRegistryError::into_tx_error`](crate::TxRegistryError::into_tx_error)
-/// maps that boundary onto this type without changing the signature, and a
-/// future registry task will switch the signature itself.
+/// This is the error the transaction registry reports: an unroutable
+/// envelope, a validation rejection, or an execution failure.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum TxError {
@@ -607,6 +636,8 @@ pub enum TxError {
     Execution(ExecutionError),
     /// The database layer failed; fatal-ness comes from the inner error.
     Database(DbError),
+    /// No handler owns the transaction's tag.
+    UnknownTag(TxTag),
 }
 
 impl TxError {
@@ -617,6 +648,22 @@ impl TxError {
             Self::Validation(_) => false,
             Self::Execution(error) => error.is_fatal(),
             Self::Database(error) => error.is_fatal(),
+            Self::UnknownTag(_) => false,
+        }
+    }
+
+    /// Maps a dispatch failure to the execution status a detached outcome
+    /// carries when the failure cannot propagate as an error.
+    ///
+    /// An unroutable envelope looks, from the chain's perspective, like an
+    /// unsupported version; a handler that declines a transaction rejects it
+    /// before execution, like a failed sanity check.
+    pub(crate) fn transaction_error(&self) -> TransactionError {
+        match self {
+            Self::UnknownTag(_) => TransactionError::UnsupportedVersion,
+            Self::Validation(_) | Self::Execution(_) | Self::Database(_) => {
+                TransactionError::SanitizeFailure
+            }
         }
     }
 }
@@ -645,6 +692,9 @@ impl std::fmt::Display for TxError {
             Self::Validation(error) => write!(f, "{error}"),
             Self::Execution(error) => write!(f, "{error}"),
             Self::Database(error) => write!(f, "{error}"),
+            Self::UnknownTag(tag) => {
+                write!(f, "no transaction handler registered for tag {tag:?}")
+            }
         }
     }
 }
@@ -655,15 +705,15 @@ impl std::error::Error for TxError {
             Self::Validation(error) => Some(error),
             Self::Execution(error) => Some(error),
             Self::Database(error) => Some(error),
+            Self::UnknownTag(_) => None,
         }
     }
 }
 
 /// Host-layer error: a machine halt or an execution failure.
 ///
-/// Deferred wiring: the host entry points (`try_transact`, `transact_core`)
-/// still surface [`HPSVMError`]; switching them to `HostError` belongs to a
-/// future host-boundary task.
+/// The host boundary — the trait every handler and every custom family
+/// implements — reports through this type.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum HostError {
@@ -715,11 +765,9 @@ impl std::error::Error for HostError {
 
 /// Handler-layer error: the erased failure of one `TxHandler`.
 ///
-/// This is the boundary type the registry's erased dispatch will use: a
-/// handler's concrete [`HPSVMError`] is erased here and recovered later by
-/// [`downcast_ref`](HandlerError::downcast_ref). The `TxHandler` trait still
-/// binds to [`HPSVMError`] directly; migrating it belongs to a future
-/// registry task.
+/// This is the boundary type the registry's erased dispatch uses: a
+/// handler's concrete failure is erased here and recovered later by
+/// [`downcast_ref`](HandlerError::downcast_ref).
 #[derive(Clone)]
 pub struct HandlerError(AnyError);
 
@@ -781,12 +829,6 @@ impl From<HPSVMError> for HandlerError {
 impl From<AnyError> for HandlerError {
     fn from(error: AnyError) -> Self {
         Self(error)
-    }
-}
-
-impl From<crate::TxRegistryError> for HandlerError {
-    fn from(error: crate::TxRegistryError) -> Self {
-        Self::new(error)
     }
 }
 
@@ -953,8 +995,8 @@ mod tests {
 
     #[test]
     fn registry_unknown_tag_converts_into_hpsvm_error() {
-        use crate::{TxRegistryError, tx_registry::TxTag};
-        let error = HPSVMError::from(TxRegistryError::UnknownTag(TxTag::V0));
+        use crate::tx_registry::TxTag;
+        let error = HPSVMError::from(TxError::UnknownTag(TxTag::V0));
         match &error {
             HPSVMError::UnknownTransactionTag { tag } => assert_eq!(*tag, TxTag::V0),
             other => panic!("expected HPSVMError::UnknownTransactionTag, got {other:?}"),
@@ -962,15 +1004,36 @@ mod tests {
     }
 
     #[test]
-    fn registry_handler_failure_passes_the_hpsvm_error_through() {
-        use crate::TxRegistryError;
-        let error = HPSVMError::from(TxRegistryError::HandlerFailed(HPSVMError::ProgramLoad(
-            "boom".to_string(),
-        )));
+    fn an_execution_failure_keeps_its_concrete_cause_across_the_outer_error() {
+        let error = HPSVMError::from(ExecutionError::Fatal(Box::new(AnyError::new(
+            HPSVMError::ProgramLoad("boom".to_string()),
+        ))));
         match &error {
-            HPSVMError::ProgramLoad(message) => assert_eq!(message, "boom"),
-            other => panic!("expected HPSVMError::ProgramLoad, got {other:?}"),
+            HPSVMError::Execution(ExecutionError::Fatal(erased)) => {
+                let recovered = erased
+                    .downcast_ref::<HPSVMError>()
+                    .expect("the concrete cause must stay recoverable by downcast");
+                match recovered {
+                    HPSVMError::ProgramLoad(message) => assert_eq!(message, "boom"),
+                    other => panic!("expected HPSVMError::ProgramLoad, got {other:?}"),
+                }
+            }
+            other => panic!("expected HPSVMError::Execution(Fatal), got {other:?}"),
         }
+        assert!(matches!(&error, HPSVMError::Execution(error) if error.is_fatal()));
+    }
+
+    #[test]
+    fn an_account_source_failure_keeps_its_outer_variant() {
+        let source = AccountSourceError::new("rpc down");
+        let error = HPSVMError::from(ExecutionError::AccountSource {
+            pubkey: Address::new_unique(),
+            source,
+        });
+        assert!(
+            matches!(error, HPSVMError::AccountSource { .. }),
+            "expected HPSVMError::AccountSource, got {error:?}"
+        );
     }
 }
 

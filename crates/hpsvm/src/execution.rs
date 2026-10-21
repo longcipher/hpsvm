@@ -23,7 +23,7 @@ use crate::{
     account_source::AccountSourceError,
     accounts_db::AccountSourceTrackingAddressLoader,
     agave_compat::{AgaveMessage, to_agave_instruction},
-    error::HPSVMError,
+    error::ExecutionError,
     helpers::execute_tx_helper,
     message_processor::process_message,
     types::{AccountSourceFailure, ExecutionResult},
@@ -104,7 +104,7 @@ fn execution_result_with_account_source_error(
         tx_result: Err(tx_error),
         fee,
         account_source_failures: vec![AccountSourceFailure { pubkey, error: source.to_string() }],
-        fatal_error: Some(HPSVMError::AccountSource { pubkey, source }),
+        fatal_error: Some(ExecutionError::AccountSource { pubkey, source }),
         ..Default::default()
     }
 }
@@ -792,9 +792,8 @@ mod tests {
     use solana_transaction::versioned::VersionedTransaction;
     use solana_transaction_error::TransactionError;
 
-    use super::*;
     use crate::{
-        Hpsvm,
+        HPSVMError, Hpsvm,
         account_source::{AccountSource, AccountSourceError},
     };
 

@@ -8,7 +8,7 @@ use solana_transaction::InstructionError;
 use solana_transaction_context::transaction::TransactionReturnData;
 use solana_transaction_error::{TransactionError, TransactionResult as Result};
 
-use crate::{error::HPSVMError, format_logs::format_logs};
+use crate::{error::ExecutionError, format_logs::format_logs};
 
 /// Transaction metadata captured during execution.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -187,7 +187,7 @@ pub(crate) struct ExecutionResult {
     pub(crate) fee: u64,
     pub(crate) fee_payer: Option<Address>,
     pub(crate) account_source_failures: Vec<AccountSourceFailure>,
-    pub(crate) fatal_error: Option<HPSVMError>,
+    pub(crate) fatal_error: Option<ExecutionError>,
     /// Whether the installed inspector accepted this execution, so staged
     /// commit paths know without consulting it a second time.
     ///

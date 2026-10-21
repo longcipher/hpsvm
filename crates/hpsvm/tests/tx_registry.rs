@@ -8,8 +8,8 @@
 use std::sync::{Arc, Mutex};
 
 use hpsvm::{
-    BaseSvmTypes, DetachedTx, Hpsvm, Svm, SvmTypesHost, TxHandler, TxRegistry, TxRegistryError,
-    TxTag, handler,
+    BaseSvmTypes, DetachedTx, ExecutionError, Hpsvm, Svm, SvmTypesHost, TxError, TxHandler,
+    TxRegistry, TxTag, TxValidationError, handler,
 };
 use solana_address::Address;
 use solana_keypair::Keypair;
@@ -29,7 +29,7 @@ impl<T: SvmTypesHost> TxHandler<T, VersionedTransaction, DetachedTx> for Recordi
         &self,
         _tx: &VersionedTransaction,
         _host: &Svm<'_, T>,
-    ) -> Result<(), hpsvm::error::HPSVMError> {
+    ) -> Result<(), TxValidationError> {
         self.log.lock().expect("log lock").push("validate");
         Ok(())
     }
@@ -38,7 +38,7 @@ impl<T: SvmTypesHost> TxHandler<T, VersionedTransaction, DetachedTx> for Recordi
         &self,
         tx: VersionedTransaction,
         host: &Svm<'_, T>,
-    ) -> Result<DetachedTx, hpsvm::error::HPSVMError> {
+    ) -> Result<DetachedTx, ExecutionError> {
         self.log.lock().expect("log lock").push("execute");
         hpsvm::DefaultExecutionHandler.execute(tx, host)
     }
@@ -91,7 +91,7 @@ fn unregistered_tag_produces_a_typed_error() {
         registry.dispatch(TxTag::Custom(9), tx, &svm).expect_err("unregistered tag should fail");
 
     assert!(
-        matches!(error, TxRegistryError::UnknownTag(TxTag::Custom(9))),
+        matches!(error, TxError::UnknownTag(TxTag::Custom(9))),
         "expected UnknownTag(Custom(9)), got {error:?}"
     );
 }
