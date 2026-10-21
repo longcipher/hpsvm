@@ -114,6 +114,17 @@ impl BatchExecutionSnapshot {
     }
 }
 
+/// Plans a conflict-aware transaction batch without committing any state.
+///
+/// The returned stages contain indexes into the original input order. Stages
+/// are built greedily from account read/write conflicts and form the basis
+/// for higher-level batch schedulers.
+///
+/// A transaction joins the *smallest* conflict-free stage (best fit) rather
+/// than the first one. Filling the tightest stage first keeps the heavily
+/// locked stages free for the transactions that need them, which tends to
+/// produce fewer serial rounds than first fit — and the number of rounds is
+/// exactly the parallelisation limit of the batch.
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(crate) fn plan_transaction_batch<T: SvmTypesHost>(
     vm: &Svm<'_, T>,
@@ -126,16 +137,18 @@ pub(crate) fn plan_transaction_batch<T: SvmTypesHost>(
             .map_err(|source| source.into_batch_error(index))?;
         let lock_set = TransactionLockSet::from_transaction(&sanitized, &tx.message);
 
-        if let Some(stage) =
-            stages.iter_mut().find(|stage| !stage.lock_set.conflicts_with(&lock_set))
-        {
-            stage.transaction_indexes.push(index);
-            stage.lock_set.extend(&lock_set);
-        } else {
-            stages.push(ScheduledTransactionBatchStage {
-                transaction_indexes: vec![index],
-                lock_set,
-            });
+        match best_fit_stage(&stages, &lock_set) {
+            Some(stage_index) => {
+                let stage = &mut stages[stage_index];
+                stage.transaction_indexes.push(index);
+                stage.lock_set.extend(&lock_set);
+            }
+            None => {
+                stages.push(ScheduledTransactionBatchStage {
+                    transaction_indexes: vec![index],
+                    lock_set,
+                });
+            }
         }
     }
 
@@ -145,6 +158,28 @@ pub(crate) fn plan_transaction_batch<T: SvmTypesHost>(
             .map(|stage| TransactionBatchStage { transaction_indexes: stage.transaction_indexes })
             .collect(),
     })
+}
+
+/// Returns the index of the smallest conflict-free stage, if any.
+///
+/// "Smallest" is measured by the number of accounts the stage locks, which
+/// is the classic best-fit heuristic for graph colouring: the transaction
+/// takes the tightest slot that still fits.
+fn best_fit_stage(
+    stages: &[ScheduledTransactionBatchStage],
+    lock_set: &TransactionLockSet,
+) -> Option<usize> {
+    let mut best: Option<(usize, usize)> = None;
+    for (index, stage) in stages.iter().enumerate() {
+        if stage.lock_set.conflicts_with(lock_set) {
+            continue;
+        }
+        let weight = stage.lock_set.len();
+        if best.is_none_or(|(_, best_weight)| weight < best_weight) {
+            best = Some((index, weight));
+        }
+    }
+    best.map(|(index, _)| index)
 }
 
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
@@ -468,6 +503,14 @@ impl TransactionLockSet {
             self.readonly.iter().any(|key| other.writable.contains(key))
     }
 
+    /// The number of accounts this lock set covers.
+    ///
+    /// Used as the "size" of a stage when the planner picks the tightest
+    /// conflict-free stage for a transaction.
+    fn len(&self) -> usize {
+        self.writable.len() + self.readonly.len()
+    }
+
     fn extend(&mut self, other: &Self) {
         self.readonly.extend(other.readonly.iter().copied());
         self.writable.extend(other.writable.iter().copied());
@@ -714,6 +757,50 @@ mod tests {
         indexes.sort_unstable();
         assert_eq!(indexes, (0..transactions.len()).collect::<Vec<_>>());
         assert!(results.iter().all(|result| result.result.is_ok()));
+    }
+
+    fn transfer_tx(
+        payer: &Keypair,
+        recipient: &Address,
+        lamports: u64,
+        blockhash: solana_hash::Hash,
+    ) -> VersionedTransaction {
+        let instruction = transfer(&payer.pubkey(), recipient, lamports);
+        let message =
+            Message::new_with_blockhash(&[instruction], Some(&payer.pubkey()), &blockhash);
+        VersionedTransaction::try_new(VersionedMessage::Legacy(message), &[payer])
+            .expect("transaction should build")
+    }
+
+    /// The planner fills the tightest conflict-free stage, not the first
+    /// one, so the heavily locked stages stay free for the transactions that
+    /// need them.
+    #[test]
+    fn the_planner_fills_the_tightest_conflict_free_stage() {
+        let mut svm = Svm::<BaseSvmTypes>::new();
+        let blockhash = svm.latest_blockhash();
+
+        // Two transactions that touch disjoint accounts, then a third that
+        // conflicts with the first one only.
+        let payer_a = Keypair::new();
+        let payer_b = Keypair::new();
+        for payer in [&payer_a, &payer_b] {
+            svm.airdrop(&payer.pubkey(), 1_000_000_000).unwrap();
+        }
+        let shared = Address::new_unique();
+        let transactions = vec![
+            transfer_tx(&payer_a, &shared, 1, blockhash),
+            transfer_tx(&payer_b, &Address::new_unique(), 1, blockhash),
+            transfer_tx(&payer_a, &Address::new_unique(), 1, blockhash),
+        ];
+
+        let plan = plan_transaction_batch(&svm, &transactions).unwrap();
+
+        // The first two are conflict-free and share a stage. The third writes
+        // the same payer as the first, so it needs its own stage.
+        assert_eq!(plan.stages.len(), 2);
+        assert_eq!(plan.stages[0].transaction_indexes, vec![0, 1]);
+        assert_eq!(plan.stages[1].transaction_indexes, vec![2]);
     }
 
     #[test]

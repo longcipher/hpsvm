@@ -437,12 +437,17 @@ impl Accounts {
     /// of the underlying [`AccountSourceError`] (infrastructure down vs
     /// deterministic failure) survives for the caller to inspect.
     pub(crate) fn prewarm(&mut self, addrs: &[Address]) -> DbResult<()> {
+        // The missing set is de-duplicated through a hash set: the read set of
+        // a batch stage is the union of the static account keys of every
+        // transaction in it, so a linear scan over the accumulated list made
+        // the prewarm quadratic in the number of accounts.
         let mut missing: Vec<Address> = Vec::new();
+        let mut seen: HashSet<Address> = HashSet::with_capacity(addrs.len());
         for addr in addrs {
             if self.cache.inner.contains_key(addr) || self.cache.removed.contains(addr) {
                 continue;
             }
-            if !missing.contains(addr) {
+            if seen.insert(*addr) {
                 missing.push(*addr);
             }
         }
@@ -462,6 +467,14 @@ impl Accounts {
         self.record_journal(*pubkey);
         self.cache.inner.remove(pubkey);
         self.cache.removed.insert(*pubkey);
+        // The account is gone, so the program-cache entry it backed must go
+        // with it: a stale entry would let a transaction invoke a program
+        // whose account no longer exists.
+        //
+        // The program cache is shared through an `Arc` with the VM's clones,
+        // so the removal is visible to them too — which matches the invariant
+        // the cache is derived from: the account overlay.
+        self.programs_cache.write().remove_entry(pubkey);
     }
 
     /// Captures the current end of the journal as a restorable checkpoint.
@@ -1160,6 +1173,75 @@ mod tests {
         let _ = db.get_accounts_batch(&pubkeys);
 
         assert_eq!(source.batch_calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// A removed account must not leave a program-cache entry behind: the
+    /// cache is derived from the overlay, so a stale entry would let a
+    /// transaction invoke a program whose account no longer exists.
+    #[test]
+    fn removing_a_program_account_invalidates_the_program_cache() {
+        let program_id = Address::new_unique();
+        let mut db = AccountsDb::default();
+
+        // A program account owned by a loader, with the ELF bytes in place.
+        let owner = solana_sdk_ids::bpf_loader::id();
+        let mut account = AccountSharedData::new(1, 4, &owner);
+        account.set_executable(true);
+        account.set_data_from_slice(b"\x7fELF");
+        db.add_account_no_checks(program_id, account);
+        db.programs_cache.write().replenish(
+            program_id,
+            Arc::new(ProgramCacheEntry::new_builtin(|_invoke_context, _instruction| Ok(()))),
+        );
+        assert!(db.has_program_cache_entry(&program_id));
+
+        db.remove_account(&program_id);
+
+        assert!(
+            !db.has_program_cache_entry(&program_id),
+            "the program cache must not keep an entry for a removed account"
+        );
+    }
+
+    #[test]
+    fn prewarm_deduplicates_the_read_set_before_loading() {
+        use parking_lot::Mutex;
+
+        /// Records the size of every batch the source is asked for.
+        #[derive(Clone, Default)]
+        struct BatchSizeSource {
+            sizes: Arc<Mutex<Vec<usize>>>,
+        }
+
+        impl AccountSource for BatchSizeSource {
+            fn get_account(
+                &self,
+                _pubkey: &Address,
+            ) -> Result<Option<AccountSharedData>, AccountSourceError> {
+                Ok(None)
+            }
+
+            fn get_accounts(
+                &self,
+                pubkeys: &[Address],
+            ) -> Result<Vec<Option<AccountSharedData>>, AccountSourceError> {
+                self.sizes.lock().push(pubkeys.len());
+                Ok(pubkeys.iter().map(|_| None).collect())
+            }
+        }
+
+        let source = BatchSizeSource::default();
+        let sizes = Arc::clone(&source.sizes);
+        let mut db = AccountsDb::default();
+        db.set_account_source(Arc::new(source));
+
+        let first = Address::new_from_array([0xB0; 32]);
+        let second = Address::new_from_array([0xB1; 32]);
+        // The same address repeated must be requested once.
+        db.prewarm(&[first, second, first, second, first]).expect("prewarm must succeed");
+
+        let recorded = sizes.lock().clone();
+        assert_eq!(recorded, vec![2], "the read set must be de-duplicated");
     }
 
     // -----------------------------------------------------------------
