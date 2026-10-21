@@ -250,8 +250,22 @@ impl<T: SvmTypesHost> Svm<'_, T> {
             })
         });
         let rent = hotpath_block!("hpsvm::process_transaction::load_rent", {
-            self.accounts.sysvar_cache().get_rent().expect("rent sysvar should always be available")
+            self.accounts.sysvar_cache().get_rent()
         });
+        // The rent sysvar is materialized by `set_sysvars` and guarded by
+        // `require_sysvars_loaded` on the way in, but the account can still be
+        // removed from the overlay afterwards. Report the missing component as
+        // an execution failure instead of panicking.
+        let rent = match rent {
+            Ok(rent) => rent,
+            Err(error) => {
+                tracing::error!("rent sysvar is not materialized: {error}");
+                return Err(ExecutionResult {
+                    tx_result: Err(TransactionError::SanitizeFailure),
+                    ..Default::default()
+                });
+            }
+        };
         let message = tx.message();
         let blockhash = message.recent_blockhash();
         // Share the committed program cache: only the `Arc` handle is cloned
@@ -289,30 +303,36 @@ impl<T: SvmTypesHost> Svm<'_, T> {
                 } else {
                     let is_instruction_account =
                         SVMStaticMessage::is_instruction_account(message, i);
-                    let mut account = if !is_instruction_account &&
-                        !message.is_writable(i) &&
-                        program_cache_guard.find(key).is_some()
-                    {
-                        self.accounts
-                            .get_account(key)
-                            .expect("account should exist during processing")
-                    } else {
-                        match self.accounts.try_get_account(key) {
-                            Ok(Some(account)) => account,
-                            Ok(None) => {
-                                let mut default_account = AccountSharedData::default();
-                                default_account.set_rent_epoch(0);
-                                default_account
-                            }
-                            Err(error) => {
-                                return Err(execution_result_with_account_source_error(
-                                    *key,
-                                    error,
-                                    TransactionError::AccountNotFound,
-                                    fee,
-                                    "failed to load transaction account from source",
-                                ));
-                            }
+                    // One load path for every account key.
+                    //
+                    // This used to have a second "read-only program account
+                    // that is in the program cache" branch that called
+                    // `get_account` and then `expect`ed the account to be
+                    // present. `get_account` swallows account-source errors
+                    // and returns `None`, so an unreachable source (or a
+                    // source that does not know the account) turned a
+                    // recoverable, classified failure into a panic and
+                    // bypassed the fatal/non-fatal taxonomy entirely.
+                    //
+                    // `try_get_account` resolves the overlay first and the
+                    // source second, so the fast path gained nothing over
+                    // the general one — it only cost an extra program-cache
+                    // lookup and a panic site.
+                    let mut account = match self.accounts.try_get_account(key) {
+                        Ok(Some(account)) => account,
+                        Ok(None) => {
+                            let mut default_account = AccountSharedData::default();
+                            default_account.set_rent_epoch(0);
+                            default_account
+                        }
+                        Err(error) => {
+                            return Err(execution_result_with_account_source_error(
+                                *key,
+                                error,
+                                TransactionError::AccountNotFound,
+                                fee,
+                                "failed to load transaction account from source",
+                            ));
                         }
                     };
 
@@ -758,5 +778,111 @@ impl<T: SvmTypesHost> Svm<'_, T> {
         map_sanitize_result(self.sanitize_transaction_no_verify(tx), |s_tx| {
             self.execute_sanitized_transaction::<MODE>(&s_tx, log_collector, &flags)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use solana_account::AccountSharedData;
+    use solana_address::Address;
+    use solana_instruction::Instruction;
+    use solana_keypair::Keypair;
+    use solana_message::{Message, VersionedMessage};
+    use solana_signer::Signer;
+    use solana_transaction::versioned::VersionedTransaction;
+    use solana_transaction_error::TransactionError;
+
+    use super::*;
+    use crate::{
+        Hpsvm,
+        account_source::{AccountSource, AccountSourceError},
+    };
+
+    /// An account source that is permanently unavailable.
+    ///
+    /// `AccountSourceError::new` maps to `AccountSourceErrorKind::Unavailable`,
+    /// which the taxonomy classifies as fatal (retrying is pointless).
+    struct UnavailableSource;
+
+    impl AccountSource for UnavailableSource {
+        fn get_account(
+            &self,
+            _pubkey: &Address,
+        ) -> Result<Option<AccountSharedData>, AccountSourceError> {
+            Err(AccountSourceError::new("account source is down"))
+        }
+    }
+
+    /// Builds a VM whose committed program cache holds `program_id` while the
+    /// overlay does not hold its account.
+    ///
+    /// The clone is taken *before* the program is added: a clone shares the
+    /// committed program cache but deep-copies the overlay, so the program
+    /// lands in the shared cache while the clone's overlay never sees the
+    /// account (and never tombstones it either). That is the state the old
+    /// "read-only program account in the program cache" fast path mishandled.
+    fn vm_with_program_missing_from_overlay() -> (Hpsvm, Address) {
+        let program_id = Address::new_unique();
+        let mut svm = Hpsvm::new();
+        let worker = svm.clone();
+        let elf = include_bytes!("../elf/spl_memo-3.0.0.so");
+        svm.add_program(program_id, &elf[..]).expect("program should load");
+        (worker, program_id)
+    }
+
+    /// Builds a transaction that invokes `program_id` with no accounts.
+    fn program_transaction(
+        program_id: &Address,
+        payer: &Keypair,
+        blockhash: solana_hash::Hash,
+    ) -> VersionedTransaction {
+        let instruction = Instruction { program_id: *program_id, accounts: vec![], data: vec![] };
+        let message =
+            Message::new_with_blockhash(&[instruction], Some(&payer.pubkey()), &blockhash);
+        VersionedTransaction::try_new(VersionedMessage::Legacy(message), &[payer])
+            .expect("transaction should build")
+    }
+
+    /// A program account that the overlay does not know must fail the
+    /// transaction cleanly instead of panicking.
+    #[test]
+    fn a_program_account_missing_from_the_overlay_fails_cleanly() {
+        let (mut worker, program_id) = vm_with_program_missing_from_overlay();
+        let payer = Keypair::new();
+        worker.airdrop(&payer.pubkey(), 1_000_000).expect("airdrop should succeed");
+        let blockhash = worker.latest_blockhash();
+        let tx = program_transaction(&program_id, &payer, blockhash);
+
+        let staged = worker.transact(tx).expect("staging must not fail fatally");
+        let error = match staged.result() {
+            Ok(_) => panic!("a missing program account must not succeed"),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(error.err, TransactionError::InvalidProgramForExecution),
+            "unexpected error: {:?}",
+            error.err
+        );
+    }
+
+    /// An unreachable account source must surface as a classified, fatal
+    /// error instead of panicking.
+    #[test]
+    fn an_unreachable_account_source_reports_the_source_failure() {
+        let (mut worker, program_id) = vm_with_program_missing_from_overlay();
+        let payer = Keypair::new();
+        worker.airdrop(&payer.pubkey(), 1_000_000).expect("airdrop should succeed");
+        worker.set_account_source(UnavailableSource);
+        let blockhash = worker.latest_blockhash();
+        let tx = program_transaction(&program_id, &payer, blockhash);
+
+        let error = match worker.transact(tx) {
+            Ok(_) => panic!("an unreachable account source must not stage successfully"),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(error, HPSVMError::AccountSource { .. }),
+            "unexpected error: {error:?}"
+        );
     }
 }

@@ -777,8 +777,19 @@ impl Accounts {
         use crate::programs::{content_key, load_program_uncompiled, program_entry_store};
 
         let owner = program_account.owner();
-        let slot =
-            self.sysvar_cache.get_clock().expect("clock sysvar should always be available").slot;
+        // The clock sysvar carries the deployment slot every program entry is
+        // keyed by. It is materialized by `set_sysvars`, but `Accounts` can be
+        // built without one (the builder only requires sysvars when builtins,
+        // default programs or signature verification need them), so the
+        // missing-sysvar case is reported as a load failure instead of
+        // panicking.
+        let slot = match self.sysvar_cache.get_clock() {
+            Ok(clock) => clock.slot,
+            Err(error) => {
+                tracing::error!("clock sysvar is not materialized; cannot load a program: {error}");
+                return Err(InstructionError::InvalidAccountData);
+            }
+        };
 
         // Resolve the ELF bytes and the loader key used for the entry.
         // The borrow of `programdata_account` (upgradeable path) lives for
@@ -913,15 +924,30 @@ impl Accounts {
         };
 
         if table_account.owner() == &solana_sdk_ids::address_lookup_table::id() {
-            let slot_hashes = self
-                .sysvar_cache
-                .get_slot_hashes()
-                .expect("slot hashes sysvar should always be available");
-            let current_slot = self
-                .sysvar_cache
-                .get_clock()
-                .expect("clock sysvar should always be available")
-                .slot;
+            // The slot hashes and the clock are the two sysvars a lookup table
+            // is resolved against. Both are materialized by `set_sysvars`, but
+            // an `Accounts` database can be built without them, so the
+            // missing-sysvar case is reported as a lookup failure instead of
+            // panicking.
+            let slot_hashes = match self.sysvar_cache.get_slot_hashes() {
+                Ok(hashes) => hashes,
+                Err(error) => {
+                    tracing::error!(
+                        "slot hashes sysvar is not materialized; cannot resolve a lookup table: {error}"
+                    );
+                    return Err(AddressLookupError::InvalidAccountData.into());
+                }
+            };
+            let clock = match self.sysvar_cache.get_clock() {
+                Ok(clock) => clock,
+                Err(error) => {
+                    tracing::error!(
+                        "clock sysvar is not materialized; cannot resolve a lookup table: {error}"
+                    );
+                    return Err(AddressLookupError::InvalidAccountData.into());
+                }
+            };
+            let current_slot = clock.slot;
             let lookup_table = AddressLookupTable::deserialize(table_account.data())
                 .map_err(|_ix_err| AddressLookupError::InvalidAccountData)?;
 

@@ -1274,15 +1274,25 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
         let tx = self.instruction_chain_transaction(&instructions.into_iter().collect::<Vec<_>>());
         let sigverify = self.version.sigverify;
         self.version.sigverify = false;
-        let outcome = Self::transact_core(self, tx);
-        // The borrow held by `outcome` ends when it is resolved below, so the
-        // sigverify flag can only be restored afterwards.
-        let result = match outcome {
-            Ok(staged) => staged.commit(),
-            Err(failure) => failure.into_result(),
-        };
+        // Panic-safe restore: a panic anywhere in the execution path (an SBF
+        // program aborting, a user-registered transaction handler panicking,
+        // ...) must not leave signature verification permanently disabled on
+        // the VM. `with_transaction_origin` and `with_temporary_account_source`
+        // use the same catch/restore/resume shape for the same reason.
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let outcome = Self::transact_core(self, tx);
+            // The borrow held by `outcome` ends when it is resolved below, so
+            // the sigverify flag can only be restored afterwards.
+            match outcome {
+                Ok(staged) => staged.commit(),
+                Err(failure) => failure.into_result(),
+            }
+        }));
         self.version.sigverify = sigverify;
-        result
+        match outcome {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
     }
 
     /// Processes multiple instructions atomically after first writing explicit account states.
@@ -1969,6 +1979,73 @@ mod tests {
 
         assert!(result.is_ok());
         assert_eq!(svm.get_balance(&recipient), Some(64));
+    }
+
+    /// A handler that panics during validation, used to drive a panic through
+    /// the transaction pipeline.
+    struct PanickingHandler;
+
+    impl<T: SvmTypesHost> TxHandler<T, VersionedTransaction, DetachedTx> for PanickingHandler {
+        fn validate(
+            &self,
+            _tx: &VersionedTransaction,
+            _host: &Svm<'_, T>,
+        ) -> Result<(), HPSVMError> {
+            panic!("handler panic");
+        }
+
+        fn execute(
+            &self,
+            _tx: VersionedTransaction,
+            _host: &Svm<'_, T>,
+        ) -> Result<DetachedTx, HPSVMError> {
+            unreachable!("validate panics before execute runs")
+        }
+    }
+
+    /// A panic anywhere in the execution path must not leave signature
+    /// verification permanently disabled on the VM.
+    #[test]
+    fn process_instruction_chain_restores_sigverify_after_a_panic() {
+        let mut svm = Hpsvm::new();
+        assert!(svm.get_sigverify(), "a fresh VM verifies signatures");
+
+        svm.register_tx_handler(TxTag::Legacy, PanickingHandler);
+
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            svm.process_instruction_chain([Instruction {
+                program_id: system_program::id(),
+                accounts: vec![],
+                data: vec![],
+            }]);
+        }));
+
+        assert!(outcome.is_err(), "the handler panic must propagate to the caller");
+        assert!(
+            svm.get_sigverify(),
+            "signature verification must be restored after a panic"
+        );
+    }
+
+    /// A VM built without sysvars cannot load a program, because the program
+    /// entry is keyed by the clock slot. The missing component must be
+    /// reported as an error rather than panicking.
+    #[test]
+    fn writing_a_program_account_without_sysvars_reports_an_error() {
+        let mut svm = Hpsvm::builder().build().expect("a minimal VM should build");
+
+        let program_id = Address::new_unique();
+        let mut program = AccountSharedData::new(1, 0, &bpf_loader_upgradeable::id());
+        program.set_executable(true);
+
+        let error = match svm.set_account(program_id, program.into()) {
+            Ok(()) => panic!("loading a program without sysvars must fail"),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(error, HPSVMError::Instruction(InstructionError::InvalidAccountData)),
+            "unexpected error: {error:?}"
+        );
     }
 }
 
