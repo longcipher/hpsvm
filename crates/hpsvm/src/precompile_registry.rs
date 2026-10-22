@@ -9,13 +9,13 @@
 //!
 //! [`InvokeContextCallback`]: solana_svm_callback::InvokeContextCallback
 
-use std::{collections::HashMap, fmt, marker::PhantomData, sync::Arc};
+use std::{fmt, marker::PhantomData, sync::Arc};
 
 use agave_feature_set::FeatureSet;
 use solana_address::Address;
 use solana_precompile_error::PrecompileError;
 
-use crate::SvmTypesHost;
+use crate::{SvmTypesHost, collections::HashMap};
 
 /// A single precompile entry: the program id it handles plus its verifier.
 ///

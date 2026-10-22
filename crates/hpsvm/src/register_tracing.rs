@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     fs::File,
     io::{self, Write},
     path::Path,
@@ -14,7 +13,7 @@ use solana_program_runtime::invoke_context::{Executable, InvokeContext, Register
 use solana_transaction::sanitized::SanitizedTransaction;
 use solana_transaction_context::{IndexOfAccount, instruction::InstructionContext};
 
-use crate::{InvocationInspectCallback, Svm, SvmTypesHost};
+use crate::{InvocationInspectCallback, Svm, SvmTypesHost, collections::HashMap};
 
 const DEFAULT_PATH: &str = "target/sbf/trace";
 

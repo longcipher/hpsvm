@@ -5,6 +5,7 @@ use solana_account::{AccountSharedData, ReadableAccount, WritableAccount};
 use solana_address::Address;
 use solana_compute_budget::compute_budget_limits::ComputeBudgetLimits;
 use solana_fee::FeeFeatures;
+use solana_hash::Hash;
 use solana_program_runtime::invoke_context::{EnvironmentConfig, InvokeContext};
 use solana_sdk_ids::native_loader;
 use solana_svm_log_collector::LogCollector;
@@ -28,6 +29,56 @@ use crate::{
     types::{AccountSourceFailure, ExecutionResult},
     utils::construct_instructions_account,
 };
+
+/// Whether a sanitized transaction must carry its real message hash.
+///
+/// The message hash is a blake3 digest over the raw message bytes. `hpsvm`
+/// never reads it: [`SanitizedTransaction::verify`] recomputes the bytes it
+/// needs for the signature check, the blockhash and history checks read the
+/// message, and the only way user code can reach the digest is through the
+/// `&SanitizedTransaction` handed to an inspector or to the invocation
+/// callback.
+///
+/// Computing the digest eagerly cost about 1.8% of the per-transaction time
+/// in the `max_perf` profile — a blake3 over the message bytes on every
+/// transaction, for a digest that was then thrown away. The execution paths
+/// that provably cannot hand the transaction to user code therefore skip the
+/// computation.
+///
+/// [`SanitizedTransaction::verify`]: solana_transaction::sanitized::SanitizedTransaction::verify
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MessageHashPolicy {
+    /// Compute the real digest: user code may observe it.
+    Compute,
+    /// Skip the computation: no observer can reach the digest.
+    Skip,
+}
+impl MessageHashPolicy {
+    /// Returns the policy for an execution running under `MODE`.
+    ///
+    /// The digest is reachable through the `&SanitizedTransaction` passed to
+    /// [`Inspector::transaction_start`](crate::Inspector::transaction_start),
+    /// which only runs when an inspector accepted the execution, and through
+    /// [`InvocationInspectCallback::before_invocation`](crate::InvocationInspectCallback::before_invocation),
+    /// which always runs when that feature is compiled in.
+    pub(crate) const fn for_mode<const MODE: InspectMode>() -> Self {
+        if MODE.is_live() || cfg!(feature = "invocation-inspect-callback") {
+            Self::Compute
+        } else {
+            Self::Skip
+        }
+    }
+
+    /// Returns the `MessageHash` argument for [`SanitizedTransaction::try_create`].
+    fn message_hash(self) -> MessageHash {
+        match self {
+            Self::Compute => MessageHash::Compute,
+            // The digest is unobservable under this policy, so the placeholder
+            // is never read. It still has to be *a* `Hash`.
+            Self::Skip => MessageHash::Precomputed(Hash::default()),
+        }
+    }
+}
 
 struct CheckAndProcessTransactionSuccessCore<'ix_data> {
     result: Result<(), TransactionError>,
@@ -172,15 +223,27 @@ impl<T: SvmTypesHost> Svm<'_, T> {
         )
     }
 
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub(crate) fn sanitize_transaction_no_verify(
         &self,
         tx: VersionedTransaction,
     ) -> Result<SanitizedTransaction, ExecutionResult> {
+        self.sanitize_transaction_no_verify_with_policy(tx, MessageHashPolicy::Compute)
+    }
+
+    /// Sanitizes a transaction without verifying its signatures, under an
+    /// explicit message-hash policy.
+    ///
+    /// See [`MessageHashPolicy`] for why the policy exists.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    pub(crate) fn sanitize_transaction_no_verify_with_policy(
+        &self,
+        tx: VersionedTransaction,
+        policy: MessageHashPolicy,
+    ) -> Result<SanitizedTransaction, ExecutionResult> {
         let loader = AccountSourceTrackingAddressLoader::new(&self.state.accounts);
         SanitizedTransaction::try_create(
             tx,
-            MessageHash::Compute,
+            policy.message_hash(),
             Some(false),
             &loader,
             &self.extensions.reserved_account_keys.active,
@@ -204,7 +267,20 @@ impl<T: SvmTypesHost> Svm<'_, T> {
         tx: VersionedTransaction,
         flags: &TxFeatureFlags,
     ) -> Result<SanitizedTransaction, ExecutionResult> {
-        let tx = self.sanitize_transaction_no_verify(tx)?;
+        self.sanitize_transaction_with_flags_and_policy(tx, flags, MessageHashPolicy::Compute)
+    }
+
+    /// Sanitizes and verifies a transaction under an explicit message-hash
+    /// policy.
+    ///
+    /// See [`MessageHashPolicy`] for why the policy exists.
+    pub(crate) fn sanitize_transaction_with_flags_and_policy(
+        &self,
+        tx: VersionedTransaction,
+        flags: &TxFeatureFlags,
+        policy: MessageHashPolicy,
+    ) -> Result<SanitizedTransaction, ExecutionResult> {
+        let tx = self.sanitize_transaction_no_verify_with_policy(tx, policy)?;
 
         tx.verify().map_err(|err| ExecutionResult { tx_result: Err(err), ..Default::default() })?;
         SanitizedTransaction::validate_account_locks(
@@ -710,9 +786,11 @@ impl<T: SvmTypesHost> Svm<'_, T> {
     ) -> ExecutionResult {
         // Single flag load for this transaction; sanitize and execution share it.
         let flags = TxFeatureFlags::load(&self.version.feature_set);
-        map_sanitize_result(self.sanitize_transaction_with_flags(tx, &flags), |s_tx| {
-            self.execute_sanitized_transaction::<MODE>(&s_tx, log_collector, &flags)
-        })
+        let policy = MessageHashPolicy::for_mode::<MODE>();
+        map_sanitize_result(
+            self.sanitize_transaction_with_flags_and_policy(tx, &flags, policy),
+            |s_tx| self.execute_sanitized_transaction::<MODE>(&s_tx, log_collector, &flags),
+        )
     }
 
     pub(crate) fn execute_transaction_no_verify_readonly<const MODE: InspectMode>(
@@ -722,7 +800,8 @@ impl<T: SvmTypesHost> Svm<'_, T> {
     ) -> ExecutionResult {
         // Single flag load for this transaction; sanitize and execution share it.
         let flags = TxFeatureFlags::load(&self.version.feature_set);
-        map_sanitize_result(self.sanitize_transaction_no_verify(tx), |s_tx| {
+        let policy = MessageHashPolicy::for_mode::<MODE>();
+        map_sanitize_result(self.sanitize_transaction_no_verify_with_policy(tx, policy), |s_tx| {
             self.execute_sanitized_transaction::<MODE>(&s_tx, log_collector, &flags)
         })
     }
@@ -742,6 +821,7 @@ mod tests {
     use crate::{
         HPSVMError, Hpsvm,
         account_source::{AccountSource, AccountSourceError},
+        execution::MessageHashPolicy,
     };
 
     /// An account source that is permanently unavailable.
@@ -809,6 +889,118 @@ mod tests {
             "unexpected error: {:?}",
             error.err
         );
+    }
+
+    /// The message-hash policy follows the inspect mode: an execution that
+    /// cannot hand the transaction to user code skips the digest.
+    #[test]
+    fn the_message_hash_policy_follows_the_inspect_mode() {
+        use crate::InspectMode;
+
+        // The invocation callback always observes the sanitized transaction
+        // when that feature is compiled in, so the digest is always computed
+        // in that configuration.
+        if cfg!(feature = "invocation-inspect-callback") {
+            assert_eq!(
+                MessageHashPolicy::for_mode::<{ InspectMode::NoInspector }>(),
+                MessageHashPolicy::Compute
+            );
+        } else {
+            assert_eq!(
+                MessageHashPolicy::for_mode::<{ InspectMode::NoInspector }>(),
+                MessageHashPolicy::Skip
+            );
+        }
+        assert_eq!(
+            MessageHashPolicy::for_mode::<{ InspectMode::DynInspector }>(),
+            MessageHashPolicy::Compute
+        );
+    }
+
+    /// Skipping the message hash leaves the rest of the sanitization intact:
+    /// the transaction still sanitizes, still verifies, and still carries the
+    /// message it was built from.
+    #[test]
+    fn skipping_the_message_hash_keeps_sanitization_intact() {
+        use solana_hash::Hash;
+
+        let mut svm = Hpsvm::new();
+        let payer = Keypair::new();
+        svm.airdrop(&payer.pubkey(), 1_000_000).expect("airdrop should succeed");
+        let blockhash = svm.latest_blockhash();
+        let tx = program_transaction(&Address::new_unique(), &payer, blockhash);
+
+        let expected = tx.message.hash();
+        let skipped = svm
+            .sanitize_transaction_no_verify_with_policy(tx.clone(), MessageHashPolicy::Skip)
+            .expect("sanitize should succeed");
+        let computed = svm
+            .sanitize_transaction_no_verify_with_policy(tx, MessageHashPolicy::Compute)
+            .expect("sanitize should succeed");
+
+        assert_eq!(skipped.message_hash(), &Hash::default());
+        assert_eq!(computed.message_hash(), &expected);
+        // The message itself is untouched by the policy.
+        assert_eq!(skipped.message(), computed.message());
+        // Signature verification does not read the stored digest: it
+        // recomputes the bytes it needs. Both variants verify identically.
+        assert!(skipped.verify().is_ok());
+        assert!(computed.verify().is_ok());
+    }
+
+    /// An installed inspector observes the real message hash, so the
+    /// no-inspector fast path never leaks a placeholder digest to user code.
+    #[test]
+    fn an_installed_inspector_observes_the_real_message_hash() {
+        use std::sync::{Arc, Mutex};
+
+        use solana_hash::Hash;
+        use solana_transaction::sanitized::SanitizedTransaction;
+
+        use crate::Inspector;
+
+        /// Records the message hash the inspector was handed.
+        #[derive(Default)]
+        struct HashRecorder {
+            seen: Arc<Mutex<Vec<Hash>>>,
+        }
+
+        impl Inspector<crate::svm_types::BaseSvmTypes> for HashRecorder {
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+
+            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+                self
+            }
+
+            fn transaction_start(
+                &mut self,
+                _svm: &crate::Svm<'_, crate::svm_types::BaseSvmTypes>,
+                tx: &SanitizedTransaction,
+            ) {
+                self.seen.lock().expect("lock should not be poisoned").push(*tx.message_hash());
+            }
+        }
+
+        let mut svm = Hpsvm::new();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        svm.set_inspector(HashRecorder { seen: Arc::clone(&seen) });
+
+        let program_id = Address::new_unique();
+        let elf = include_bytes!("../elf/spl_memo-3.0.0.so");
+        svm.add_program(program_id, &elf[..]).expect("program should load");
+
+        let payer = Keypair::new();
+        svm.airdrop(&payer.pubkey(), 1_000_000).expect("airdrop should succeed");
+        let blockhash = svm.latest_blockhash();
+        let tx = program_transaction(&program_id, &payer, blockhash);
+        let expected = tx.message.hash();
+
+        svm.send_transaction(tx).expect("transaction should execute");
+
+        let recorded = seen.lock().expect("lock should not be poisoned").clone();
+        assert_eq!(recorded, vec![expected], "the inspector must observe the real digest");
     }
 
     /// A missing rent sysvar fails the transaction instead of panicking.

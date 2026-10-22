@@ -25,13 +25,14 @@
 //!   stays generic over `Tx` so non-`VersionedTransaction` envelopes can be added later without
 //!   changing the registry shape.
 
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use solana_message::VersionedMessage;
 use solana_transaction::versioned::VersionedTransaction;
 
 use crate::{
     DetachedTx, Svm, SvmTypesHost,
+    collections::HashMap,
     error::{ExecutionError, TxError, TxValidationError},
 };
 

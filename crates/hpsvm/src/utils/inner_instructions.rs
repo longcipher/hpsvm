@@ -35,23 +35,20 @@ pub(crate) fn extract_instruction_trace_data(
         let program_account_index = frame.program_account_index_in_tx as usize;
         let program_id = account_keys.get(program_account_index).copied().unwrap_or_default();
 
-        // ponytail: SmallVec for typical 2-8 accounts per instruction, avoids heap alloc
-        let ix_accounts: SmallVec<[AccountMeta; 8]> = accounts[i]
-            .iter()
-            .filter_map(|acc| {
-                let pubkey = account_keys.get(acc.index_in_transaction as usize).copied()?;
-                Some(AccountMeta {
-                    pubkey,
-                    is_signer: acc.is_signer(),
-                    is_writable: acc.is_writable(),
-                })
-            })
-            .collect();
+        // The trace owns its account metas, so collect straight into the `Vec`
+        // the trace frame stores. An intermediate `SmallVec` had to be copied
+        // into that `Vec` anyway (`into_vec`), so it only added a memcpy per
+        // traced instruction on top of the allocation it was meant to avoid.
+        let mut ix_accounts = Vec::with_capacity(accounts[i].len());
+        ix_accounts.extend(accounts[i].iter().filter_map(|acc| {
+            let pubkey = account_keys.get(acc.index_in_transaction as usize).copied()?;
+            Some(AccountMeta { pubkey, is_signer: acc.is_signer(), is_writable: acc.is_writable() })
+        }));
 
         execution_instructions.push(ExecutedInstruction {
             stack_height: stack_height as u8,
             program_id,
-            accounts: ix_accounts.into_vec(),
+            accounts: ix_accounts,
             data: data[i].to_vec(),
         });
 

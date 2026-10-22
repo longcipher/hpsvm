@@ -31,7 +31,7 @@
 //! * compute budget: `None` (derived per transaction);
 //! * log-bytes limit: `Some(10_000)`;
 //! * `sigverify` / `blockhash_check`: `true` (the `Hpsvm::new()` final state);
-//! * `compute_diagnostics`: `true`.
+//! * `compute_diagnostics`: `true` (the spec's backward-compatibility default).
 //! * JIT policy: [`JitPolicy::Eager`](crate::JitPolicy::Eager) (today's behavior).
 //!
 //! Protocol differences between clusters arrive later via [`Version::with_feature`]
@@ -140,6 +140,12 @@ pub struct Version {
     /// Whether transaction outcomes carry pre/post diffs and token balances.
     ///
     /// Carried over from `SvmCfg`.
+    ///
+    /// Defaults to `true` for backward compatibility (the performance spec's
+    /// `2026-06-17-02` Approach pins the default). Computing the diagnostics
+    /// reloads the pre-state of every touched account and scans the account
+    /// set for token balances, so turning it off is the lever for callers
+    /// that do not read them.
     pub compute_diagnostics: bool,
     /// Compiled-program tiering policy.
     ///

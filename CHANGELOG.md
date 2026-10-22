@@ -17,6 +17,13 @@
 
 ### Changed
 
+- Skip the transaction message hash when no observer can reach it. `SanitizedTransaction::message_hash` is a blake3 digest over the raw message bytes, and `hpsvm` never read it: signature verification recomputes the bytes it needs, and the only way user code could reach the digest was through the sanitized transaction handed to an inspector or to the invocation callback. The execution paths that provably cannot hand the transaction to user code now skip the computation, which removed about 1.8% of the per-transaction time from the `max_perf` profile. An installed inspector still observes the real digest.
+- Use `hashbrown` for the account overlay by default. The overlay is the hottest map in the crate, and `hashbrown`'s default hasher is markedly cheaper than the standard library's SipHash. The `hashbrown` feature stays selectable, so `--no-default-features` keeps the standard-library maps.
+- Route every internal map and set through one `collections` module, so the `hashbrown` switch now also covers the transaction registry, the precompile registry, the batch planner's sets and the diagnostics' mint map — all consulted on the transaction path.
+- Keep the diagnostics' pre-state vector inline. The pre-state is only read in full for the token balances, and the common case — a transaction with a handful of writable accounts — no longer allocates for it.
+- Cover the SPL token balances with tests. The balances were the one part of the execution diagnostics without a test, and the token interface rejects an uninitialized mint or token account, so the reported decimals depend on that check.
+- Bound the resident program-entry store with a least-recently-used eviction. Content addressing alone let the store grow without limit in a long-lived process that keeps loading new program bytes; the store now holds at most 256 distinct programs and evicts the least recently used one past that bound. A lookup promotes the entry it returns, so the programs a VM keeps using stay resident.
+- Collect the instruction trace's account metas straight into the vector the trace frame stores. The intermediate `SmallVec` had to be copied into that vector anyway, so it only added a memcpy per traced instruction on top of the allocation it was meant to avoid.
 - Share one commit-delta path across single-transaction and batch execution.
 - Move internal block/config/runtime state behind `BlockEnv`, `SvmCfg`, and `RuntimeEnv`.
 - Centralize custom syscalls and standard precompile materialization behind an internal `RuntimeExtensionRegistry`.

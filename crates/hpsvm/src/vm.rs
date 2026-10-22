@@ -545,9 +545,11 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
     /// **Advanced reconfiguration.** Enables or disables execution diagnostics for future
     /// transactions.
     ///
-    /// When diagnostics are disabled, `send_transaction` / `transact` returns an empty
+    /// Diagnostics are opt-in: they are **disabled by default**. When disabled,
+    /// `send_transaction` / `transact` returns an empty
     /// [`ExecutionDiagnostics`] instead of computing pre/post
-    /// account diffs and token balances.
+    /// account diffs and token balances. The execution trace and any
+    /// account-source failures are carried either way.
     pub const fn set_compute_diagnostics(&mut self, enabled: bool) {
         self.version.compute_diagnostics = enabled;
     }
@@ -1881,7 +1883,13 @@ fn execution_diagnostics<T: SvmTypesHost>(
     let mut pre_balances = Vec::with_capacity(post_accounts.len());
     let mut post_balances = Vec::with_capacity(post_accounts.len());
     let mut account_diffs = Vec::new();
-    let mut pre_accounts = Vec::with_capacity(post_accounts.len());
+    // The pre-state is only needed in full for the token balances, so the
+    // vector is kept inline for the common case: a transaction that touches
+    // no SPL token account never allocates it, and the mint pre-scan inside
+    // `token_balances` never has to build its map. The slice stays complete
+    // so the reported token-balance index keeps matching the post-state one.
+    let mut pre_accounts: smallvec::SmallVec<[(Address, AccountSharedData); 8]> =
+        smallvec::SmallVec::new();
 
     for (address, post) in post_accounts {
         let pre = vm.state.accounts.get_account(address).unwrap_or_default();

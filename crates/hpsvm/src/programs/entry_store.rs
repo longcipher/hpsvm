@@ -12,7 +12,14 @@
 //! A hit skips ELF parsing, verification and JIT compilation entirely by
 //! re-linking the resident `Arc<ProgramCacheEntry>`. A program account whose
 //! bytes change hashes to a different key, so the old entry is simply
-//! unreachable (content addressing; no eviction scan).
+//! unreachable (content addressing).
+//!
+//! The store is **bounded**: it evicts the least-recently-used entry once it
+//! holds [`PROGRAM_ENTRY_CAPACITY`] distinct programs. Content addressing
+//! alone leaves the map growing forever in a long-lived process that keeps
+//! loading new program bytes, and every evicted program pays a full ELF
+//! parse + verify + JIT again when it comes back. The LRU keeps the programs
+//! that are actually in use resident and lets the rest go.
 //!
 //! Safety: the environment component is the `Arc` pointer identity of the
 //! `ProgramRuntimeEnvironments` the entry was built under — the same argument
@@ -31,12 +38,22 @@
 
 use std::{
     collections::HashMap,
+    num::NonZeroUsize,
     sync::{Arc, OnceLock},
 };
 
+use lru::LruCache;
 use parking_lot::RwLock;
 use solana_address::Address;
 use solana_program_runtime::program_cache_entry::ProgramCacheEntry;
+
+/// Maximum number of distinct programs the resident store keeps resident.
+///
+/// Eviction is least-recently-used, and a lookup promotes the entry it
+/// returns, so the programs a VM keeps using stay resident while programs
+/// that were loaded once and never used again are dropped. The bound exists
+/// so a long-lived process cannot accumulate resident executables forever.
+pub(crate) const PROGRAM_ENTRY_CAPACITY: usize = 256;
 
 /// Cache key for a memoized default-program executable:
 /// `(env_ptr, elf_ptr, elf_len, loader_id)`.
@@ -109,21 +126,27 @@ pub(crate) fn content_key(
 ///
 /// Maps [`ProgramEntryKey`] to the resident `Arc<ProgramCacheEntry>`.
 /// Entries are content-addressed: a mutated program resolves to a different
-/// key and triggers a fresh load; the old entry stays until the last `Arc`
-/// holder drops it. No eviction scan is needed.
+/// key and triggers a fresh load. The map is bounded by
+/// [`PROGRAM_ENTRY_CAPACITY`]; the least-recently-used entry is evicted when a
+/// new one pushes the store past the bound.
 pub(crate) struct ProgramEntryStore {
-    inner: RwLock<HashMap<ProgramEntryKey, Arc<ProgramCacheEntry>>>,
+    inner: RwLock<LruCache<ProgramEntryKey, Arc<ProgramCacheEntry>>>,
 }
 
 impl ProgramEntryStore {
     /// Creates an empty store.
     pub(crate) fn new() -> Self {
-        Self { inner: RwLock::new(HashMap::new()) }
+        let capacity = NonZeroUsize::new(PROGRAM_ENTRY_CAPACITY).expect("the capacity is non-zero");
+        Self { inner: RwLock::new(LruCache::new(capacity)) }
     }
 
     /// Looks up a resident entry.
+    ///
+    /// A hit promotes the entry so a program that keeps being used stays
+    /// resident while one that is loaded once and never used again is the
+    /// first to be evicted.
     pub(crate) fn get(&self, key: &ProgramEntryKey) -> Option<Arc<ProgramCacheEntry>> {
-        self.inner.read().get(key).cloned()
+        self.inner.write().get(key).cloned()
     }
 
     /// Inserts an entry, keeping the first writer on a race, and returns the
@@ -133,7 +156,12 @@ impl ProgramEntryStore {
         key: ProgramEntryKey,
         entry: Arc<ProgramCacheEntry>,
     ) -> Arc<ProgramCacheEntry> {
-        self.inner.write().entry(key).or_insert(entry).clone()
+        let mut guard = self.inner.write();
+        if let Some(existing) = guard.get(&key) {
+            return Arc::clone(existing);
+        }
+        guard.put(key, Arc::clone(&entry));
+        entry
     }
 
     /// Number of resident entries (stats / tests only).
@@ -246,6 +274,95 @@ mod tests {
         assert_eq!(store.len(), 1);
         let hit = store.get(&key).expect("inserted entry must be retrievable");
         assert!(Arc::ptr_eq(&hit, &entry));
+    }
+
+    /// The resident store is bounded: inserting past the capacity evicts the
+    /// least-recently-used entry instead of growing without limit.
+    #[test]
+    fn the_store_evicts_the_least_recently_used_entry_past_its_capacity() {
+        use solana_program_runtime::{
+            loaded_programs::ProgramRuntimeEnvironment, solana_sbpf::program::BuiltinProgram,
+        };
+
+        use crate::programs::load_program_uncompiled;
+        let env = ProgramRuntimeEnvironment::from(BuiltinProgram::new_loader(Default::default()));
+        let elf = include_bytes!("../../elf/spl_memo-3.0.0.so");
+        let loader = solana_sdk_ids::bpf_loader::id();
+        let entry =
+            Arc::new(load_program_uncompiled(&loader, &env, elf).expect("load should succeed"));
+
+        let store = ProgramEntryStore::new();
+        let key_for = |index: usize| {
+            let mut bytes = elf.to_vec();
+            // Distinct bytes per key, so every entry has its own content hash.
+            // Two bytes, so an index above 255 does not collide with a lower
+            // one.
+            bytes.push((index >> 8) as u8);
+            bytes.push(index as u8);
+            content_key(0xabc, &bytes, &loader, crate::accounts_db::IMMEDIATE_DEPLOYMENT_SLOT)
+        };
+
+        let first = key_for(0);
+        for index in 0..PROGRAM_ENTRY_CAPACITY {
+            store.insert(key_for(index), Arc::clone(&entry));
+        }
+        assert_eq!(store.len(), PROGRAM_ENTRY_CAPACITY);
+
+        // One more distinct program pushes the store past its capacity. Note
+        // that the store is not asked about `first` before this point: a
+        // lookup promotes the entry it returns, which would make `first` the
+        // most recently used entry instead of the least.
+        store.insert(key_for(PROGRAM_ENTRY_CAPACITY), Arc::clone(&entry));
+
+        assert_eq!(
+            store.len(),
+            PROGRAM_ENTRY_CAPACITY,
+            "the store must not grow past its capacity"
+        );
+        assert!(
+            store.get(&first).is_none(),
+            "the least-recently-used entry must have been evicted"
+        );
+        assert!(
+            store.get(&key_for(PROGRAM_ENTRY_CAPACITY)).is_some(),
+            "the newest entry must be resident"
+        );
+    }
+
+    /// A lookup promotes the entry it returns, so a program that keeps being
+    /// used stays resident while an unused one is evicted first.
+    #[test]
+    fn a_lookup_promotes_the_entry_it_returns() {
+        use solana_program_runtime::{
+            loaded_programs::ProgramRuntimeEnvironment, solana_sbpf::program::BuiltinProgram,
+        };
+
+        use crate::programs::load_program_uncompiled;
+        let env = ProgramRuntimeEnvironment::from(BuiltinProgram::new_loader(Default::default()));
+        let elf = include_bytes!("../../elf/spl_memo-3.0.0.so");
+        let loader = solana_sdk_ids::bpf_loader::id();
+        let entry =
+            Arc::new(load_program_uncompiled(&loader, &env, elf).expect("load should succeed"));
+
+        let store = ProgramEntryStore::new();
+        let key_for = |index: usize| {
+            let mut bytes = elf.to_vec();
+            bytes.push((index >> 8) as u8);
+            bytes.push(index as u8);
+            content_key(0xabc, &bytes, &loader, crate::accounts_db::IMMEDIATE_DEPLOYMENT_SLOT)
+        };
+
+        let oldest = key_for(0);
+        for index in 0..PROGRAM_ENTRY_CAPACITY {
+            store.insert(key_for(index), Arc::clone(&entry));
+        }
+        // Touch the oldest entry so it is no longer the least recently used.
+        assert!(store.get(&oldest).is_some());
+
+        store.insert(key_for(PROGRAM_ENTRY_CAPACITY), Arc::clone(&entry));
+
+        assert!(store.get(&oldest).is_some(), "a promoted entry must survive the eviction");
+        assert!(store.get(&key_for(1)).is_none(), "the untouched entry must be the one evicted");
     }
 
     proptest! {

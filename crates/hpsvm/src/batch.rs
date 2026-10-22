@@ -1,4 +1,4 @@
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
 use rayon::prelude::*;
 use solana_address::Address;
@@ -10,7 +10,8 @@ use thiserror::Error;
 use crate::{
     AccountSourceError, StateChangeSet, Svm, SvmTypesHost, TransactionOrigin,
     account_source::AccountSourceErrorKind, accounts_db::AccountsDb, apply_commit_delta,
-    error::ExecutionError, history::TransactionHistory, types::TransactionResult,
+    collections::HashSet, error::ExecutionError, history::TransactionHistory,
+    types::TransactionResult,
 };
 
 /// A conflict-free stage in a transaction batch plan.

@@ -361,6 +361,7 @@ mod accounts_db;
 mod agave_compat;
 mod builder;
 mod callback;
+mod collections;
 mod commit;
 mod env;
 mod execution;

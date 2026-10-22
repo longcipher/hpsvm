@@ -1,9 +1,5 @@
-#[cfg(not(feature = "hashbrown"))]
-use std::collections::{HashMap, HashSet};
 use std::{cell::RefCell, sync::Arc};
 
-#[cfg(feature = "hashbrown")]
-use hashbrown::{HashMap, HashSet};
 use parking_lot::RwLock;
 use solana_account::{AccountSharedData, ReadableAccount, state_traits::StateMut};
 use solana_address::Address;
@@ -38,6 +34,7 @@ use solana_transaction_error::AddressLoaderError;
 
 use crate::{
     account_source::{AccountSource, AccountSourceError, EmptyAccountSource},
+    collections::{HashMap, HashSet},
     error::{DbError, DbResult, ExecutionError, HPSVMError, InvalidSysvarDataError},
     programs::JitPolicy,
 };

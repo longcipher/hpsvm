@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use solana_account::{Account, AccountSharedData, ReadableAccount, WritableAccount};
 use solana_address::Address;
 use solana_instruction::Instruction;
@@ -11,6 +9,7 @@ use spl_token_interface::state::{Account as TokenAccount, Mint as TokenMint};
 
 use crate::{
     accounts_db::AccountsDb,
+    collections::HashMap,
     types::{ExecutionTrace, TokenBalance},
     utils::rent::{check_rent_state_with_account, get_account_rent_state},
 };
@@ -113,6 +112,8 @@ pub(crate) fn token_balances(
 ) -> Vec<TokenBalance> {
     // ponytail: pre-scan mints to O(1) lookup instead of O(n) per token account.
     // Use `entry` API so first-match wins, matching the old `.find()` semantics.
+    // The map only allocates when the slice actually holds a mint, so a
+    // transaction that touches no SPL token account pays nothing for it.
     let mut mint_decimals: HashMap<Address, Option<u8>> = HashMap::new();
     for (address, account) in accounts {
         if account.data().len() == TokenMint::LEN &&

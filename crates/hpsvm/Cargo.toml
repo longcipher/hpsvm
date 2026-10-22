@@ -17,6 +17,12 @@ ignored = ["solana-short-vec", "solana-wincode-varint"]
 ignored-paths = ["tests/ui/*.rs"]
 
 [features]
+# The account overlay is the hottest map in the crate: every transaction
+# looks up each of its account keys in it. `hashbrown`'s default hasher
+# (foldhash) is markedly cheaper than the standard library's SipHash, which
+# measured about 3% of the whole `max_perf` transaction. The feature stays
+# selectable so `--no-default-features` keeps the standard-library maps.
+default = ["hashbrown"]
 internal-test = []
 invocation-inspect-callback = []
 hashbrown = ["dep:hashbrown"]
