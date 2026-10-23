@@ -9,21 +9,21 @@ members = ["bin/*", "crates/*"]
 exclude = ["vendor/hpsvm-fd-fixture"]
 
 [workspace.package]
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/longcipher/hpsvm"
 
 [workspace.dependencies]
 # local crates
-hpsvm = { path = "crates/hpsvm", version = "0.2.1" }
-hpsvm-cli = { path = "bin/hpsvm-cli", version = "0.2.1" }
-hpsvm-fixture = { path = "crates/hpsvm-fixture", version = "0.2.1", default-features = false }
-hpsvm-fixture-bench = { path = "crates/hpsvm-fixture-bench", version = "0.2.1", default-features = false }
-hpsvm-fixture-firedancer = { path = "crates/hpsvm-fixture-firedancer", version = "0.2.1", default-features = false }
-hpsvm-inspectors = { path = "crates/hpsvm-inspectors", version = "0.2.1" }
-hpsvm-macros = { path = "crates/hpsvm-macros", version = "0.2.1" }
-hpsvm-test-support = { path = "crates/hpsvm-test-support", version = "0.2.1" }
+hpsvm = { path = "crates/hpsvm", version = "0.2.2" }
+hpsvm-cli = { path = "bin/hpsvm-cli", version = "0.2.2" }
+hpsvm-fixture = { path = "crates/hpsvm-fixture", version = "0.2.2", default-features = false }
+hpsvm-fixture-bench = { path = "crates/hpsvm-fixture-bench", version = "0.2.2", default-features = false }
+hpsvm-fixture-firedancer = { path = "crates/hpsvm-fixture-firedancer", version = "0.2.2", default-features = false }
+hpsvm-inspectors = { path = "crates/hpsvm-inspectors", version = "0.2.2" }
+hpsvm-macros = { path = "crates/hpsvm-macros", version = "0.2.2" }
+hpsvm-test-support = { path = "crates/hpsvm-test-support", version = "0.2.2" }
 
 # external crates
 #
@@ -45,7 +45,7 @@ criterion = "0.8.2"
 ed25519-dalek = "3.0.0"
 hashbrown = "0.17.1"
 hex = "0.4.3"
-hotpath = "0.28.7"
+hotpath = "0.29.0"
 # Fork of `mollusk-svm-fuzz-fixture-firedancer`: upstream pins agave 4.3, which
 # cannot resolve against the 4.5 line. Built from `vendor/` through the path and
 # depended on by version once published, so `hpsvm-fixture` packages without a
@@ -55,7 +55,7 @@ hpsvm-fd-fixture = { path = "vendor/hpsvm-fd-fixture", version = "0.16.2" }
 k256 = { version = "0.14.0", features = ["arithmetic"] }
 lru = "0.19.0"
 nu-ansi-term = "0.50.3"
-parking_lot = "0.12.5"
+parking_lot = "0.13.0"
 # Proc-macro toolchain for `hpsvm-macros`, the future home of
 # `#[svm_instruction]` / `#[svm_tx_handler]`. Versions are resolved here so the
 # macro crate can inherit them once the attribute macros are implemented.
