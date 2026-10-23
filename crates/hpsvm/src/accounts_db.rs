@@ -168,7 +168,7 @@ pub(crate) struct Accounts {
     /// Ordered undo log for account state (`inner` + `removed`).
     ///
     /// Each entry records the pre-mutation state of one address, so
-    /// [`AccountsDb::rollback`] can restore an earlier
+    /// [`Accounts::rollback`] can restore an earlier
     /// [`StateCheckpoint`] byte-identically by replaying entries in reverse.
     /// A cloned DB carries its journal; rolling back the clone does not
     /// affect the original.
@@ -193,8 +193,8 @@ pub(crate) enum JournalEntry {
 
 /// Opaque index into the journal marking a restorable point in time.
 ///
-/// Produced by [`AccountsDb::checkpoint`]; consumed by
-/// [`AccountsDb::rollback`]. The index is positional: it equals the journal
+/// Produced by [`Accounts::checkpoint`]; consumed by
+/// [`Accounts::rollback`]. The index is positional: it equals the journal
 /// length at checkpoint time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct StateCheckpoint(usize);
@@ -339,22 +339,22 @@ impl std::fmt::Debug for Accounts {
 /// Read-only facade over the VM accounts database.
 #[derive(Clone, Copy, Debug)]
 pub struct AccountsView<'a> {
-    accounts_db: &'a Accounts,
+    accounts: &'a Accounts,
 }
 
 impl<'a> AccountsView<'a> {
-    pub(crate) const fn new(accounts_db: &'a AccountsDb) -> Self {
-        Self { accounts_db }
+    pub(crate) const fn new(accounts: &'a Accounts) -> Self {
+        Self { accounts }
     }
 
     /// Returns a borrowed account for the provided address.
     pub fn get_account_ref(&self, pubkey: &Address) -> Option<&'a AccountSharedData> {
-        self.accounts_db.get_account_ref(pubkey)
+        self.accounts.get_account_ref(pubkey)
     }
 
     /// Returns a cloned account for the provided address.
     pub fn get_account(&self, pubkey: &Address) -> Option<AccountSharedData> {
-        self.accounts_db.get_account(pubkey)
+        self.accounts.get_account(pubkey)
     }
 
     /// Returns a borrowed slice of ELF bytes for the provided program account.
@@ -362,7 +362,7 @@ impl<'a> AccountsView<'a> {
         &self,
         program_key: &Address,
     ) -> std::result::Result<&'a [u8], InstructionError> {
-        self.accounts_db.try_program_elf_bytes(program_key)
+        self.accounts.try_program_elf_bytes(program_key)
     }
 }
 
@@ -1128,8 +1128,8 @@ impl AddressLoader for &AccountSourceTrackingAddressLoader<'_> {
     }
 }
 
-/// Compatibility alias for the pre-split `AccountsDb` name.
-pub(crate) type AccountsDb = Accounts;
+/// Compatibility alias for the pre-split `Accounts` name.
+// `Accounts` is the canonical name (the legacy `AccountsDb` alias was removed).
 
 #[cfg(test)]
 mod tests {
@@ -1184,7 +1184,7 @@ mod tests {
     #[test]
     fn get_accounts_batch_calls_batch_method_once() {
         let source = CountingAccountSource::new();
-        let mut db = AccountsDb::default();
+        let mut db = Accounts::default();
         db.set_account_source(Arc::new(source.clone()));
         let pubkeys: Vec<Address> = (0..5).map(|i| Address::new_from_array([i; 32])).collect();
 
@@ -1199,7 +1199,7 @@ mod tests {
     #[test]
     fn removing_a_program_account_invalidates_the_program_cache() {
         let program_id = Address::new_unique();
-        let mut db = AccountsDb::default();
+        let mut db = Accounts::default();
 
         // A program account owned by a loader, with the ELF bytes in place.
         let owner = solana_sdk_ids::bpf_loader::id();
@@ -1250,7 +1250,7 @@ mod tests {
 
         let source = BatchSizeSource::default();
         let sizes = Arc::clone(&source.sizes);
-        let mut db = AccountsDb::default();
+        let mut db = Accounts::default();
         db.set_account_source(Arc::new(source));
 
         let first = Address::new_from_array([0xB0; 32]);
@@ -1349,8 +1349,8 @@ mod tests {
         }
     }
 
-    fn task43_prewarm_db(source: MapCountingSource) -> (AccountsDb, MapCountingSource) {
-        let mut db = AccountsDb::default();
+    fn task43_prewarm_db(source: MapCountingSource) -> (Accounts, MapCountingSource) {
+        let mut db = Accounts::default();
         db.set_account_source(Arc::new(source.clone()));
         (db, source)
     }
@@ -1451,7 +1451,7 @@ mod tests {
         let addr_b = Address::new_from_array([0xB1; 32]);
         let source = FailingBatchSource { single_calls: Arc::new(AtomicUsize::new(0)) };
         let single_calls = Arc::clone(&source.single_calls);
-        let mut db = AccountsDb::default();
+        let mut db = Accounts::default();
         db.set_account_source(Arc::new(source));
 
         let error = db.prewarm(&[addr_a, addr_b]).expect_err("failing source must error");
@@ -1502,7 +1502,7 @@ mod tests {
             (AccountSourceErrorKind::InvalidResponse, false),
             (AccountSourceErrorKind::Other, false),
         ] {
-            let mut db = AccountsDb::default();
+            let mut db = Accounts::default();
             db.set_account_source(Arc::new(KindFailingBatchSource { kind }));
             let addr = Address::new_from_array([0xA3; 32]);
 
@@ -1719,7 +1719,7 @@ mod tests {
         )
     }
 
-    fn apply_journal_op(db: &mut AccountsDb, op: &JournalOp) {
+    fn apply_journal_op(db: &mut Accounts, op: &JournalOp) {
         match op {
             JournalOp::Add { addr_idx, lamports, data_byte, owner_byte, rent_epoch } => {
                 let account = journal_op_account(*lamports, *data_byte, *owner_byte, *rent_epoch);
@@ -1743,7 +1743,7 @@ mod tests {
         /// arbitrary mutation sequence.
         #[test]
         fn rollback_to_origin_restores_the_original_snapshot(ops in prop::collection::vec(journal_op_strategy(), 0..32)) {
-            let mut db = AccountsDb::default();
+            let mut db = Accounts::default();
             let origin_inner = db.cache.inner.clone();
             let origin_removed = db.cache.removed.clone();
             let checkpoint = db.checkpoint();
@@ -1766,7 +1766,7 @@ mod tests {
             first_ops in prop::collection::vec(journal_op_strategy(), 0..16),
             second_ops in prop::collection::vec(journal_op_strategy(), 0..16),
         ) {
-            let mut db = AccountsDb::default();
+            let mut db = Accounts::default();
             let origin_inner = db.cache.inner.clone();
             let origin_removed = db.cache.removed.clone();
             let outer = db.checkpoint();
@@ -1804,7 +1804,7 @@ mod tests {
         let addr_sysvar = CLOCK_ID;
         let addr_new = Address::new_from_array([4; 32]);
 
-        let mut db = AccountsDb::default();
+        let mut db = Accounts::default();
 
         // N = 5 setup mutations across add / add_no_checks paths, including a
         // sysvar-shaped address and a program-shaped (executable) address.

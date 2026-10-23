@@ -13,7 +13,7 @@ use solana_signature::Signature;
 
 use crate::{
     StateChangeSet,
-    accounts_db::AccountsDb,
+    accounts_db::Accounts,
     error::HPSVMError,
     executed::DetachedTx,
     history::TransactionHistory,
@@ -61,7 +61,7 @@ impl CommitDelta {
 ///
 /// Returns [`HPSVMError`] if writing accounts fails (e.g. invalid sysvar data).
 pub(crate) fn apply_commit_delta(
-    accounts: &mut AccountsDb,
+    accounts: &mut Accounts,
     history: &mut TransactionHistory,
     set: impl Into<StateChangeSet>,
 ) -> Result<(), HPSVMError> {
@@ -440,7 +440,7 @@ mod tests {
             l2 in any::<u64>(),
             l3 in any::<u64>(),
         ) {
-            use crate::accounts_db::AccountsDb;
+            use crate::accounts_db::Accounts;
             use crate::history::TransactionHistory;
 
             let addrs = [Address::new_unique(), Address::new_unique(), Address::new_unique(), Address::new_unique()];
@@ -460,12 +460,12 @@ mod tests {
             let set_a = StateChangeSet { post_accounts: a_accounts, history_entry: None };
             let set_b = StateChangeSet { post_accounts: b_accounts, history_entry: None };
 
-            let mut db1 = AccountsDb::default();
+            let mut db1 = Accounts::default();
             let mut hist1 = TransactionHistory::new();
             apply_commit_delta(&mut db1, &mut hist1, set_a.clone()).unwrap();
             apply_commit_delta(&mut db1, &mut hist1, set_b.clone()).unwrap();
 
-            let mut db2 = AccountsDb::default();
+            let mut db2 = Accounts::default();
             let mut hist2 = TransactionHistory::new();
             apply_commit_delta(&mut db2, &mut hist2, set_b).unwrap();
             apply_commit_delta(&mut db2, &mut hist2, set_a).unwrap();

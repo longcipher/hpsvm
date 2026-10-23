@@ -8,7 +8,7 @@ use solana_transaction_error::TransactionError;
 use spl_token_interface::state::{Account as TokenAccount, Mint as TokenMint};
 
 use crate::{
-    accounts_db::AccountsDb,
+    accounts_db::Accounts,
     collections::HashMap,
     types::{ExecutionTrace, TokenBalance},
     utils::rent::{check_rent_state_with_account, get_account_rent_state},
@@ -108,7 +108,7 @@ pub(crate) fn accounts_differ(pre: &AccountSharedData, post: &AccountSharedData)
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(crate) fn token_balances(
     accounts: &[(Address, AccountSharedData)],
-    account_db: &AccountsDb,
+    account_db: &Accounts,
 ) -> Vec<TokenBalance> {
     // ponytail: pre-scan mints to O(1) lookup instead of O(n) per token account.
     // Use `entry` API so first-match wins, matching the old `.find()` semantics.

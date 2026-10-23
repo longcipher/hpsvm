@@ -30,16 +30,6 @@ pub trait SvmTypesHost: Sized + 'static {
     type SpecId: Copy + Into<ClusterSpecId>;
     /// The transaction envelope the VM accepts.
     type Tx;
-    /// VM-wide extension state, shared by every transaction the host runs.
-    type SvmExt;
-    /// Per-message extension state.
-    type MessageExt;
-    /// Per-message result extension state.
-    type MessageResultExt;
-    /// Transaction-environment extension state.
-    type TxEnvExt;
-    /// Transaction-result extension state.
-    type TxResultExt;
     /// Block-environment extension state.
     ///
     /// The VM stores this value inside [`BlockEnv`](crate::BlockEnv), hands it
@@ -73,11 +63,6 @@ pub struct BaseSvmTypes;
 impl SvmTypesHost for BaseSvmTypes {
     type SpecId = ClusterSpecId;
     type Tx = VersionedTransaction;
-    type SvmExt = ();
-    type MessageExt = ();
-    type MessageResultExt = ();
-    type TxEnvExt = ();
-    type TxResultExt = ();
     type BlockEnvExt = ();
     // Deferred: `Host<Self> + ?Sized` once the typed host boundary exists.
     type Host<'a> = Svm<'a, Self>;
@@ -103,11 +88,6 @@ mod tests {
         assert_eq!(size_of::<BaseSvmTypes>(), 0);
         assert_eq!(size_of::<<BaseSvmTypes as SvmTypesHost>::SpecId>(), size_of::<ClusterSpecId>());
         assert_eq!(size_of::<<BaseSvmTypes as SvmTypesHost>::SpecId>(), 4);
-        assert_eq!(size_of::<<BaseSvmTypes as SvmTypesHost>::SvmExt>(), 0);
-        assert_eq!(size_of::<<BaseSvmTypes as SvmTypesHost>::MessageExt>(), 0);
-        assert_eq!(size_of::<<BaseSvmTypes as SvmTypesHost>::MessageResultExt>(), 0);
-        assert_eq!(size_of::<<BaseSvmTypes as SvmTypesHost>::TxEnvExt>(), 0);
-        assert_eq!(size_of::<<BaseSvmTypes as SvmTypesHost>::TxResultExt>(), 0);
         assert_eq!(size_of::<<BaseSvmTypes as SvmTypesHost>::BlockEnvExt>(), 0);
     }
 

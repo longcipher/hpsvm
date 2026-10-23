@@ -145,6 +145,21 @@ pub(crate) struct TierPromoter {
     inject_failure: Arc<AtomicU64>,
 }
 
+impl Drop for TierPromoter {
+    /// Drop the background pool without blocking the caller.
+    ///
+    /// `rayon::ThreadPool`'s own `Drop` waits for every in-flight promotion
+    /// to finish, which would stall VM teardown / `set_jit_policy` while a
+    /// promotion is still running. Move the pool onto a detached thread so
+    /// teardown returns immediately; the thread exits once the pool (and its
+    /// pending tasks) are done.
+    fn drop(&mut self) {
+        if let Some(pool) = self.pool.take() {
+            std::thread::spawn(move || drop(pool));
+        }
+    }
+}
+
 impl std::fmt::Debug for TierPromoter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TierPromoter")

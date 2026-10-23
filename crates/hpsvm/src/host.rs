@@ -1,5 +1,10 @@
 //! Typed host boundary for the VM type family.
 //!
+//! NOTE: this trait is currently an experimental surface. The execution engine
+//! (`execution.rs`, `message_processor.rs`) does not route through `&dyn Host`;
+//! it calls `Svm` methods directly. Treat the trait as "available for forks"
+//! rather than as the enforced execution boundary until it is wired in.
+//!
 //! Design §3.3 calls for a `Host<T>` trait exposing version, block,
 //! account, sysvar, program-cache and log access. Only the subset expressible
 //! with the types that exist today is implemented here:
@@ -10,7 +15,7 @@
 //! * Account and sysvar writes report through [`HostError`], the host layer of the error taxonomy,
 //!   so the fatal classification of a failed write survives the projection.
 //! * `ProgramCache` does NOT exist as a named type yet, so program-cache presence is exposed as
-//!   `has_program()`, delegating to the existing `AccountsDb::has_program_cache_entry`.
+//!   `has_program()`, delegating to the existing `Accounts::has_program_cache_entry`.
 //! * `log()` has no backing sink yet; it forwards to `tracing::info!` so the call is observable
 //!   through the existing tracing setup without inventing new state.
 

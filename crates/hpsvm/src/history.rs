@@ -28,7 +28,7 @@ impl TransactionHistory {
     /// Creates a new transaction history with the given capacity.
     fn with_capacity(capacity: usize) -> Self {
         Self {
-            entries: LruCache::new(NonZeroUsize::new(capacity.max(1)).expect("max(1) is non-zero")),
+            entries: LruCache::new(NonZeroUsize::new(capacity.max(1)).unwrap_or(NonZeroUsize::MIN)),
             max_entries: capacity,
         }
     }
@@ -42,7 +42,7 @@ impl TransactionHistory {
             self.max_entries = 0;
             return;
         }
-        let new_size = NonZeroUsize::new(new_cap).expect("new_cap is non-zero here");
+        let new_size = NonZeroUsize::new(new_cap).unwrap_or(NonZeroUsize::MIN);
         self.entries.resize(new_size);
         self.max_entries = new_cap;
     }

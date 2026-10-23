@@ -859,6 +859,11 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
     }
 
     /// Returns all information associated with the account of the provided pubkey.
+    ///
+    /// An account-source (e.g. the RPC fork source) failure is logged at
+    /// `error` level and treated as `None`, so callers that need to
+    /// distinguish "absent" from "unreadable" should read through
+    /// [`AccountSource::get_account`] directly.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn get_account(&self, address: &Address) -> Option<Account> {
         self.state.accounts.get_account(address).map(Into::into)

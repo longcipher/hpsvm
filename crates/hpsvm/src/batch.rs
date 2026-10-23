@@ -9,7 +9,7 @@ use thiserror::Error;
 
 use crate::{
     AccountSourceError, StateChangeSet, Svm, SvmTypesHost, TransactionOrigin,
-    account_source::AccountSourceErrorKind, accounts_db::AccountsDb, apply_commit_delta,
+    account_source::AccountSourceErrorKind, accounts_db::Accounts, apply_commit_delta,
     collections::HashSet, error::ExecutionError, history::TransactionHistory,
     types::TransactionResult,
 };
@@ -85,14 +85,14 @@ impl BatchSanitizeError {
 
 #[derive(Clone, Debug)]
 pub(crate) struct HpsvmRuntimeState {
-    accounts: Arc<AccountsDb>,
+    accounts: Arc<Accounts>,
     history: Arc<TransactionHistory>,
 }
 
 impl Default for HpsvmRuntimeState {
     fn default() -> Self {
         Self {
-            accounts: Arc::new(AccountsDb::default()),
+            accounts: Arc::new(Accounts::default()),
             history: Arc::new(TransactionHistory::new()),
         }
     }
@@ -658,7 +658,7 @@ mod tests {
     fn commit_delta_merges_runtime_updates() {
         let address = Address::new_unique();
         let signature = Signature::default();
-        let mut accounts = AccountsDb::default();
+        let mut accounts = Accounts::default();
         let mut history = TransactionHistory::new();
         let mut before = AccountSharedData::default();
         before.set_lamports(5);

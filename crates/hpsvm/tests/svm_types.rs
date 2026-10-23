@@ -101,11 +101,6 @@ fn base_svm_types_reproduces_the_transfer_result_exactly() {
 fn every_base_extension_slot_is_the_unit_type() {
     const _: () = assert!(size_of::<<BaseSvmTypes as SvmTypesHost>::SpecId>() == 4);
     const _: () = assert!(size_of::<ClusterSpecId>() == 4);
-    const _: () = assert!(size_of::<<BaseSvmTypes as SvmTypesHost>::SvmExt>() == 0);
-    const _: () = assert!(size_of::<<BaseSvmTypes as SvmTypesHost>::MessageExt>() == 0);
-    const _: () = assert!(size_of::<<BaseSvmTypes as SvmTypesHost>::MessageResultExt>() == 0);
-    const _: () = assert!(size_of::<<BaseSvmTypes as SvmTypesHost>::TxEnvExt>() == 0);
-    const _: () = assert!(size_of::<<BaseSvmTypes as SvmTypesHost>::TxResultExt>() == 0);
     const _: () = assert!(size_of::<<BaseSvmTypes as SvmTypesHost>::BlockEnvExt>() == 0);
     const _: () = assert!(size_of::<BaseSvmTypes>() == 0);
 
@@ -116,16 +111,7 @@ fn every_base_extension_slot_is_the_unit_type() {
         assert!(tx.is_none());
     };
 
-    for slot in [
-        size_of::<<BaseSvmTypes as SvmTypesHost>::SvmExt>(),
-        size_of::<<BaseSvmTypes as SvmTypesHost>::MessageExt>(),
-        size_of::<<BaseSvmTypes as SvmTypesHost>::MessageResultExt>(),
-        size_of::<<BaseSvmTypes as SvmTypesHost>::TxEnvExt>(),
-        size_of::<<BaseSvmTypes as SvmTypesHost>::TxResultExt>(),
-        size_of::<<BaseSvmTypes as SvmTypesHost>::BlockEnvExt>(),
-    ] {
-        assert_eq!(slot, 0, "an unused extension slot must stay zero-sized");
-    }
+    const _: () = assert!(size_of::<<BaseSvmTypes as SvmTypesHost>::BlockEnvExt>() == 0);
 
     // The base family satisfies the blanket marker, so the host a caller gets
     // back from an associated type really is `Svm<'a, BaseSvmTypes>`.

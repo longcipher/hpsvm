@@ -593,8 +593,17 @@ impl<T: SvmTypesHost> Svm<'_, T> {
 
         for compiled_instruction in tx.message().instructions() {
             let program_index = compiled_instruction.program_id_index as usize;
-            let (program_id, program_account) =
-                accounts.get(program_index).expect("program account should exist");
+            let Some((program_id, program_account)) = accounts.get(program_index) else {
+                tracing::error!(
+                    "program account index {program_index} is out of range for the resolved account list"
+                );
+                return Err(ExecutionResult {
+                    tx_result: Err(TransactionError::InvalidProgramForExecution),
+                    compute_units_consumed: accumulated_consume_units,
+                    fee,
+                    ..Default::default()
+                });
+            };
             if native_loader::check_id(program_id) {
                 program_indices.push(program_index as IndexOfAccount);
                 continue;

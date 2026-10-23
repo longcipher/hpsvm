@@ -16,9 +16,8 @@ pub struct BlockEnv<E = ()> {
 
 /// Transaction-scoped environment.
 ///
-/// Currently carries only the extension slot
-/// ([`SvmTypesHost::TxEnvExt`](crate::SvmTypesHost), defaulting to `()`); it
-/// gains transaction-scoped fields in later tasks if needed.
+/// Carries an extension slot (defaulting to `()`); it gains
+/// transaction-scoped fields in later tasks if needed.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TxEnv<E = ()> {
     pub ext: E,
@@ -55,11 +54,6 @@ mod tests {
     impl SvmTypesHost for L1Family {
         type SpecId = ClusterSpecId;
         type Tx = VersionedTransaction;
-        type SvmExt = ();
-        type MessageExt = ();
-        type MessageResultExt = ();
-        type TxEnvExt = ();
-        type TxResultExt = ();
         type BlockEnvExt = L1SlotExt;
         type Host<'a> = Svm<'a, Self>;
     }

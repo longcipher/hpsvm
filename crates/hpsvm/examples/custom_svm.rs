@@ -67,11 +67,6 @@ struct CustomSvm;
 impl SvmTypesHost for CustomSvm {
     type SpecId = CustomSpecId;
     type Tx = VersionedTransaction;
-    type SvmExt = ();
-    type MessageExt = ();
-    type MessageResultExt = ();
-    type TxEnvExt = ();
-    type TxResultExt = ();
     type BlockEnvExt = L1SlotExt;
     type Host<'a> = Svm<'a, Self>;
 }

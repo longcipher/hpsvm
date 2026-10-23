@@ -276,7 +276,7 @@ impl StagedFailure {
 /// currently backs a program-cache entry.
 pub(crate) fn staging_touches_caches(
     post_accounts: &[(Address, AccountSharedData)],
-    overlay: &crate::accounts_db::AccountsDb,
+    overlay: &crate::accounts_db::Accounts,
 ) -> bool {
     post_accounts.iter().any(|(address, account)| {
         account.executable() ||

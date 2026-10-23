@@ -2,7 +2,8 @@
 //! transaction against a supplied pre-state, then run, inspect, or compare it.
 //!
 //! See the `record`, `run`, `inspect`, and `compare` subcommands.
-#![allow(clippy::print_stderr, clippy::print_stdout, missing_docs)]
+#![expect(clippy::print_stderr, reason = "CLI binary emits user-facing diagnostics")]
+#![expect(clippy::print_stdout, reason = "CLI binary emits user-facing reports")]
 
 mod config;
 mod cu;

@@ -1,4 +1,4 @@
-# HPSVM
+# Hpsvm
 
 [![DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/longcipher/hpsvm)
 [![Context7](https://img.shields.io/badge/Website-context7.com-blue)](https://context7.com/longcipher/hpsvm)
@@ -50,7 +50,7 @@ cargo add --dev hpsvm --features fork
 Here's a minimal example that demonstrates creating a test environment, airdropping SOL, and executing a transfer transaction:
 
 ```rust
-use hpsvm::HPSVM;
+use hpsvm::Hpsvm;
 use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_message::Message;
@@ -64,7 +64,7 @@ let from = from_keypair.pubkey();
 let to = Address::new_unique();
 
 // Initialize the SVM with default configuration
-let mut svm = HPSVM::new();
+let mut svm = Hpsvm::new();
 
 // Airdrop SOL to the sender account
 svm.airdrop(&from, 10_000).unwrap();
@@ -95,14 +95,14 @@ For more advanced usage, including custom configurations, program deployment, an
 
 ### Architecture Highlights
 
-`hpsvm` keeps the `HPSVM` facade stable while exposing a few sharper seams for advanced test harnesses:
+`hpsvm` keeps the `Hpsvm` facade stable while exposing a few sharper seams for advanced test harnesses:
 
 - `transact` stages a transaction in the live overlay and returns an `ExecutedTx`: `commit` keeps the post-state, `discard` rolls it back. `transact_detached` computes an owned `DetachedTx` without touching VM state.
 - `with_account_source` lets the VM read missing accounts from an external source while keeping local writes in the in-memory overlay.
 - `block_env` exposes the current blockhash and slot snapshot, and `with_inspector` installs lightweight top-level execution observers.
 
 ```rust
-use hpsvm::HPSVM;
+use hpsvm::Hpsvm;
 use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_message::Message;
@@ -110,7 +110,7 @@ use solana_signer::Signer;
 use solana_system_interface::instruction::transfer;
 use solana_transaction::Transaction;
 
-let mut svm = HPSVM::new();
+let mut svm = Hpsvm::new();
 let payer = Keypair::new();
 let recipient = Address::new_unique();
 
@@ -138,14 +138,14 @@ assert_eq!(svm.block_env().latest_blockhash, svm.latest_blockhash());
 ```rust
 # #[cfg(feature = "fork")]
 # fn main() {
-use hpsvm::{HPSVM, fork::RpcForkSource};
+use hpsvm::{Hpsvm, fork::RpcForkSource};
 
 let source = RpcForkSource::builder()
     .with_rpc_url("http://127.0.0.1:8899")
     .with_slot(1)
     .build();
 
-let svm = HPSVM::builder().with_account_source(source).build().unwrap();
+let svm = Hpsvm::builder().with_account_source(source).build().unwrap();
 # }
 # #[cfg(not(feature = "fork"))]
 # fn main() {}
@@ -161,7 +161,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use hpsvm::{BaseSvmTypes, HPSVM, Inspector};
+use hpsvm::{BaseSvmTypes, Hpsvm, Inspector};
 use solana_address::Address;
 
 #[derive(Default)]
@@ -185,7 +185,7 @@ impl Inspector<BaseSvmTypes> for CountingInspector {
 
 let inspector = CountingInspector::default();
 let observed = Arc::clone(&inspector.seen);
-let _svm = HPSVM::new().with_inspector(inspector);
+let _svm = Hpsvm::new().with_inspector(inspector);
 
 assert_eq!(observed.load(Ordering::SeqCst), 0);
 ```
@@ -332,7 +332,7 @@ cargo test
 cargo bench
 ```
 
-Build the benchmark helper program and profile the public HPSVM surface:
+Build the benchmark helper program and profile the public Hpsvm surface:
 
 ```bash
 HPSVM_HOTPATH=1 cargo bench -p hpsvm --features hotpath --bench core_interfaces
