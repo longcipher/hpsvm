@@ -23,7 +23,7 @@ solana_program_runtime::solana_sbpf::declare_builtin_function!(
         _arg5: u64,
     ) -> Result<u64, Box<dyn std::error::Error>> {
         assert_eq!(to_burn, CUS_TO_BURN);
-        invoke_context.compute_meter.consume_checked(to_burn)?;
+        invoke_context.transaction_context.compute_meter.consume_checked(to_burn)?;
         Ok(0)
     }
 );

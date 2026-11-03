@@ -1,22 +1,19 @@
 // adapted from agave 4.x
+use solana_message::SanitizedMessage;
 use solana_program_runtime::invoke_context::InvokeContext;
 use solana_svm_timings::ExecuteTimings;
-// The agave-side copy of the message traits: `AgaveMessage` implements these,
-// and `InvokeContext` (agave 4.5) is typed against them.
-use solana_svm_transaction_agave::svm_message::SVMStaticMessage;
+use solana_svm_transaction::svm_message::SVMStaticMessage;
 use solana_transaction_context::IndexOfAccount;
 use solana_transaction_error::TransactionError;
 
-use crate::{InspectMode, Svm, SvmTypesHost, agave_compat::AgaveMessage};
+use crate::{InspectMode, Svm, SvmTypesHost};
 
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(crate) fn process_message<'ix_data, const MODE: InspectMode, T: SvmTypesHost>(
     svm: &Svm<'_, T>,
-    // The agave-4.5 view of the sanitized message: `InvokeContext` is typed
-    // against the older interface crates, so its `prepare_top_level_instructions`
-    // needs this bridge (see `agave_compat`). The borrow must outlive the
-    // transaction context the invoke context writes instruction data into.
-    message: &'ix_data AgaveMessage<'ix_data>,
+    // The borrow must outlive the transaction context the invoke context
+    // writes instruction data into.
+    message: &'ix_data SanitizedMessage,
     program_indices: &[IndexOfAccount],
     invoke_context: &mut InvokeContext<'_, 'ix_data>,
     execute_timings: &mut ExecuteTimings,
@@ -29,7 +26,7 @@ pub(crate) fn process_message<'ix_data, const MODE: InspectMode, T: SvmTypesHost
         .map_err(|(index, err)| TransactionError::InstructionError(index, err))?;
 
     for (top_level_instruction_index, ((program_id, _instruction), _program_account_index)) in
-        message.program_instructions_iter().zip(program_indices.iter()).enumerate()
+        SVMStaticMessage::program_instructions_iter(message).zip(program_indices.iter()).enumerate()
     {
         svm.on_instruction_start::<MODE>(top_level_instruction_index, program_id);
 
@@ -39,7 +36,7 @@ pub(crate) fn process_message<'ix_data, const MODE: InspectMode, T: SvmTypesHost
                 invoke_context.process_precompile(
                     program_id,
                     _instruction.data,
-                    message.instructions_iter().map(|ix| ix.data),
+                    SVMStaticMessage::instructions_iter(message).map(|ix| ix.data),
                 )
             })
         } else {

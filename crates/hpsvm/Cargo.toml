@@ -30,7 +30,7 @@ hashbrown = ["dep:hashbrown"]
 # `solana-message` 6.0 while the agave 4.5 crates pull the 5.1 copy, so the
 # agave-side `solana-message/serde` enablement no longer reaches this crate's
 # copy: ask for the feature on our own copy.
-serde = ["solana-message/serde"]
+serde = ["solana-message/serde", "solana-transaction-context/serde", "solana-instruction/serde", "solana-transaction-error/serde"]
 precompiles = ["dep:agave-precompiles"]
 register-tracing = ["invocation-inspect-callback", "dep:hex", "dep:sha2", "dep:serde_json"]
 hotpath = ["dep:hotpath"]
@@ -90,17 +90,12 @@ solana-last-restart-slot = { workspace = true, features = ["serde"] }
 solana-loader-v3-interface = { workspace = true, features = ["serde", "wincode"] }
 solana-loader-v4-interface.workspace = true
 solana-message.workspace = true
-# The three `-agave` deps below are the OLD copies of the interface crates that
-# the agave 4.5 runtime crates (`solana-program-runtime`, `solana-fee`,
-# `solana-compute-budget-instruction`) are compiled against, while the
-# workspace pins the newer lines (`solana-message` 6.0 / `solana-transaction`
-# 6.0 / `solana-svm-transaction` 8.0). Both families coexist in the graph and
-# are structurally identical; `src/agave_compat.rs` bridges them. They cannot
-# live in `[workspace.dependencies]` (one entry per package) and must not be
-# downgraded to a single version.
-solana-message-agave = { version = "5.1.0", package = "solana-message" }
 solana-native-token.workspace = true
-solana-nonce.workspace = true
+# `serde` is required by `solana-nonce-account` 5.0.0: enabling
+# `solana-feature-gate-interface/bincode` unifies `solana-account/bincode` into
+# the graph, and its inherent `new_data_with_space` shadows the wincode trait
+# method there. agave 4.5.0-alpha.4 stopped enabling that feature itself.
+solana-nonce = { workspace = true, features = ["serde"] }
 solana-nonce-account = { workspace = true, features = ["wincode"] }
 solana-precompile-error.workspace = true
 solana-program-error.workspace = true
@@ -126,14 +121,12 @@ solana-svm-callback.workspace = true
 solana-svm-log-collector.workspace = true
 solana-svm-timings.workspace = true
 solana-svm-transaction.workspace = true
-solana-svm-transaction-agave = { version = "6.0.0", package = "solana-svm-transaction" }
 solana-syscalls.workspace = true
 solana-system-interface.workspace = true
 solana-system-program.workspace = true
 solana-sysvar = { workspace = true, features = ["serde"] }
 solana-sysvar-id.workspace = true
 solana-transaction = { workspace = true, features = ["verify", "wincode"] }
-solana-transaction-agave = { version = "5.1.0", package = "solana-transaction" }
 solana-transaction-context.workspace = true
 solana-transaction-error.workspace = true
 solana-wincode-varint.workspace = true

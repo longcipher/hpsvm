@@ -9,21 +9,21 @@ members = ["bin/*", "crates/*"]
 exclude = ["vendor/hpsvm-fd-fixture"]
 
 [workspace.package]
-version = "0.2.2"
+version = "0.2.3"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/longcipher/hpsvm"
 
 [workspace.dependencies]
 # local crates
-hpsvm = { path = "crates/hpsvm", version = "0.2.2" }
-hpsvm-cli = { path = "bin/hpsvm-cli", version = "0.2.2" }
-hpsvm-fixture = { path = "crates/hpsvm-fixture", version = "0.2.2", default-features = false }
-hpsvm-fixture-bench = { path = "crates/hpsvm-fixture-bench", version = "0.2.2", default-features = false }
-hpsvm-fixture-firedancer = { path = "crates/hpsvm-fixture-firedancer", version = "0.2.2", default-features = false }
-hpsvm-inspectors = { path = "crates/hpsvm-inspectors", version = "0.2.2" }
-hpsvm-macros = { path = "crates/hpsvm-macros", version = "0.2.2" }
-hpsvm-test-support = { path = "crates/hpsvm-test-support", version = "0.2.2" }
+hpsvm = { path = "crates/hpsvm", version = "0.2.3" }
+hpsvm-cli = { path = "bin/hpsvm-cli", version = "0.2.3" }
+hpsvm-fixture = { path = "crates/hpsvm-fixture", version = "0.2.3", default-features = false }
+hpsvm-fixture-bench = { path = "crates/hpsvm-fixture-bench", version = "0.2.3", default-features = false }
+hpsvm-fixture-firedancer = { path = "crates/hpsvm-fixture-firedancer", version = "0.2.3", default-features = false }
+hpsvm-inspectors = { path = "crates/hpsvm-inspectors", version = "0.2.3" }
+hpsvm-macros = { path = "crates/hpsvm-macros", version = "0.2.3" }
+hpsvm-test-support = { path = "crates/hpsvm-test-support", version = "0.2.3" }
 
 # external crates
 #
@@ -34,9 +34,9 @@ hpsvm-test-support = { path = "crates/hpsvm-test-support", version = "0.2.2" }
 # versions of those types. 4.3.0 is the newest *stable* agave, but it requires the
 # solana 4.x types, so mixing it with the 5.x crates above would put two
 # incompatible copies of `Account`, `Message`, and `Transaction` in one build.
-agave-feature-set = "4.5.0-alpha.2"
-agave-precompiles = "4.5.0-alpha.2"
-agave-reserved-account-keys = "4.5.0-alpha.2"
+agave-feature-set = "4.5.0-alpha.4"
+agave-precompiles = "4.5.0-alpha.4"
+agave-reserved-account-keys = "4.5.0-alpha.4"
 auto_impl = "1.4.0"
 base64 = "0.23.1"
 bs58 = "0.5.1"
@@ -45,7 +45,7 @@ criterion = "0.8.2"
 ed25519-dalek = "3.0.0"
 hashbrown = "0.17.1"
 hex = "0.4.3"
-hotpath = "0.29.0"
+hotpath = "0.30.3"
 # Fork of `mollusk-svm-fuzz-fixture-firedancer`: upstream pins agave 4.3, which
 # cannot resolve against the 4.5 line. Built from `vendor/` through the path and
 # depended on by version once published, so `hpsvm-fixture` packages without a
@@ -67,21 +67,21 @@ rayon = "1.12.0"
 serde = "1.0.229"
 serde_json = "1.0.154"
 sha2 = "0.11.1"
-smallvec = "1.16.3"
-solana-account = "5.1.1"
+smallvec = "1.16.4"
+solana-account = "5.4.0"
 solana-address = "2.9.0"
 solana-address-lookup-table-interface = "4.0.0"
-solana-builtins = "4.5.0-alpha.2"
+solana-builtins = "4.5.0-alpha.4"
 solana-clock = "4.0.0"
-solana-compute-budget = "4.5.0-alpha.2"
-solana-compute-budget-instruction = "4.5.0-alpha.2"
+solana-compute-budget = "4.5.0-alpha.4"
+solana-compute-budget-instruction = "4.5.0-alpha.4"
 solana-compute-budget-interface = "3.1.0"
 solana-config-interface = "2.0.1"
 solana-ed25519-program = "3.0.0"
 solana-epoch-rewards = "3.2.0"
 solana-epoch-schedule = "3.4.0"
 solana-feature-gate-interface = "5.0.0"
-solana-fee = "4.5.0-alpha.2"
+solana-fee = "4.5.0-alpha.4"
 solana-fee-structure = "4.1.0"
 solana-hash = "4.7.0"
 solana-instruction = "4.0.0"
@@ -98,14 +98,14 @@ solana-precompile-error = "3.0.0"
 solana-program-error = "3.0.1"
 solana-program-option = "3.1.0"
 solana-program-pack = "3.1.0"
-solana-program-runtime = "4.5.0-alpha.2"
+solana-program-runtime = "4.5.0-alpha.4"
 solana-rent = "4.5.0"
 # The whole dependency tree now resolves a single `wincode` (0.6.x), including
 # agave 4.3.0, so the previous 0.5.x pin to hold back drift is no longer needed.
-solana-rpc-client = "4.5.0-alpha.2"
-solana-rpc-client-api = "4.5.0-alpha.2"
+solana-rpc-client = "4.5.0-alpha.4"
+solana-rpc-client-api = "4.5.0-alpha.4"
 solana-sdk-ids = "3.1.0"
-solana-secp256k1-program = "3.1.0"
+solana-secp256k1-program = "3.1.1"
 solana-sha256-hasher = "3.1.0"
 solana-short-vec = "3.3.0"
 solana-signature = "3.6.0"
@@ -123,26 +123,24 @@ solana-slot-history = "3.2.0"
 # the encoder only produces instruction bytes, and no Rust type ever crosses
 # between it and the BPF ELF.
 solana-stake-interface = "5.1.1"
-solana-svm-callback = "4.5.0-alpha.2"
-solana-svm-log-collector = "4.5.0-alpha.2"
-solana-svm-timings = "4.5.0-alpha.2"
-# Pinned at 8.0.0, one major ahead of the 6.0.0 copy agave 4.5.0-alpha.2 is
-# built against, so the two coexist in the graph and the boundary is bridged
-# in code (`crates/hpsvm/src/agave_compat.rs`). Downgrading to 6.0.0 would
-# collapse them into one copy; move both together when agave moves.
+solana-svm-callback = "4.5.0-alpha.4"
+solana-svm-log-collector = "4.5.0-alpha.4"
+solana-svm-timings = "4.5.0-alpha.4"
+# agave 4.5.0-alpha.4's runtime crates are built against this same 8.0 line, so
+# message and instruction types are shared across the whole graph.
 solana-svm-transaction = "8.0.0"
-solana-syscalls = "4.5.0-alpha.2"
+solana-syscalls = "4.5.0-alpha.4"
 solana-system-interface = "3.3.0"
-solana-system-program = "4.5.0-alpha.2"
+solana-system-program = "4.5.0-alpha.4"
 solana-sysvar = "5.0.0"
 solana-sysvar-id = "3.1.0"
 solana-transaction = "6.0.0"
-solana-transaction-context = { version = "4.5.0-alpha.2", features = ["agave-unstable-api"] }
+solana-transaction-context = { version = "4.5.0-alpha.4", features = ["agave-unstable-api"] }
 solana-transaction-error = "4.1.0"
 solana-vote-interface = "7.3.0"
 solana-wincode-varint = "1.1.0"
 spl-associated-token-account-interface = "2.0.0"
-spl-token-2022-interface = "3.1.2"
+spl-token-2022-interface = "4.0.0"
 spl-token-interface = "3.0.0"
 syn = "3.0.9"
 test-log = "0.2.21"
@@ -159,20 +157,6 @@ wincode = "0.6.3"
 # declared in `[workspace.dependencies]` so every published crate's version
 # lives in this one file.
 ignored = ["solana-short-vec", "solana-wincode-varint", "hpsvm-cli", "hpsvm-inspectors"]
-
-[workspace.metadata.inheritance-check]
-# `hpsvm` declares the agave-side copies of the interface crates
-# (`solana-message` 5.1 / `solana-transaction` 5.1 / `solana-svm-transaction`
-# 6.0) under `-agave` names to bridge the agave 4.5 runtime APIs, which are
-# typed against them, to the newer lines pinned in `[workspace.dependencies]`
-# (see `crates/hpsvm/src/agave_compat.rs`). The intentional version mismatch
-# with the workspace entries cannot be expressed through workspace inheritance
-# (one entry per package), so exempt these three from the inheritance check.
-ignore = [
-    { dependency = "solana-message", member = "crates/hpsvm" },
-    { dependency = "solana-svm-transaction", member = "crates/hpsvm" },
-    { dependency = "solana-transaction", member = "crates/hpsvm" },
-]
 
 [workspace.lints.cargo]
 # `hpsvm-cli` and `hpsvm-inspectors` are declared in `[workspace.dependencies]`

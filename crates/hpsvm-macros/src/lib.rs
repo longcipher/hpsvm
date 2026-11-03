@@ -506,7 +506,7 @@ pub fn svm_instruction(attr: TokenStream, item: TokenStream) -> TokenStream {
                 _arg4: u64,
             ) -> Result<u64, Box<dyn ::std::error::Error>> {
                 if #struct_ident::COMPUTE_UNITS > 0 {
-                    invoke_context.compute_meter.consume_checked(#struct_ident::COMPUTE_UNITS)?;
+                    invoke_context.transaction_context.compute_meter.consume_checked(#struct_ident::COMPUTE_UNITS)?;
                 }
                 let mut ctx = ::hpsvm::SvmInstructionCtx::from_invoke_context(invoke_context)
                     .map_err(|error| Box::new(error) as Box<dyn ::std::error::Error>)?;
