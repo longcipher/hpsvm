@@ -30,9 +30,24 @@ hashbrown = ["dep:hashbrown"]
 # `solana-message` 6.0 while the agave 4.5 crates pull the 5.1 copy, so the
 # agave-side `solana-message/serde` enablement no longer reaches this crate's
 # copy: ask for the feature on our own copy.
-serde = ["solana-message/serde", "solana-transaction-context/serde", "solana-instruction/serde", "solana-transaction-error/serde"]
+serde = [
+    "solana-message/serde",
+    "solana-transaction-context/serde",
+    "solana-instruction/serde",
+    "solana-transaction-error/serde",
+]
 precompiles = ["dep:agave-precompiles"]
-register-tracing = ["invocation-inspect-callback", "dep:hex", "dep:sha2", "dep:serde_json"]
+# `solana-sbpf/tracer` is compile-time as of sbpf 0.26 (it replaced the old
+# `Config::enable_register_tracing` runtime flag), and `solana-program-runtime`
+# exposes no passthrough for it, so the crate is a direct dependency.
+# Without it `InvokeContext::iterate_vm_traces` never yields anything.
+register-tracing = [
+    "invocation-inspect-callback",
+    "dep:hex",
+    "dep:sha2",
+    "dep:solana-sbpf",
+    "dep:serde_json",
+]
 hotpath = ["dep:hotpath"]
 # Allocation profiling on top of `hotpath`; attributes every allocation to the
 # calling instrumented function. Implies `hotpath`.
@@ -105,6 +120,7 @@ solana-program-runtime = { workspace = true, features = ["dev-context-only-utils
 solana-rent = { workspace = true, features = ["serde"] }
 solana-rpc-client = { workspace = true, optional = true }
 solana-rpc-client-api = { workspace = true, optional = true }
+solana-sbpf = { version = "0.26.0", features = ["tracer"], optional = true }
 solana-sdk-ids.workspace = true
 solana-sha256-hasher.workspace = true
 # Version-pinning deps to prevent wincode 0.6.0 drift (transitive)

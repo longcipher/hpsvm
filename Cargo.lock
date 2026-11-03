@@ -2089,6 +2089,7 @@ dependencies = [
  "solana-rent",
  "solana-rpc-client",
  "solana-rpc-client-api",
+ "solana-sbpf",
  "solana-sdk-ids",
  "solana-secp256k1-program",
  "solana-sha256-hasher",

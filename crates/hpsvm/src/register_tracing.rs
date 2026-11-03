@@ -153,9 +153,7 @@ impl DefaultRegisterTracingCallback {
         executable: &Executable,
         register_trace: RegisterTrace<'_>,
     ) {
-        match solana_program_runtime::solana_sbpf::static_analysis::Analysis::from_executable(
-            executable,
-        ) {
+        match solana_sbpf::static_analysis::Analysis::from_executable(executable) {
             Ok(analysis) => {
                 if let Err(e) = analysis.disassemble_register_trace(writer, register_trace) {
                     eprintln!("Can't disassemble register trace for {program_id}: {e:#?}");
@@ -230,9 +228,7 @@ impl DefaultRegisterTracingCallback {
             // The program counter is stored in r11.
             let pc = regs[11];
             // From the executable fetch the instruction this program counter points to.
-            let insn =
-                solana_program_runtime::solana_sbpf::ebpf::get_insn_unchecked(program, pc as usize)
-                    .to_array();
+            let insn = solana_sbpf::ebpf::get_insn_unchecked(program, pc as usize).to_array();
 
             // Persist them in files.
             let _ = regs_file.write(as_bytes(regs.as_slice()))?;
