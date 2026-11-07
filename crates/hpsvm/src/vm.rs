@@ -780,7 +780,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
             Keypair::try_from(self.airdrop_kp.as_slice())
                 .expect("airdrop keypair should be valid")
                 .pubkey(),
-            AccountSharedData::new(lamports, 0, &system_program::id()),
+            AccountSharedData::empty(lamports, &system_program::id()),
         );
     }
 
@@ -973,9 +973,9 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
     {
         // The buffer is sized to the sysvar's canonical on-chain length, then the value
         // is encoded into it with the same bincode codec the read path decodes.
-        let mut account = AccountSharedData::new(
+        let mut account = AccountSharedData::new_with_data(
             1,
-            sysvar_account_size::<S>(&S::id()),
+            vec![0; sysvar_account_size::<S>(&S::id())],
             &solana_sdk_ids::sysvar::id(),
         );
         account.serialize_data(sysvar).map_err(|error| HPSVMError::SysvarSerialization {
@@ -1077,7 +1077,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
 
         self.state.accounts.replenish_program_cache(program_id, Arc::new(builtin));
 
-        let mut account = AccountSharedData::new(1, 1, &native_loader::id());
+        let mut account = AccountSharedData::new_with_data(1, vec![0; 1], &native_loader::id());
         account.set_executable(true);
         self.state.accounts.add_account_no_checks(program_id, account);
     }
@@ -1112,8 +1112,11 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
             let programdata_metadata_len = UpgradeableLoaderState::size_of_programdata_metadata();
             let programdata_len = programdata_metadata_len + program_bytes.len();
             let programdata_lamports = self.minimum_balance_for_rent_exemption(programdata_len);
-            let mut programdata_account =
-                AccountSharedData::new(programdata_lamports, programdata_len, loader_id);
+            let mut programdata_account = AccountSharedData::new_with_data(
+                programdata_lamports,
+                vec![0; programdata_len],
+                loader_id,
+            );
             programdata_account
                 .set_state(&UpgradeableLoaderState::ProgramData {
                     slot: current_slot,
@@ -1126,7 +1129,7 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
             let program_len = UpgradeableLoaderState::size_of_program();
             let program_lamports = self.minimum_balance_for_rent_exemption(program_len);
             let mut program_account =
-                AccountSharedData::new(program_lamports, program_len, loader_id);
+                AccountSharedData::new_with_data(program_lamports, vec![0; program_len], loader_id);
             program_account.set_executable(true);
             program_account
                 .set_state(&UpgradeableLoaderState::Program { programdata_address })
@@ -1137,7 +1140,8 @@ impl<'a, T: SvmTypesHost> Svm<'a, T> {
         } else if bpf_loader::check_id(loader_id) || bpf_loader_deprecated::check_id(loader_id) {
             let program_len = program_bytes.len();
             let lamports = self.minimum_balance_for_rent_exemption(program_len);
-            let mut account = AccountSharedData::new(lamports, program_len, loader_id);
+            let mut account =
+                AccountSharedData::new_with_data(lamports, vec![0; program_len], loader_id);
             account.set_executable(true);
             account.set_data_from_slice(program_bytes);
 
@@ -1979,7 +1983,7 @@ mod tests {
         svm.airdrop(&payer.pubkey(), 10_000).unwrap();
 
         let poisoned_program = Address::new_unique();
-        let mut invalid_program = AccountSharedData::new(1, 0, &system_program::id());
+        let mut invalid_program = AccountSharedData::empty(1, &system_program::id());
         invalid_program.set_executable(true);
         svm.state.accounts.add_account_no_checks(poisoned_program, invalid_program);
 
@@ -2327,7 +2331,7 @@ mod tests {
         let mut svm = Hpsvm::builder().build().expect("a minimal VM should build");
 
         let program_id = Address::new_unique();
-        let mut program = AccountSharedData::new(1, 0, &bpf_loader_upgradeable::id());
+        let mut program = AccountSharedData::empty(1, &bpf_loader_upgradeable::id());
         program.set_executable(true);
 
         let error = match svm.set_account(program_id, program.into()) {
@@ -2600,7 +2604,8 @@ mod jit_parity_tests {
         {
             use solana_account::AccountSharedData;
             let lamports = svm.minimum_balance_for_rent_exemption(elf_b.len());
-            let mut upgraded = AccountSharedData::new(lamports, elf_b.len(), &loader);
+            let mut upgraded =
+                AccountSharedData::new_with_data(lamports, vec![0; elf_b.len()], &loader);
             upgraded.set_executable(true);
             upgraded.set_data_from_slice(elf_b);
             svm.state.accounts.add_account_no_checks(id_b, upgraded);

@@ -61,7 +61,7 @@ fn data_from_account<T: ReadableAccount + StateMut<Versions>>(account: &T) -> Da
 #[test]
 fn vm_reads_missing_accounts_from_the_configured_source() {
     let address = Address::new_unique();
-    let account = AccountSharedData::new(77, 0, &Address::new_unique());
+    let account = AccountSharedData::empty(77, &Address::new_unique());
     let source = StaticAccountSource { accounts: Arc::new(HashMap::from([(address, account)])) };
 
     let svm = HPSVM::builder().with_account_source(source).build().unwrap();
@@ -232,7 +232,7 @@ fn rent_checks_use_source_backed_pre_state_for_writable_accounts() {
 
     let mut svm = HPSVM::new();
     let rent_exempt_minimum = svm.get_sysvar::<Rent>().minimum_balance(0);
-    let source_account = AccountSharedData::new(rent_exempt_minimum - 10, 0, &system_program::id());
+    let source_account = AccountSharedData::empty(rent_exempt_minimum - 10, &system_program::id());
     let source = StaticAccountSource {
         accounts: Arc::new(HashMap::from([(from.pubkey(), source_account)])),
     };

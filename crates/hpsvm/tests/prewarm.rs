@@ -93,7 +93,7 @@ impl AccountSource for BatchFailingSource {
 }
 
 fn funded_system_account(lamports: u64) -> AccountSharedData {
-    AccountSharedData::new(lamports, 0, &system_program::id())
+    AccountSharedData::empty(lamports, &system_program::id())
 }
 
 fn transfer_versioned(

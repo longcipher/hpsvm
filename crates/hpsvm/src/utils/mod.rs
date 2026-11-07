@@ -1,6 +1,4 @@
-use solana_account::{
-    Account, AccountSharedData, DUMMY_INHERITABLE_ACCOUNT_FIELDS, InheritableAccountFields,
-};
+use solana_account::{Account, AccountSharedData};
 use solana_hash::Hash;
 use solana_instructions_sysvar::construct_instructions_data;
 use solana_message::SanitizedMessage;
@@ -25,19 +23,12 @@ pub(crate) fn construct_instructions_account(message: &SanitizedMessage) -> Acco
     })
 }
 
-pub(crate) fn create_loadable_account_with_fields(
-    name: &str,
-    (lamports, rent_epoch): InheritableAccountFields,
-) -> AccountSharedData {
+pub(crate) fn create_loadable_account_for_test(name: &str) -> AccountSharedData {
     AccountSharedData::from(Account {
-        lamports,
+        lamports: 1,
         owner: solana_sdk_ids::native_loader::id(),
         data: name.as_bytes().to_vec(),
         executable: true,
-        rent_epoch,
+        rent_epoch: u64::MAX,
     })
-}
-
-pub(crate) fn create_loadable_account_for_test(name: &str) -> AccountSharedData {
-    create_loadable_account_with_fields(name, DUMMY_INHERITABLE_ACCOUNT_FIELDS)
 }

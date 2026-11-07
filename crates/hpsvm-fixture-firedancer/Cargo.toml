@@ -9,8 +9,9 @@ repository.workspace = true
 [features]
 default = ["fd-codec"]
 # The protobuf codec, backed by the `hpsvm-fd-fixture` fork: upstream
-# `mollusk-svm-fuzz-fixture-firedancer` pins agave 4.3, which cannot resolve
-# against this workspace's agave 4.5 line. See `vendor/PATCHES.md`.
+# `mollusk-svm-fuzz-fixture-firedancer` pins the stable agave 4.4.0 line, which
+# cannot resolve against this workspace's 4.5.0-beta.0 line. See
+# `vendor/PATCHES.md`.
 fd-codec = [
     "dep:prost",
     "dep:hpsvm-fd-fixture",

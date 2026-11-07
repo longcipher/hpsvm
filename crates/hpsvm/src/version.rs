@@ -40,7 +40,7 @@
 use std::sync::{Arc, OnceLock};
 
 use agave_feature_set::{
-    FeatureSet, deprecate_rent_exemption_threshold, increase_tx_account_lock_limit,
+    FeatureSet, deprecate_rent_exemption_threshold, increase_tx_v1_account_lock_limit,
     raise_cpi_nesting_limit_to_8, replace_spl_token_with_p_token,
 };
 use solana_address::Address;
@@ -230,8 +230,9 @@ pub enum FeatureGate {
     RaiseCpiNestingLimitTo8,
     /// `deprecate_rent_exemption_threshold`: rent sysvar materialization.
     DeprecateRentExemptionThreshold,
-    /// `increase_tx_account_lock_limit`: wider per-transaction account locks.
-    IncreaseTxAccountLockLimit,
+    /// `increase_tx_v1_account_lock_limit`: wider per-transaction account locks
+    /// for v1 transactions.
+    IncreaseTxV1AccountLockLimit,
     /// `replace_spl_token_with_p_token`: p-token program selection.
     ReplaceSplTokenWithPToken,
 }
@@ -241,7 +242,7 @@ impl FeatureGate {
     pub const ALL: &'static [Self] = &[
         Self::RaiseCpiNestingLimitTo8,
         Self::DeprecateRentExemptionThreshold,
-        Self::IncreaseTxAccountLockLimit,
+        Self::IncreaseTxV1AccountLockLimit,
         Self::ReplaceSplTokenWithPToken,
     ];
 
@@ -251,7 +252,7 @@ impl FeatureGate {
         match self {
             Self::RaiseCpiNestingLimitTo8 => raise_cpi_nesting_limit_to_8::ID,
             Self::DeprecateRentExemptionThreshold => deprecate_rent_exemption_threshold::ID,
-            Self::IncreaseTxAccountLockLimit => increase_tx_account_lock_limit::ID,
+            Self::IncreaseTxV1AccountLockLimit => increase_tx_v1_account_lock_limit::ID,
             Self::ReplaceSplTokenWithPToken => replace_spl_token_with_p_token::ID,
         }
     }
@@ -269,8 +270,8 @@ pub struct TxFeatureFlags {
     pub raise_cpi_nesting_limit_to_8: bool,
     /// Cached `deprecate_rent_exemption_threshold` decision.
     pub deprecate_rent_exemption_threshold: bool,
-    /// Cached `increase_tx_account_lock_limit` decision.
-    pub increase_tx_account_lock_limit: bool,
+    /// Cached `increase_tx_v1_account_lock_limit` decision.
+    pub increase_tx_v1_account_lock_limit: bool,
     /// Cached `replace_spl_token_with_p_token` decision.
     pub replace_spl_token_with_p_token: bool,
 }
@@ -293,8 +294,8 @@ impl TxFeatureFlags {
             raise_cpi_nesting_limit_to_8: feature_set.is_active(&raise_cpi_nesting_limit_to_8::ID),
             deprecate_rent_exemption_threshold: feature_set
                 .is_active(&deprecate_rent_exemption_threshold::ID),
-            increase_tx_account_lock_limit: feature_set
-                .is_active(&increase_tx_account_lock_limit::ID),
+            increase_tx_v1_account_lock_limit: feature_set
+                .is_active(&increase_tx_v1_account_lock_limit::ID),
             replace_spl_token_with_p_token: feature_set
                 .is_active(&replace_spl_token_with_p_token::ID),
         }
@@ -309,7 +310,7 @@ impl TxFeatureFlags {
         match gate {
             FeatureGate::RaiseCpiNestingLimitTo8 => self.raise_cpi_nesting_limit_to_8,
             FeatureGate::DeprecateRentExemptionThreshold => self.deprecate_rent_exemption_threshold,
-            FeatureGate::IncreaseTxAccountLockLimit => self.increase_tx_account_lock_limit,
+            FeatureGate::IncreaseTxV1AccountLockLimit => self.increase_tx_v1_account_lock_limit,
             FeatureGate::ReplaceSplTokenWithPToken => self.replace_spl_token_with_p_token,
         }
     }
@@ -427,7 +428,7 @@ mod tests {
     #[test]
     fn with_feature_flips_exactly_one_gate_in_both_directions() {
         let probe = raise_cpi_nesting_limit_to_8::ID;
-        let control = agave_feature_set::increase_tx_account_lock_limit::id();
+        let control = agave_feature_set::increase_tx_v1_account_lock_limit::id();
         assert!(Version::base(ClusterSpecId::MainnetBeta).feature_set.is_active(&probe));
         assert!(Version::base(ClusterSpecId::MainnetBeta).feature_set.is_active(&control));
 

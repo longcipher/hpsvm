@@ -10,7 +10,7 @@ fn process_instruction_commits_state_and_reports_diagnostics() {
     let sender = Address::new_unique();
     let recipient = Address::new_unique();
 
-    svm.set_account(sender, Account::new(10_000, 0, &system_program::id()))
+    svm.set_account(sender, Account::empty(10_000, &system_program::id()))
         .expect("sender account should be inserted");
 
     let meta = svm
@@ -38,7 +38,7 @@ fn simulate_instruction_reports_diagnostics_without_committing() {
     let sender = Address::new_unique();
     let recipient = Address::new_unique();
 
-    svm.set_account(sender, Account::new(10_000, 0, &system_program::id()))
+    svm.set_account(sender, Account::empty(10_000, &system_program::id()))
         .expect("sender account should be inserted");
 
     let simulation = svm

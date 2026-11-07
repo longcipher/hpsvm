@@ -155,7 +155,7 @@ mod tests {
     }
 
     fn account(lamports: u64) -> AccountSharedData {
-        AccountSharedData::new(lamports, 0, &Address::new_unique())
+        AccountSharedData::empty(lamports, &Address::new_unique())
     }
 
     // -----------------------------------------------------------------
@@ -303,7 +303,7 @@ mod tests {
         let address = Address::new_unique();
 
         let delta = CommitDelta::new(
-            vec![(address, AccountSharedData::new(123, 0, &solana_sdk_ids::system_program::id()))],
+            vec![(address, AccountSharedData::empty(123, &solana_sdk_ids::system_program::id()))],
             None,
         );
         apply_commit_delta(&mut svm.state.accounts, &mut svm.state.history, delta).unwrap();
@@ -450,7 +450,7 @@ mod tests {
             let mut b_accounts = Vec::new();
             for i in 0..4 {
                 let owner = Address::new_unique();
-                let account = AccountSharedData::new(lamports[i], 0, &owner);
+                let account = AccountSharedData::empty(lamports[i], &owner);
                 match groups[i] % 2 {
                     0 => a_accounts.push((addrs[i], account)),
                     _ => b_accounts.push((addrs[i], account)),

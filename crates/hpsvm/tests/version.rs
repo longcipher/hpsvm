@@ -56,7 +56,7 @@ fn base_profiles_differ_only_in_cluster_info() {
 #[test]
 fn with_feature_flips_exactly_one_gate() {
     let toggled = agave_feature_set::raise_cpi_nesting_limit_to_8::ID;
-    let probe = agave_feature_set::increase_tx_account_lock_limit::id();
+    let probe = agave_feature_set::increase_tx_v1_account_lock_limit::id();
     assert!(Version::base(ClusterSpecId::MainnetBeta).feature_set.is_active(&toggled));
 
     let disabled = Version::base(ClusterSpecId::MainnetBeta).clone().with_feature(&toggled, false);

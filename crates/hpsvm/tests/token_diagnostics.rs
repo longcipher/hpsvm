@@ -22,7 +22,8 @@ fn mint_account(decimals: u8) -> Account {
     // The token interface refuses to unpack an uninitialized mint, so the
     // decimals of an uninitialized mint are never resolved.
     mint.is_initialized = true;
-    let mut account = Account::new(1_000_000, TokenMint::LEN, &spl_token_interface::ID);
+    let mut account =
+        Account::new_with_data(1_000_000, vec![0; TokenMint::LEN], &spl_token_interface::ID);
     TokenMint::pack(mint, &mut account.data).expect("a mint must pack");
     account
 }
@@ -36,7 +37,8 @@ fn token_account(mint: &Address, owner: &Address, amount: u64) -> Account {
     // The token interface refuses to unpack an uninitialized account, so the
     // balance of a closed token account is never reported.
     token.state = spl_token_interface::state::AccountState::Initialized;
-    let mut account = Account::new(1_000_000, TokenAccount::LEN, &spl_token_interface::ID);
+    let mut account =
+        Account::new_with_data(1_000_000, vec![0; TokenAccount::LEN], &spl_token_interface::ID);
     TokenAccount::pack(token, &mut account.data).expect("a token account must pack");
     account
 }

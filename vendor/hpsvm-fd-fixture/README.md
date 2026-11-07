@@ -4,15 +4,15 @@ Fork of [`mollusk-svm-fuzz-fixture-firedancer`](https://crates.io/crates/mollusk
 (Anza, Apache-2.0), maintained by the
 [hpsvm](https://github.com/longcipher/hpsvm) project.
 
-**Why it exists.** Upstream pins `agave-feature-set`, `solana-account`, and
-`solana-transaction-context` to `4.3.0`, which cannot resolve against the agave
-`4.5.0-alpha` line: a semver range excludes pre-releases, and Cargo will not
-keep two semver-compatible copies of the same crate. Every published upstream
-version (through 0.16.2) is affected.
+**Why it exists.** Upstream (through 0.17.1) pins `agave-feature-set` and
+`solana-transaction-context` to the stable `4.4.0` line, which cannot resolve
+against the agave `4.5.0-beta.0` line: a semver range excludes pre-releases, and
+Cargo will not keep two semver-compatible copies of the same crate. Every
+published upstream version is affected.
 
 **What changed.** The three Solana runtime requirements (`agave-feature-set`,
 `solana-account`, `solana-transaction-context`), widened so the crate resolves
-against the agave `4.5.0-alpha` line, plus one import path (`InstructionAccount`
+against the agave `4.5.0-beta.0` line, plus one import path (`InstructionAccount`
 moved under `instruction_accounts::` in `solana-transaction-context` 4.x). No
 logic was modified — the symbol table in `vendor/PATCHES.md` verifies every
 symbol the crate uses still exists on the 4.5 line.

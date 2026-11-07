@@ -86,7 +86,8 @@ fn set_program_upgrade_authority(
         other => panic!("expected ProgramData account, got {other:?}"),
     };
 
-    let mut metadata_account = Account::new(0, metadata_len, &bpf_loader_upgradeable::id());
+    let mut metadata_account =
+        Account::new_with_data(0, vec![0; metadata_len], &bpf_loader_upgradeable::id());
     metadata_account
         .set_state(&UpgradeableLoaderState::ProgramData {
             slot,

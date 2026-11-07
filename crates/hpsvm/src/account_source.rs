@@ -92,7 +92,7 @@ mod tests {
 
     /// A distinctive account so assertions can tell accounts apart.
     fn account(lamports: u64) -> AccountSharedData {
-        let mut account = Account::new(lamports, 0, &Address::new_unique());
+        let mut account = Account::empty(lamports, &Address::new_unique());
         account.executable = true;
         AccountSharedData::from(account)
     }

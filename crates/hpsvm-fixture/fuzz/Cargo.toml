@@ -14,8 +14,9 @@ members = ["."]
 
 # Being its own workspace root means it needs its own copy of the FireDancer
 # codec dependency: it points directly at the `vendor/hpsvm-fd-fixture` fork
-# (upstream `mollusk-svm-fuzz-fixture-firedancer` pins agave 4.3 and cannot
-# resolve against the agave 4.5 line). See `vendor/PATCHES.md`.
+# (upstream `mollusk-svm-fuzz-fixture-firedancer` pins the stable agave 4.4.0
+# line and cannot resolve against the 4.5.0-beta.0 line). See
+# `vendor/PATCHES.md`.
 [patch.crates-io]
 hpsvm-fd-fixture = { path = "../../../vendor/hpsvm-fd-fixture" }
 

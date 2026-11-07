@@ -13,7 +13,9 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [package.metadata.cargo-shear]
-ignored = ["solana-short-vec", "solana-wincode-varint"]
+# `solana-vote-interface` is a normal dependency only to enable its `serde`
+# feature for `solana-vote-program`; see the dependency comment below.
+ignored = ["solana-short-vec", "solana-vote-interface", "solana-wincode-varint"]
 ignored-paths = ["tests/ui/*.rs"]
 
 [features]
@@ -120,7 +122,7 @@ solana-program-runtime = { workspace = true, features = ["dev-context-only-utils
 solana-rent = { workspace = true, features = ["serde"] }
 solana-rpc-client = { workspace = true, optional = true }
 solana-rpc-client-api = { workspace = true, optional = true }
-solana-sbpf = { version = "0.26.0", features = ["tracer"], optional = true }
+solana-sbpf = { version = "0.27.0", features = ["tracer"], optional = true }
 solana-sdk-ids.workspace = true
 solana-sha256-hasher.workspace = true
 # Version-pinning deps to prevent wincode 0.6.0 drift (transitive)
@@ -145,6 +147,12 @@ solana-sysvar-id.workspace = true
 solana-transaction = { workspace = true, features = ["verify", "wincode"] }
 solana-transaction-context.workspace = true
 solana-transaction-error.workspace = true
+# `solana-vote-program` 4.5.0-beta.0 calls
+# `AccountSharedData::new_data_with_space` with `VoteStateVersions`, which needs
+# `serde::Serialize`, but the crate only enables `solana-vote-interface/wincode`.
+# Upstream relies on feature unification inside the agave workspace. Enabling
+# `serde` here keeps the published crate buildable on its own.
+solana-vote-interface = { workspace = true, features = ["serde"] }
 solana-wincode-varint.workspace = true
 spl-associated-token-account-interface = { workspace = true, optional = true }
 spl-token-2022-interface = { workspace = true, optional = true }

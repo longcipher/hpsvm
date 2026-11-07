@@ -1203,7 +1203,7 @@ mod tests {
 
         // A program account owned by a loader, with the ELF bytes in place.
         let owner = solana_sdk_ids::bpf_loader::id();
-        let mut account = AccountSharedData::new(1, 4, &owner);
+        let mut account = AccountSharedData::new_with_data(1, vec![0; 4], &owner);
         account.set_executable(true);
         account.set_data_from_slice(b"\x7fELF");
         db.add_account_no_checks(program_id, account);
@@ -1561,6 +1561,7 @@ mod tests {
     // The journal and the checkpoint/rollback pair.
     // -----------------------------------------------------------------
 
+    #[expect(deprecated, reason = "the journal models the legacy `rent_epoch` field verbatim")]
     fn journal_test_account(
         lamports: u64,
         data: &[u8],
@@ -1568,7 +1569,7 @@ mod tests {
         executable: bool,
         rent_epoch: u64,
     ) -> AccountSharedData {
-        let mut account = AccountSharedData::new(lamports, data.len(), owner);
+        let mut account = AccountSharedData::new_with_data(lamports, vec![0; data.len()], owner);
         account.set_data_from_slice(data);
         account.set_executable(executable);
         account.set_rent_epoch(rent_epoch);

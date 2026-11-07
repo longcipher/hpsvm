@@ -239,7 +239,7 @@ fn test_process_store_bad_config_account() {
 
     context
         .svm
-        .set_account(signer0.pubkey(), Account::new(100_000, 0, &solana_config_interface::id()))
+        .set_account(signer0.pubkey(), Account::empty(100_000, &solana_config_interface::id()))
         .unwrap();
 
     create_config_account(&mut context, &config_keypair, keys.clone());
@@ -601,7 +601,7 @@ fn test_config_bad_owner() {
     let lamports = context.svm.get_sysvar::<Rent>().minimum_balance(space);
     context
         .svm
-        .set_account(config_keypair.pubkey(), Account::new(lamports, 0, &Address::new_unique()))
+        .set_account(config_keypair.pubkey(), Account::empty(lamports, &Address::new_unique()))
         .unwrap();
 
     let payer = &context.payer;

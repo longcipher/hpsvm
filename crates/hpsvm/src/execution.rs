@@ -1,7 +1,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use agave_feature_set::FeatureSet;
-use solana_account::{AccountSharedData, ReadableAccount, WritableAccount};
+use solana_account::{AccountSharedData, ReadableAccount};
 use solana_address::Address;
 use solana_compute_budget::compute_budget_limits::ComputeBudgetLimits;
 use solana_fee::FeeFeatures;
@@ -13,7 +13,7 @@ use solana_svm_timings::ExecuteTimings;
 use solana_svm_transaction::svm_message::SVMStaticMessage;
 use solana_transaction::{
     sanitized::{MessageHash, SanitizedTransaction},
-    versioned::VersionedTransaction,
+    versioned::{TransactionVersion, VersionedTransaction},
 };
 use solana_transaction_context::{
     DropOnBailOut, IndexOfAccount,
@@ -187,12 +187,24 @@ fn get_compute_budget_limits(
     .map_err(|e| ExecutionResult { tx_result: Err(e), ..Default::default() })
 }
 
-fn get_transaction_account_lock_limit(flags: &TxFeatureFlags) -> usize {
-    use solana_transaction::sanitized::MAX_TX_ACCOUNT_LOCKS;
-    if flags.is_enabled(FeatureGate::IncreaseTxAccountLockLimit) {
-        MAX_TX_ACCOUNT_LOCKS
-    } else {
-        64
+/// Account lock limit for a transaction format, mirroring
+/// `solana-runtime`'s `Bank::get_transaction_account_lock_limits`.
+fn get_transaction_account_lock_limit(
+    flags: &TxFeatureFlags,
+    version: TransactionVersion,
+) -> usize {
+    const DEFAULT_TX_ACCOUNT_LOCKS: usize = 64;
+    const V1_TX_ACCOUNT_LOCKS: usize = 96;
+
+    match version {
+        TransactionVersion::Number(1) => {
+            if flags.is_enabled(FeatureGate::IncreaseTxV1AccountLockLimit) {
+                V1_TX_ACCOUNT_LOCKS
+            } else {
+                DEFAULT_TX_ACCOUNT_LOCKS
+            }
+        }
+        TransactionVersion::Legacy(_) | TransactionVersion::Number(_) => DEFAULT_TX_ACCOUNT_LOCKS,
     }
 }
 
@@ -276,14 +288,12 @@ impl<T: SvmTypesHost> Svm<'_, T> {
         flags: &TxFeatureFlags,
         policy: MessageHashPolicy,
     ) -> Result<SanitizedTransaction, ExecutionResult> {
+        let tx_account_lock_limit = get_transaction_account_lock_limit(flags, tx.version());
         let tx = self.sanitize_transaction_no_verify_with_policy(tx, policy)?;
 
         tx.verify().map_err(|err| ExecutionResult { tx_result: Err(err), ..Default::default() })?;
-        SanitizedTransaction::validate_account_locks(
-            tx.message(),
-            get_transaction_account_lock_limit(flags),
-        )
-        .map_err(|err| ExecutionResult { tx_result: Err(err), ..Default::default() })?;
+        SanitizedTransaction::validate_account_locks(tx.message(), tx_account_lock_limit)
+            .map_err(|err| ExecutionResult { tx_result: Err(err), ..Default::default() })?;
 
         Ok(tx)
     }
@@ -394,11 +404,7 @@ impl<T: SvmTypesHost> Svm<'_, T> {
                     // lookup and a panic site.
                     let mut account = match self.state.accounts.try_get_account(key) {
                         Ok(Some(account)) => account,
-                        Ok(None) => {
-                            let mut default_account = AccountSharedData::default();
-                            default_account.set_rent_epoch(0);
-                            default_account
-                        }
+                        Ok(None) => AccountSharedData::default(),
                         Err(error) => {
                             return Err(execution_result_with_account_source_error(
                                 *key,

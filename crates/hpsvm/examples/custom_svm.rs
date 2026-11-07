@@ -216,7 +216,7 @@ fn main() {
     // --- Setup: roughly twenty lines to stand up the custom environment. ---
     let mut svm = Svm::<CustomSvm>::new_with_defaults();
     let probe = agave_feature_set::raise_cpi_nesting_limit_to_8::ID;
-    let control = agave_feature_set::increase_tx_account_lock_limit::id();
+    let control = agave_feature_set::increase_tx_v1_account_lock_limit::id();
     let custom_version = Version::base(ClusterSpecId::from(CustomSpecId::Custom))
         .clone()
         .with_feature(&probe, false);
