@@ -1,0 +1,52 @@
+name: CodSpeed
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+    branches: ["main", "master"]
+  # `workflow_dispatch` allows CodSpeed to trigger backtest
+  # performance analysis in order to generate initial data.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # for OpenID Connect authentication with CodSpeed
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  benchmarks:
+    name: Run benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-codspeed
+
+      # The `counter` SBF program loaded by the runtime benches must be built
+      # with the same Solana toolchain as the main CI workflow.
+      - name: Install Solana CLI
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v4.0.0-rc.0/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+
+      - name: Build test programs
+        run: cd crates/hpsvm/test_programs && cargo build-sbf
+
+      - name: Build the benchmark targets
+        run: cargo codspeed build -m simulation -p hpsvm
+
+      - name: Run the benchmarks
+        uses: CodSpeedHQ/action@v5
+        with:
+          mode: simulation
+          run: cargo codspeed run -p hpsvm
