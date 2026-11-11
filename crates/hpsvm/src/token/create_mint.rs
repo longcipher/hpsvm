@@ -6,7 +6,9 @@ use solana_signer::Signer;
 use solana_system_interface::instruction::create_account;
 use solana_transaction::Transaction;
 #[cfg(feature = "token-2022")]
-use spl_token_2022_interface::extension::ExtensionType;
+use spl_token_2022_interface::extension::{
+    ExtensionType, transfer_fee::instruction::initialize_transfer_fee_config,
+};
 
 use super::{
     TOKEN_ID,
@@ -30,6 +32,12 @@ pub struct CreateMint<'a, 's, T: SvmTypesHost> {
     freeze_authority: Option<&'a Address>,
     decimals: Option<u8>,
     token_program_id: Option<&'a Address>,
+    /// Mint extensions to allocate space for (token-2022 only).
+    #[cfg(feature = "token-2022")]
+    extensions: Option<&'a [ExtensionType]>,
+    /// `(basis_points, maximum_fee)` for a `TransferFeeConfig` extension.
+    #[cfg(feature = "token-2022")]
+    transfer_fee: Option<(u16, u64)>,
 }
 
 impl<'a, 's, T: SvmTypesHost> CreateMint<'a, 's, T> {
@@ -42,6 +50,10 @@ impl<'a, 's, T: SvmTypesHost> CreateMint<'a, 's, T> {
             freeze_authority: None,
             decimals: None,
             token_program_id: None,
+            #[cfg(feature = "token-2022")]
+            extensions: None,
+            #[cfg(feature = "token-2022")]
+            transfer_fee: None,
         }
     }
 
@@ -69,10 +81,44 @@ impl<'a, 's, T: SvmTypesHost> CreateMint<'a, 's, T> {
         self
     }
 
+    /// Allocates the mint account with room for `extensions`.
+    ///
+    /// Without this the mint is created at the base `Mint` length and any
+    /// token-2022 instruction that needs an extension fails at runtime; a mint
+    /// with a transfer fee could not be created at all.
+    #[cfg(feature = "token-2022")]
+    pub fn extensions(mut self, extensions: &'a [ExtensionType]) -> Self {
+        self.extensions = Some(extensions);
+        self
+    }
+
+    /// Charges `basis_points` on every transfer, capped at `maximum_fee` base
+    /// units.
+    ///
+    /// Allocates the `TransferFeeConfig` extension, sets this payer as both the
+    /// fee-config and fee-withdraw authority, and initializes the config before
+    /// the mint. Token-2022 requires that order: `InitializeTransferFeeConfig`
+    /// is rejected once the mint is initialized.
+    #[cfg(feature = "token-2022")]
+    pub fn transfer_fee(mut self, basis_points: u16, maximum_fee: u64) -> Self {
+        self.transfer_fee = Some((basis_points, maximum_fee));
+        self
+    }
+
     /// Sends the transaction.
     pub fn send(self) -> Result<Address, FailedTransactionMetadata> {
         #[cfg(feature = "token-2022")]
-        let mint_size = ExtensionType::try_calculate_account_len::<Mint>(&[])?;
+        let mint_size = {
+            // A transfer fee implies the extension even when the caller did not
+            // list it, so `transfer_fee(..)` alone produces a usable mint.
+            let mut extensions = self.extensions.unwrap_or(&[]).to_vec();
+            if self.transfer_fee.is_some() &&
+                !extensions.contains(&ExtensionType::TransferFeeConfig)
+            {
+                extensions.push(ExtensionType::TransferFeeConfig);
+            }
+            ExtensionType::try_calculate_account_len::<Mint>(&extensions)?
+        };
         #[cfg(not(feature = "token-2022"))]
         let mint_size = Mint::LEN;
         let mint_kp = Keypair::new();
@@ -87,6 +133,18 @@ impl<'a, 's, T: SvmTypesHost> CreateMint<'a, 's, T> {
             mint_size as u64,
             token_program_id,
         );
+        #[cfg(feature = "token-2022")]
+        let fee_ix = match self.transfer_fee {
+            Some((basis_points, maximum_fee)) => Some(initialize_transfer_fee_config(
+                token_program_id,
+                &mint_pk,
+                Some(&payer_pk),
+                Some(&payer_pk),
+                basis_points,
+                maximum_fee,
+            )?),
+            None => None,
+        };
         let ix2 = initialize_mint2(
             token_program_id,
             &mint_pk,
@@ -95,9 +153,17 @@ impl<'a, 's, T: SvmTypesHost> CreateMint<'a, 's, T> {
             self.decimals.unwrap_or(8),
         )?;
 
+        #[cfg(feature = "token-2022")]
+        let instructions: Vec<_> = match fee_ix {
+            Some(fee_ix) => vec![ix1, fee_ix, ix2],
+            None => vec![ix1, ix2],
+        };
+        #[cfg(not(feature = "token-2022"))]
+        let instructions = vec![ix1, ix2];
+
         let block_hash = self.svm.latest_blockhash();
         let tx = Transaction::new_signed_with_payer(
-            &[ix1, ix2],
+            &instructions,
             Some(&payer_pk),
             &[self.payer, &mint_kp],
             block_hash,
