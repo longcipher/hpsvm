@@ -54,6 +54,9 @@ temp file and run `cargo mutants --in-diff <diff-file>` for that file only, with
 - Mutation testing is configured in `.cargo/mutants.toml`: `just mutants` mutates only the lines the current change touched, within the /pb-build budget (at most 3 files / 60 mutants / 300 s). A surviving mutant means a missing assertion, not a reason to exclude the code.
 - **BDD is not used in this project.** Do not add Gherkin `.feature` files, `cucumber-rs`, step definitions, or BDD runners.
 - Workspace lints deny `unwrap_used`, `allow_attributes`, `todo`, `unimplemented`, `dbg_macro`, `print_stdout`, and `print_stderr`. The only escape hatch is `#[expect(lint, reason = "...")]`.
+- Workspace MSRV is Rust 1.100. Prefer newly stabilized features and APIs over older workarounds; do not add feature gates for anything already stable in 1.100.
+- `[workspace.lints.cargo]` enables Cargo's native `unused_dependencies` lint, the only unused-dependency check; do not reintroduce a third-party checker. Its level is `warn`, and `.cargo/config.toml` sets `build.warnings = "deny"` so a finding fails the gate.
+- `.cargo/config.toml` sets resolver `incompatible-rust-versions = "fallback"` (MSRV-aligned resolution) and `registry.global-min-publish-age = "5 days"` (Rust 1.100 dependency cooldown); keep both.
 
 ## Dependency choices
 

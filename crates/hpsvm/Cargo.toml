@@ -7,16 +7,11 @@ edition.workspace = true
 repository.workspace = true
 readme = "../../README.md"
 include = ["src/**/*", "elf/**/*"]
+rust-version.workspace = true
 
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
-
-[package.metadata.cargo-shear]
-# `solana-vote-interface` is a normal dependency only to enable its `serde`
-# feature for `solana-vote-program`; see the dependency comment below.
-ignored = ["solana-short-vec", "solana-vote-interface", "solana-wincode-varint"]
-ignored-paths = ["tests/ui/*.rs"]
 
 [features]
 # The account overlay is the hottest map in the crate: every transaction

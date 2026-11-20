@@ -21,7 +21,6 @@ lint:
   cargo workspace-inheritance-check
   cargo +nightly fmt --all -- --check
   RUSTC_WRAPPER= cargo +nightly clippy --all -- -D warnings -A deprecated -A clippy::missing_const_for_fn -A clippy::unwrap_used -A clippy::or_fun_call -A unused-mut -A clippy::result_large_err
-  cargo shear
   just check-mutation-scope
 
 # Run tests
@@ -281,7 +280,6 @@ clean:
 
 # Install all required development tools
 setup:
-  cargo install cargo-shear
   cargo install cargo-sort
   cargo install cargo-workspace-inheritance-check
   cargo install typos-cli
@@ -315,10 +313,6 @@ test-nextest:
 # Run miri on unsafe code
 miri:
   cargo +nightly miri test --all-features
-
-# Check for unused dependencies
-unused-deps:
-  cargo shear
 
 # Update all dependencies
 update-deps:

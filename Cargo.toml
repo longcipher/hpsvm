@@ -13,15 +13,14 @@ version = "0.2.5"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/longcipher/hpsvm"
+rust-version = "1.100"
 
 [workspace.dependencies]
 # local crates
 hpsvm = { path = "crates/hpsvm", version = "0.2.5" }
-hpsvm-cli = { path = "bin/hpsvm-cli", version = "0.2.5" }
 hpsvm-fixture = { path = "crates/hpsvm-fixture", version = "0.2.5", default-features = false }
 hpsvm-fixture-bench = { path = "crates/hpsvm-fixture-bench", version = "0.2.5", default-features = false }
 hpsvm-fixture-firedancer = { path = "crates/hpsvm-fixture-firedancer", version = "0.2.5", default-features = false }
-hpsvm-inspectors = { path = "crates/hpsvm-inspectors", version = "0.2.5" }
 hpsvm-macros = { path = "crates/hpsvm-macros", version = "0.2.5" }
 hpsvm-test-support = { path = "crates/hpsvm-test-support", version = "0.2.5" }
 
@@ -149,21 +148,11 @@ tracing = "0.1.44"
 trybuild = "1.0.122"
 wincode = "0.6.3"
 
-[workspace.metadata.cargo-shear]
-# `solana-short-vec` / `solana-wincode-varint` are version pins only (see the
-# comment at their declaration above). `hpsvm-cli` and `hpsvm-inspectors` are
-# published crates that no workspace member consumes: `hpsvm-cli` is the
-# top-level binary and `hpsvm-inspectors` targets downstream users. Both are
-# declared in `[workspace.dependencies]` so every published crate's version
-# lives in this one file.
-ignored = ["solana-short-vec", "solana-wincode-varint", "hpsvm-cli", "hpsvm-inspectors"]
-
 [workspace.lints.cargo]
-# `hpsvm-cli` and `hpsvm-inspectors` are declared in `[workspace.dependencies]`
-# for centralized version management but consumed by no workspace member (see
-# the `[workspace.metadata.cargo-shear]` note above), which this lint reports on
-# every cargo invocation.
-unused_workspace_dependencies = "allow"
+
+# Cargo's own linting system (shipped in 1.100): the only unused-dependency
+# check. It runs as part of a normal all-targets `cargo check`/`clippy`.
+unused_dependencies = "warn"
 
 [workspace.lints.clippy]
 # Enable pedantic lints for stricter code quality
@@ -263,7 +252,7 @@ iter_on_empty_collections = "warn"
 iter_on_single_items = "warn"
 iter_with_drain = "warn"
 iter_without_into_iter = "warn"
-large_stack_frames = "warn"
+large_unopt_stack_frames = "warn"
 manual_assert = "warn"
 manual_clamp = "warn"
 manual_is_variant_and = "warn"
@@ -326,6 +315,7 @@ rust_2018_idioms = { level = "warn", priority = -1 }
 unreachable_pub = "warn"
 unused_must_use = "deny"
 deprecated = "allow"
+raw_borrows_via_references = "warn"
 
 [workspace.lints.rustdoc]
 all = "warn"

@@ -12,6 +12,7 @@ repository.workspace = true
 # that vendors the programs elsewhere can point the lookup at its own
 # build output.
 publish = true
+rust-version.workspace = true
 
 [lints]
 workspace = true
