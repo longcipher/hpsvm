@@ -22,7 +22,7 @@
 - Parallelize aggressively: dispatch subagents for independent research, exploration, and implementation.
 - NEVER run two `cargo` commands concurrently, and never overlap file edits with a running `cargo` command (`target/` file lock): finish edits, wait, then run.
 - NEVER use `git worktree`. Edit the current branch in place.
-- TDD for behavior changes: failing test first, smallest change to pass, then run `just mutants-quick` and fix surviving mutants.
+- TDD for behavior changes: failing test first, smallest change to pass, then run the mutation gate only when the current spec task declares `Mutation:`, and fix surviving mutants.
 
 ## Verification loop
 
@@ -32,8 +32,13 @@ After each feature or bug fix, in order; any failure means the task is not done:
 just format
 just lint
 just test-all
-just mutants-quick
 ```
+
+Mutation testing is intentionally absent from the default loop and from CI. When a spec task
+declares `Mutation: <src-glob>`, follow the `/pb-build` gate: write the changed file's diff to a
+temp file and run `cargo mutants --in-diff <diff-file>` for that file only, with at most 3 files /
+60 mutants / 300 s. Never add a whole-repo mutation recipe: `just check-mutation-scope` fails
+`just lint` when an unbounded mutation command appears in a build or CI file.
 
 `just test-all` runs `just sbf-test-programs` first, because integration tests, benches, and the `lib.rs` doctests silently skip when the SBF programs are missing.
 
@@ -46,7 +51,7 @@ just mutants-quick
 - The agave and solana version lines are load-bearing. `crates/hpsvm` depends on the older `-agave` copies of `solana-message`, `solana-transaction`, and `solana-svm-transaction`; `crates/hpsvm/src/agave_compat.rs` bridges them to the newer workspace pins. Do not collapse the two families into one version, and move `solana-svm-transaction` and agave together.
 - The Solana CLI release used to build the test programs must track the agave dependency line. Bumping either one alone breaks the link step.
 - SBF test programs are built with `cargo build-sbf` inside `crates/hpsvm/test_programs`; the four required binaries are `counter.so`, `failure.so`, `hpsvm_clock_example.so`, and `test_program_custom_syscall.so`. On macOS the platform-tools rustc can emit proc-macro dylibs that dyld rejects with an "misaligned LINKEDIT string pool" error; build on Linux and copy `target/deploy/` back.
-- Mutation testing is configured in `.cargo/mutants.toml`: `just mutants` runs the whole workspace, `just mutants-quick` mutates only the branch diff. A surviving mutant means a missing assertion, not a reason to exclude the code.
+- Mutation testing is configured in `.cargo/mutants.toml`: `just mutants` mutates only the lines the current change touched, within the /pb-build budget (at most 3 files / 60 mutants / 300 s). A surviving mutant means a missing assertion, not a reason to exclude the code.
 - **BDD is not used in this project.** Do not add Gherkin `.feature` files, `cucumber-rs`, step definitions, or BDD runners.
 - Workspace lints deny `unwrap_used`, `allow_attributes`, `todo`, `unimplemented`, `dbg_macro`, `print_stdout`, and `print_stderr`. The only escape hatch is `#[expect(lint, reason = "...")]`.
 
