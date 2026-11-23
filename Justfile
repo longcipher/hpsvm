@@ -23,6 +23,10 @@ lint:
   RUSTC_WRAPPER= cargo +nightly clippy --all -- -D warnings -A deprecated -A clippy::missing_const_for_fn -A clippy::unwrap_used -A clippy::or_fun_call -A unused-mut -A clippy::result_large_err
   just check-mutation-scope
 
+# Run the prek commit hooks on every tracked file (requires prek)
+hooks:
+  prek run --all-files
+
 # Run tests
 test:
   cargo test --all-features

@@ -8,6 +8,42 @@
 
 ![hpsvm](https://socialify.git.ci/longcipher/hpsvm/image?font=Source+Code+Pro&language=1&name=1&owner=1&pattern=Circuit+Board&theme=Auto)
 
+## Pre-commit Hooks
+
+This repository ships a [prek](https://github.com/j178/prek) configuration in
+`.pre-commit-config.yaml` for fast, commit-sized checks. It runs:
+
+- file hygiene: trailing whitespace, final newline, merge conflicts, large
+  files, YAML/TOML/JSON syntax, broken symlinks, and private keys
+- [Kingfisher](https://github.com/mongodb/kingfisher) secret scanning on the
+  staged files, with `--no-validate --redact` so the hook stays offline and
+  never prints a detected secret
+- `rumdl`, `cargo fmt --check`, `cargo sort --check`, and `cargo clippy -D
+  warnings`
+
+Tests are deliberately excluded: `cargo test` stays in `just test` and CI.
+The first Kingfisher run downloads and caches the pinned binary; later runs
+reuse it. The auto-download hook needs `bash`, `curl`, and `tar` (`unzip` on
+Windows); on Windows use the Bash shipped with Git for Windows.
+
+The hooks call `typos`, `rumdl`, and the project toolchain directly, so run
+`just setup` once first. Then install the Git hook once per clone (install
+prek with `brew install prek`, `uv tool install prek`, or
+`cargo install --locked prek`):
+
+```bash
+prek install
+```
+
+Run every hook on every tracked file:
+
+```bash
+just hooks
+```
+
+`repo: builtin` is a prek extension, so this configuration is meant to be
+run with prek rather than upstream pre-commit.
+
 ## 📍 Overview
 
 `hpsvm` is a fast and lightweight library for testing Solana programs. It works by creating an in-process Solana VM optimized for program developers. This makes it much faster to run and compile than alternatives like `solana-program-test` and `solana-test-validator`. In a further break from tradition, it has an ergonomic API with sane defaults and extensive configurability for those who want it.
